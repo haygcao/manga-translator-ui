@@ -63,4 +63,4 @@ torchsummary
 open_clip_torch
 google-generativeai
 python-bidi
-tufup
+tufuptufup 

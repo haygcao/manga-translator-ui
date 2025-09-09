@@ -1,13 +1,22 @@
 import subprocess
 import sys
 import os
-import shutil
+import json
 import argparse
 from pathlib import Path
 
-# 全局配置
-EXE_NAME = "main.exe"  # 如果你的可执行文件不叫 main.exe，请修改这里
+# Try to import tufup, and provide a helpful error message if it's not installed.
+try:
+    from tufup.repo import Repository
+except ImportError:
+    print("Error: tufup library not found. Please install it with: pip install tufup")
+    sys.exit(1)
+
+# --- configuration ---
 APP_NAME = "MangaTranslatorUI"
+REPO_DIR = 'update_repository'
+KEYS_DIR = 'keys'
+APP_VERSION_ATTR = '__version__'
 
 def run_command_realtime(cmd, cwd=None):
     """实时执行一个 shell 命令并打印输出。"""
@@ -41,9 +50,24 @@ def run_command_realtime(cmd, cwd=None):
 class Builder:
     """封装了构建和打包逻辑的类"""
 
-    def __init__(self, app_version):
+    def __init__(self, app_version=None):
         self.app_version = app_version
         self.version_file = Path("VERSION")
+        self.repo = Repository(
+            repo_dir=Path(REPO_DIR),
+            keys_dir=Path(KEYS_DIR),
+            app_name=APP_NAME,
+            app_version_attr=APP_VERSION_ATTR
+        )
+
+    def create_keys(self):
+        """Create new keys if they don't exist."""
+        keys_path = Path(KEYS_DIR)
+        if not keys_path.exists():
+            keys_path.mkdir()
+        print("Creating new keys...")
+        self.repo.initialize()
+        print("Keys created. Please securely back up the 'keys' directory and do NOT commit it to git.")
 
     def build_executables(self, version_type):
         """使用 PyInstaller 构建指定版本 (cpu 或 gpu)"""
@@ -61,60 +85,82 @@ class Builder:
 
         python_exe = venv_path / 'Scripts' / 'python.exe' if sys.platform == 'win32' else venv_path / 'bin' / 'python'
         
-        # 安装所有依赖
         print(f"Installing dependencies for {version_type.upper()} from {req_file}...")
         cmd_install = [str(python_exe), '-m', 'pip', 'install', '-r', req_file]
         if not run_command_realtime(cmd_install):
             print(f"Dependency installation failed for {version_type.upper()}.")
             return False
 
-        # 运行 PyInstaller
         print(f"Running PyInstaller for {version_type.upper()}...")
         cmd_pyinstaller = [str(python_exe), "-m", "PyInstaller", spec_file]
         if not run_command_realtime(cmd_pyinstaller):
             print(f"PyInstaller build failed for {version_type.upper()}.")
             return False
         
+        # Create build_info.json
+        dist_dir = Path("dist") / f"manga-translator-{version_type}"
+        build_info_path = dist_dir / "build_info.json"
+        print(f"Creating build info file at: {build_info_path}")
+        with open(build_info_path, "w", encoding="utf-8") as f:
+            json.dump({"variant": version_type}, f, indent=2)
+
         print(f"{version_type.upper()} build completed!")
         return True
 
     def package_updates(self, version_type):
-        """为指定版本创建 tufup 更新包"""
+        """
+        Adds an update package to the TUF repository.
+        """
         print("=" * 60)
-        print(f"Creating tufup update package for {version_type.upper()}")
+        print(f"Adding update package for {version_type.upper()}")
         print("=" * 60)
-
-        venv_path = Path(f".venv_{version_type}")
-        tufup_exe = venv_path / 'Scripts' / 'tufup.exe' if sys.platform == 'win32' else venv_path / 'bin' / 'tufup'
 
         self.version_file.write_text(self.app_version, encoding='utf-8')
-
         dist_dir = Path("dist") / f"manga-translator-{version_type}"
-        exe_path = dist_dir / EXE_NAME
 
-        if not exe_path.exists():
-            print(f"\nError: Executable not found at '{exe_path}'")
+        if not dist_dir.exists():
+            print(f"\nError: Bundle directory not found at '{dist_dir}'")
             return False
 
-        cmd_add = [str(tufup_exe), 'targets', 'add', str(dist_dir), self.app_version, '--app-path', str(exe_path)]
-        if not run_command_realtime(cmd_add): return False
-        
-        cmd_release = [str(tufup_exe), 'release']
-        if not run_command_realtime(cmd_release): return False
-            
-        print(f"Successfully created update package for {version_type.upper()} {self.app_version}.")
+        print(f"Adding bundle from: {dist_dir}")
+        self.repo.add_bundle(
+            new_bundle_dir=dist_dir,
+            new_version=self.app_version,
+            custom_metadata={'variant': version_type},
+            required=False
+        )
+        return True
+
+    def publish_updates(self):
+        """
+        Signs and publishes all changes to the repository.
+        """
+        print("=" * 60)
+        print("Publishing changes to repository...")
+        print("=" * 60)
+        self.repo.publish_changes(private_key_dirs=[KEYS_DIR])
+        print("Repository update complete.")
         return True
 
 def main():
     parser = argparse.ArgumentParser(description="Manga Translator UI Builder and Updater")
-    parser.add_argument("version", help="The application version to build (e.g., 1.4.0)")
+    parser.add_argument("version", nargs='?', default=None, help="The application version to build (e.g., 1.4.0)")
     parser.add_argument("--build", choices=['cpu', 'gpu', 'both'], default='both', help="Which version(s) to build.")
     parser.add_argument("--skip-build", action='store_true', help="Skip building executables.")
-    parser.add_argument("--skip-updates", action='store_true', help="Skip creating update packages.")
+    parser.add_argument("--update-repo", action='store_true', help="Update the TUF repository with the built packages.")
+    parser.add_argument("--create-keys", action='store_true', help="Create new TUF keys if they don't exist.")
     args = parser.parse_args()
 
-    print(f"--- Starting process for version {args.version} ---")
     builder = Builder(args.version)
+
+    if args.create_keys:
+        builder.create_keys()
+        sys.exit(0)
+
+    if not args.version:
+        parser.error("the following arguments are required: version")
+
+    print(f"--- Starting process for version {args.version} ---")
 
     versions_to_process = []
     if args.build in ['cpu', 'both']:
@@ -128,19 +174,21 @@ def main():
                 print(f"\nFATAL: Build failed for {v_type.upper()}. Halting.")
                 sys.exit(1)
         
-        if not args.skip_updates:
+        if args.update_repo:
             if not builder.package_updates(v_type):
                 print(f"\nFATAL: Update packaging failed for {v_type.upper()}. Halting.")
                 sys.exit(1)
 
+    if args.update_repo:
+        builder.publish_updates()
+
     print("\n" + "=" * 60)
     print("ALL TASKS COMPLETED SUCCESSFULLY!")
     print("=" * 60)
-    if not args.skip_updates:
+    if args.update_repo:
         print("Next steps:")
         print("1. Commit and push the 'update_repository/' directory to your git repository.")
-        print("2. Create a new release on GitHub with the tag matching your version.")
-        print("3. Upload the application bundles from the 'dist/' directory as release assets.")
+        print("2. The GitHub Actions workflow should handle the rest.")
 
 if __name__ == "__main__":
     main()

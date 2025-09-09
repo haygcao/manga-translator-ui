@@ -16,6 +16,9 @@ import webbrowser
 from dotenv import dotenv_values, set_key
 from PIL import Image
 from typing import List
+from pathlib import Path
+import json
+import shutil
 
 # 设置控制台编码
 if sys.platform == "win32":
@@ -117,6 +120,7 @@ class AppController:
         self.root_dir = os.path.dirname(os.path.abspath(__file__))
         self.user_config_path = resource_path(os.path.join("examples", "config-example.json"))
         self.env_path = os.path.join(self.root_dir, "..", ".env")
+        self.app_variant = self._get_app_variant()
 
         # Define a schema for parameters, especially for those that can be null but should be booleans
         self.param_schema = {
@@ -187,6 +191,22 @@ class AppController:
         
         # 延迟初始化重量级组件 (等UI完全启动后)
         self.app.after(500, self._async_init_heavy_components)
+
+    def _get_app_variant(self):
+        """Reads the build_info.json to determine the app variant (cpu or gpu)."""
+        try:
+            build_info_path = resource_path('build_info.json')
+            with open(build_info_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                variant = data.get('variant', 'cpu').lower()
+                print(f"Detected app variant: {variant}")
+                return variant
+        except FileNotFoundError:
+            print("Warning: build_info.json not found, defaulting to 'cpu' variant.")
+            return 'cpu'
+        except Exception as e:
+            print(f"Error reading build_info.json: {e}")
+            return 'cpu'
         
         
 
@@ -893,7 +913,7 @@ class AppController:
                     widget = self.parameter_widgets.get(full_key)
                 
                 if widget is not None:
-                value = self._get_widget_value(widget)
+                    value = self._get_widget_value(widget)
             
             self.update_log(f"[DEBUG] Value to save: {value} (Type: {type(value)})\n")
 
@@ -1122,72 +1142,81 @@ class AppController:
         ocr_frame.pack(fill="x", pady=5)
         self.create_param_widgets(config.get("ocr", {}), ocr_frame.content_frame, "ocr")
 
-                    # 版本和更新信息
-            version_frame = CollapsibleFrame(options_right, title="版本和更新")
-            version_frame.pack(fill="x", pady=5)
-            content_frame = version_frame.content_frame
+        # 版本和更新信息
+        version_frame = CollapsibleFrame(options_right, title="版本和更新")
+        version_frame.pack(fill="x", pady=5)
+        content_frame = version_frame.content_frame
 
-            def open_repo_url(e):
-                import webbrowser
-                webbrowser.open_new_tab("https://github.com/hgmzhn/manga-translator-ui")
+        def open_repo_url(e):
+            import webbrowser
+            webbrowser.open_new_tab("https://github.com/hgmzhn/manga-translator-ui")
 
-            # 当前版本
-            ver_str = f"当前版本: {self.CURRENT_VERSION}"
-            ctk.CTkLabel(content_frame, text=ver_str, font=ctk.CTkFont(size=14, weight="bold")).pack(pady=5)
+        # 当前版本
+        ver_str = f"当前版本: {self.CURRENT_VERSION}"
+        ctk.CTkLabel(content_frame, text=ver_str, font=ctk.CTkFont(size=14, weight="bold")).pack(pady=5)
 
-            # 作者
-            author_str = f"作者: hgmzhn"
-            ctk.CTkLabel(content_frame, text=author_str).pack(pady=2)
+        # 作者
+        author_str = f"作者: hgmzhn"
+        ctk.CTkLabel(content_frame, text=author_str).pack(pady=2)
 
-            # 仓库地址
-            repo_label = ctk.CTkLabel(content_frame, text="仓库地址: https://github.com/hgmzhn/manga-translator-ui", text_color="#5D9EFF", cursor="hand2")
-            repo_label.pack(pady=2)
-            repo_label.bind("<Button-1>", open_repo_url)
+        # 仓库地址
+        repo_label = ctk.CTkLabel(content_frame, text="仓库地址: https://github.com/hgmzhn/manga-translator-ui", text_color="#5D9EFF", cursor="hand2")
+        repo_label.pack(pady=2)
+        repo_label.bind("<Button-1>", open_repo_url)
 
-            # 更新按钮
-            check_update_button = ctk.CTkButton(content_frame, text="检查更新", command=self.check_for_tufup_updates)
-            check_update_button.pack(pady=15)
+        # 更新按钮
+        check_update_button = ctk.CTkButton(content_frame, text="检查更新", command=self.check_for_tufup_updates)
+        check_update_button.pack(pady=15)
 
 
     def check_for_tufup_updates(self):
         """使用 tufup 检查更新"""
-        try:
-            from tufup.client import Client
-            from tkinter import messagebox
-            import webbrowser
+        from tkinter import messagebox
+        from tufup.client import Client
+        from packaging.version import parse as parse_version
 
-            # 初始化客户端
+        try:
+            app_dir = Path(self.root_dir).parent
+            cache_dir = app_dir / 'cache_tufup'
+            metadata_dir = cache_dir / 'metadata'
+            target_dir = cache_dir / 'targets'
+            metadata_dir.mkdir(parents=True, exist_ok=True)
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            source_root_json = app_dir / 'update_repository' / 'metadata' / 'root.json'
+            dest_root_json = metadata_dir / 'root.json'
+            if not dest_root_json.exists() and source_root_json.exists():
+                shutil.copy(source_root_json, dest_root_json)
+
             client = Client(
                 app_name='MangaTranslatorUI',
-                app_version=self.CURRENT_VERSION,
-                metadata_url='https://raw.githubusercontent.com/hgmzhn/manga-translator-ui/main/repository',
-                target_url='https://github.com/hgmzhn/manga-translator-ui/releases/download/'
+                app_install_dir=app_dir,
+                current_version=self.CURRENT_VERSION,
+                metadata_dir=metadata_dir,
+                metadata_base_url=f'https://hgmzhn.github.io/manga-translator-ui-package/',
+                target_dir=target_dir,
+                target_base_url=f'https://github.com/hgmzhn/manga-translator-ui-package/releases/download/'
             )
 
-            # 检查更新
-            if client.check_for_updates():
-                if messagebox.askyesno("发现新版本", f"检测到新版本。是否要下载并安装？"):
-                    # 下载、安装并重启
-                    client.download_and_install()
+            client.refresh()
+            latest_update = None
+            current_v = parse_version(client.current_version)
+
+            for target_meta in client.trusted_target_metas:
+                if target_meta.version > current_v:
+                    if target_meta.custom.get('variant') == self.app_variant:
+                        if latest_update is None or target_meta.version > latest_update.version:
+                            latest_update = target_meta
+
+            if latest_update:
+                if messagebox.askyesno("发现新版本", f"检测到新版本 {latest_update.version} ({self.app_variant})。是否要下载并安装？"):
+                    client._trusted_target_metas = [latest_update]
+                    client.download_and_apply_update()
             else:
-                messagebox.showinfo("无更新", "你使用的已是最新版本。")
+                messagebox.showinfo("无更新", "您使用的已是最新版本。")
 
         except Exception as e:
             messagebox.showerror("更新失败", f"检查更新时发生错误: {e}")
-
-
-        # Set initial state for the template switch
-        self._update_template_state()
-
-        # Set initial visibility of font settings
-        initial_renderer = config.get("render", {}).get("renderer", "default")
-        self._on_renderer_changed(initial_renderer)
-
-        # Set initial visibility of font settings
-        initial_renderer = config.get("render", {}).get("renderer", "default")
-        self._on_renderer_changed(initial_renderer)
-
-        self._update_start_button_text()
 
 
     def add_files(self):
@@ -1320,10 +1349,10 @@ class AppController:
                 self.update_log("模板模式 + 保存文本：正在执行导出...\n")
                 # 使用线程安全的方式运行异步导出
                 def run_export():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     loop.run_until_complete(self._process_txt_export_async())
-                loop.close()
+                    loop.close()
                     self.app.after(0, self._reset_start_button)
                 
                 threading.Thread(target=run_export, daemon=True).start()
@@ -1348,13 +1377,13 @@ class AppController:
             # --- End log ---
 
             if self.translation_process and self.translation_process.poll() is None:
-            self.update_log("\n翻译已在运行。请使用停止按钮终止当前翻译。")
-            return
+                self.update_log("\n翻译已在运行。请使用停止按钮终止当前翻译。")
+                return
 
-        # Update button state to Stop
-        self.main_view_widgets['start_translation_button'].configure(
-            text="停止翻译",
-            command=self.stop_translation,
+            # Update button state to Stop
+            self.main_view_widgets['start_translation_button'].configure(
+                text="停止翻译",
+                command=self.stop_translation,
                 fg_color=('#DB4437', '#C53929'),
                 hover_color=('#C53929', '#B03021')
             )
@@ -2102,7 +2131,7 @@ class AppController:
                 if latest_version > self.CURRENT_VERSION:
                     if messagebox.askyesno("发现新版本", f"检测到新版本 {latest_version}。是否要打开下载页面？"):
                         webbrowser.open("https://github.com/hgmzhn/manga-translator-ui/releases")
-        else:
+                else:
                     messagebox.showinfo("无更新", "您使用的已是最新版本。")
             else:
                 messagebox.showerror("更新失败", "无法检查更新。请稍后重试。")

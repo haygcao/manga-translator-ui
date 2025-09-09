@@ -1,1 +1,0 @@
-fix(deps): 为 googletrans 添加补丁并从 git 安装 pydensecrf

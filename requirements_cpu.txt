@@ -66,4 +66,4 @@ groq
 torchsummary
 open_clip_torch
 python-bidi
-tufup
+tufuptufup 
