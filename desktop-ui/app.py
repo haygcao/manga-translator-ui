@@ -188,8 +188,7 @@ class AppController:
         # 延迟初始化重量级组件 (等UI完全启动后)
         self.app.after(500, self._async_init_heavy_components)
         
-        # 初始化PyUpdater更新通知 
-        self.app.after(1000, self._init_update_notification)
+        
 
     def _init_essential_attributes(self):
         """初始化必要的属性，避免AttributeError"""
@@ -313,28 +312,7 @@ class AppController:
         # 这里需要找到实际的load_default_config实现
         pass
     
-    def _init_update_notification(self):
-        """初始化更新通知"""
-        try:
-            from components.pyupdater_widget import UpdateNotificationWidget
-            from services.pyupdater_manager import get_updater_manager
-            
-            # 创建全局更新通知小部件
-            main_view = self.views.get(MainView)
-            if main_view:
-                self.update_notification = UpdateNotificationWidget(main_view.right_container)
-                # 插入到设置标签页上方
-                self.update_notification.pack(fill="x", pady=(0, 5), before=main_view.settings_tabview)
-                
-                # 获取更新管理器并启动自动检查
-                updater = get_updater_manager()
-                if updater.get_auto_update_check():
-                    self.app.after(3000, lambda: updater.check_for_updates(async_check=True))
-            
-        except ImportError as e:
-            print(f"无法加载PyUpdater更新通知: {e}")
-        except Exception as e:
-            print(f"初始化更新通知失败: {e}")
+    
     
     def _async_init_heavy_components(self):
         """异步初始化重量级组件"""
@@ -1144,43 +1122,58 @@ class AppController:
         ocr_frame.pack(fill="x", pady=5)
         self.create_param_widgets(config.get("ocr", {}), ocr_frame.content_frame, "ocr")
 
-        # 版本和自动更新 (PyUpdater)
-        try:
-            from components.pyupdater_widget import AutoUpdateWidget
-            
-            version_frame = CollapsibleFrame(options_right, title="版本和自动更新")
-            version_frame.pack(fill="x", pady=5)
-            
-            # 集成PyUpdater自动更新组件
-            self.auto_update_widget = AutoUpdateWidget(version_frame.content_frame)
-            self.auto_update_widget.pack(fill="x", pady=5)
-            
-        except ImportError as e:
-            # 如果PyUpdater不可用，回退到手动更新
-            print(f"PyUpdater不可用，使用手动更新: {e}")
-            
+                    # 版本和更新信息
             version_frame = CollapsibleFrame(options_right, title="版本和更新")
             version_frame.pack(fill="x", pady=5)
-            
-            # 基本版本信息
-            info_frame = ctk.CTkFrame(version_frame.content_frame, fg_color="transparent")
-            info_frame.pack(fill="x", pady=5)
-            
-            version_label = ctk.CTkLabel(info_frame, text=f"当前版本: {self.CURRENT_VERSION}", font=ctk.CTkFont(size=14, weight="bold"))
-            version_label.pack(pady=2)
-            
-            build_info_label = ctk.CTkLabel(info_frame, text="构建类型: 独立版本", font=ctk.CTkFont(size=12))
-            build_info_label.pack(pady=1)
-            
-            update_info_label = ctk.CTkLabel(info_frame, text="更新方式: 手动检查", font=ctk.CTkFont(size=12), text_color="gray")
-            update_info_label.pack(pady=1)
-            
-            # 按钮框架
-            button_frame = ctk.CTkFrame(version_frame.content_frame, fg_color="transparent")
-            button_frame.pack(fill="x", pady=5)
-            
-            check_update_button = ctk.CTkButton(button_frame, text="检查更新", command=self.check_for_updates)
-            check_update_button.pack(pady=5)
+            content_frame = version_frame.content_frame
+
+            def open_repo_url(e):
+                import webbrowser
+                webbrowser.open_new_tab("https://github.com/hgmzhn/manga-translator-ui")
+
+            # 当前版本
+            ver_str = f"当前版本: {self.CURRENT_VERSION}"
+            ctk.CTkLabel(content_frame, text=ver_str, font=ctk.CTkFont(size=14, weight="bold")).pack(pady=5)
+
+            # 作者
+            author_str = f"作者: hgmzhn"
+            ctk.CTkLabel(content_frame, text=author_str).pack(pady=2)
+
+            # 仓库地址
+            repo_label = ctk.CTkLabel(content_frame, text="仓库地址: https://github.com/hgmzhn/manga-translator-ui", text_color="#5D9EFF", cursor="hand2")
+            repo_label.pack(pady=2)
+            repo_label.bind("<Button-1>", open_repo_url)
+
+            # 更新按钮
+            check_update_button = ctk.CTkButton(content_frame, text="检查更新", command=self.check_for_tufup_updates)
+            check_update_button.pack(pady=15)
+
+
+    def check_for_tufup_updates(self):
+        """使用 tufup 检查更新"""
+        try:
+            from tufup.client import Client
+            from tkinter import messagebox
+            import webbrowser
+
+            # 初始化客户端
+            client = Client(
+                app_name='MangaTranslatorUI',
+                app_version=self.CURRENT_VERSION,
+                metadata_url='https://raw.githubusercontent.com/hgmzhn/manga-translator-ui/main/repository',
+                target_url='https://github.com/hgmzhn/manga-translator-ui/releases/download/'
+            )
+
+            # 检查更新
+            if client.check_for_updates():
+                if messagebox.askyesno("发现新版本", f"检测到新版本。是否要下载并安装？"):
+                    # 下载、安装并重启
+                    client.download_and_install()
+            else:
+                messagebox.showinfo("无更新", "你使用的已是最新版本。")
+
+        except Exception as e:
+            messagebox.showerror("更新失败", f"检查更新时发生错误: {e}")
 
 
         # Set initial state for the template switch

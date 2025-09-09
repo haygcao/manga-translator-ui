@@ -1,27 +1,20 @@
-#!/usr/bin/env python3
-"""
-Manga Translator Package Builder
-Builds both GPU and CPU versions of the application
-"""
+
 import subprocess
 import sys
 import os
 import shutil
-import json
 import argparse
 from pathlib import Path
 
-# --- PyUpdater 配置 ---
-CONFIG_PATH = Path(".pyupdater/config.pyu")
-CONFIG_BACKUP_PATH = Path(".pyupdater/config.pyu.bak")
-CLIENT_CONFIG_BASE_PATH = Path("desktop-ui")
-CLIENT_CONFIG_TARGET = CLIENT_CONFIG_BASE_PATH / "client_config.py"
+# 全局配置
 EXE_NAME = "main.exe"  # 如果你的可执行文件不叫 main.exe，请修改这里
-# --- 结束配置 ---
+APP_NAME = "MangaTranslatorUI"
 
 def run_command_realtime(cmd, cwd=None):
     """实时执行一个 shell 命令并打印输出。"""
-    print(f"\nExecuting: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
+    # 在Windows上，如果命令是列表，需要用shell=False，如果是字符串，则用shell=True
+    use_shell = isinstance(cmd, str)
+    print(f"\nExecuting: {cmd}")
     try:
         process = subprocess.Popen(
             cmd,
@@ -31,7 +24,7 @@ def run_command_realtime(cmd, cwd=None):
             text=True,
             encoding='utf-8',
             errors='replace',
-            shell=True
+            shell=use_shell
         )
         while True:
             output = process.stdout.readline()
@@ -47,185 +40,113 @@ def run_command_realtime(cmd, cwd=None):
         print(f"Error executing command: {e}")
         return False
 
-class PackageBuilder:
+class Builder:
     """封装了构建和打包逻辑的类"""
 
     def __init__(self, app_version):
         self.app_version = app_version
+        self.version_file = Path("VERSION")
 
-    def build_version(self, version_type):
-        """构建指定版本 (cpu 或 gpu)"""
+    def build_executables(self, version_type):
+        """使用 PyInstaller 构建指定版本 (cpu 或 gpu)"""
         print("=" * 60)
-        print(f"Building {version_type.upper()} Version")
+        print(f"Building {version_type.upper()} Executable")
         print("=" * 60)
 
         venv_path = Path(f".venv_{version_type}")
-        req_file = f"requirements_{version_type}.txt"
         spec_file = f"manga-translator-{version_type}.spec"
-        dist_dir = Path("dist") / f"manga-translator-{version_type}-final"
-        if version_type == 'gpu':
-            dist_dir = Path("dist") / "manga-translator-gpu-cuda118"
 
-        # 1. 设置虚拟环境
-        if not venv_path.exists():
-            print(f"Creating virtual environment for {version_type.upper()} build...")
-            if not run_command_realtime(f'{sys.executable} -m venv {venv_path}'):
-                return False
-        else:
-            print(f"Using existing {version_type.upper()} virtual environment...")
+        if not venv_path.exists() or not Path(spec_file).exists():
+            print(f"Error: Environment for {version_type} not found. Please set it up first.")
+            return False
 
-        # 激活命令和Python可执行文件路径
-        if sys.platform == 'win32':
-            activate_cmd = f'{venv_path}\Scripts\activate && '
-            python_cmd = f'{venv_path}\Scripts\python.exe'
-        else:
-            activate_cmd = f'source {venv_path}/bin/activate && '
-            python_cmd = f'{venv_path}/bin/python3'
+        # 获取虚拟环境中的python解释器路径
+        python_exe = venv_path / 'Scripts' / 'python.exe' if sys.platform == 'win32' else venv_path / 'bin' / 'python'
 
-        # 2. 安装依赖
-        print("Upgrading pip...")
-        if not run_command_realtime(f'{activate_cmd}{python_cmd} -m pip install --upgrade pip'): return False
+        # 运行 PyInstaller
+        cmd = [str(python_exe), "-m", "PyInstaller", spec_file]
+        if not run_command_realtime(cmd):
+            print(f"PyInstaller build failed for {version_type.upper()}.")
+            return False
         
-        if version_type == 'gpu':
-            print("Installing PyTorch with CUDA 11.8...")
-            torch_cmd = f'{activate_cmd}pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118'
-            if not run_command_realtime(torch_cmd): return False
-
-        print(f"Installing {version_type.upper()} dependencies...")
-        if not run_command_realtime(f'{activate_cmd}pip install -r {req_file}'): return False
-        if not run_command_realtime(f'{activate_cmd}pip install pyinstaller'): return False
-
-        # 3. 清理旧的构建
-        if dist_dir.exists():
-            print(f"Cleaning previous build: {dist_dir}")
-            shutil.rmtree(dist_dir)
-
-        # 4. 使用 PyInstaller 构建
-        print(f"Building {version_type.upper()} application...")
-        if not run_command_realtime(f'{activate_cmd}pyinstaller {spec_file}'):
-            return False
-
-        # 5. 重命名输出文件夹
-        temp_dist_dir = Path("dist") / f"manga-translator-{version_type}"
-        if temp_dist_dir.exists():
-            if dist_dir.exists(): shutil.rmtree(dist_dir)
-            os.rename(temp_dist_dir, dist_dir)
-            print(f"{version_type.upper()} build completed! Output in {dist_dir}")
-            return True
-        else:
-            print(f"{version_type.upper()} build failed - output directory not found!")
-            return False
+        print(f"{version_type.upper()} build completed!")
+        return True
 
     def package_updates(self, version_type):
-        """为指定版本创建PyUpdater更新包"""
-        print("-" * 60)
-        print(f"Processing PyUpdater packages for {version_type.upper()} version...")
-        
+        """为指定版本创建 tufup 更新包"""
+        print("=" * 60)
+        print(f"Creating tufup update package for {version_type.upper()}")
+        print("=" * 60)
+
         venv_path = Path(f".venv_{version_type}")
-        if not venv_path.exists():
-            print(f"Error: Virtual environment not found at {venv_path}")
-            return False
+        tufup_exe = venv_path / 'Scripts' / 'tufup.exe' if sys.platform == 'win32' else venv_path / 'bin' / 'tufup'
 
-        # 1. 准备客户端配置文件
-        source_client_config = CLIENT_CONFIG_BASE_PATH / f"client_config_{version_type}.py"
-        if not source_client_config.exists():
-            print(f"Error: Source client config not found at {source_client_config}")
-            return False
-        shutil.copy(source_client_config, CLIENT_CONFIG_TARGET)
+        # tufup 需要从 VERSION 文件读取版本号
+        self.version_file.write_text(self.app_version)
 
-        # 2. 修改 PyUpdater 配置文件
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            config_data = json.load(f)
-        update_url = f"https://raw.githubusercontent.com/hgmzhn/manga-translator-ui/main/updates/{version_type}/"
-        config_data['app_config']['UPDATE_URLS'] = [update_url]
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, indent=2)
-
-        # 3. 运行 PyUpdater 命令
-        python_exe = venv_path / "Scripts" / "python.exe" if sys.platform == "win32" else venv_path / "bin" / "python"
-        
+        # 定义可执行文件路径
         if version_type == 'cpu':
-            exe_path = Path("dist") / "manga-translator-cpu-final" / EXE_NAME
+            dist_dir = Path("dist") / f"manga-translator-{version_type}"
         else:
-            exe_path = Path("dist") / "manga-translator-gpu-cuda118" / EXE_NAME
+            dist_dir = Path("dist") / f"manga-translator-{version_type}"
+        exe_path = dist_dir / EXE_NAME
 
         if not exe_path.exists():
             print(f"\nError: Executable not found at '{exe_path}'")
+            print("Please build the application first.")
             return False
 
-        cmd_build = [str(python_exe), "-m", "pyupdater", "build", "--app-version", self.app_version, str(exe_path)]
-        if not run_command_realtime(cmd_build): return False
+        # 添加新版本到tufup仓库
+        cmd_add = [str(tufup_exe), 'targets', 'add', str(dist_dir), self.app_version, '--app-path', str(exe_path)]
+        if not run_command_realtime(cmd_add):
+            print(f"'tufup targets add' command failed for {version_type.upper()}.")
+            return False
         
-        cmd_process = [str(python_exe), "-m", "pyupdater", "pkg", "--process"]
-        if not run_command_realtime(cmd_process): return False
+        # 正式发布版本
+        cmd_release = [str(tufup_exe), 'release']
+        if not run_command_realtime(cmd_release):
+            print(f"'tufup release' command failed for {version_type.upper()}.")
+            return False
             
-        print(f"Successfully processed updates for {version_type.upper()}.")
+        print(f"Successfully created update package for {version_type.upper()} {self.app_version}.")
         return True
 
-    def backup_config(self):
-        if CONFIG_PATH.exists() and not CONFIG_BACKUP_PATH.exists():
-            shutil.copy(CONFIG_PATH, CONFIG_BACKUP_PATH)
-
-    def restore_config(self):
-        if CONFIG_BACKUP_PATH.exists():
-            shutil.move(CONFIG_BACKUP_PATH, CONFIG_PATH)
-        if CLIENT_CONFIG_TARGET.exists():
-            os.remove(CLIENT_CONFIG_TARGET)
-
 def main():
-    parser = argparse.ArgumentParser(description="Manga Translator UI Package Builder")
-    parser.add_argument("--version", required=True, help="The application version to build (e.g., 2.6.0)")
-    parser.add_argument("--build", choices=['cpu', 'gpu', 'both'], default='both', help="Which version to build.")
-    parser.add_argument("--skip-build", action='store_true', help="Skip the application build and only package updates.")
-    parser.add_argument("--skip-updates", action='store_true', help="Skip packaging updates and only build the application.")
+    parser = argparse.ArgumentParser(description="Manga Translator UI Builder and Updater")
+    parser.add_argument("version", help="The application version to build (e.g., 1.4.0)")
+    parser.add_argument("--build", choices=['cpu', 'gpu', 'both'], default='both', help="Which version(s) to build.")
+    parser.add_argument("--skip-build", action='store_true', help="Skip building executables.")
+    parser.add_argument("--skip-updates", action='store_true', help="Skip creating update packages.")
     args = parser.parse_args()
 
-    print(f"Starting build process for version {args.version}")
-    builder = PackageBuilder(args.version)
+    print(f"--- Starting process for version {args.version} ---")
+    builder = Builder(args.version)
 
-    build_ok = True
-    if not args.skip_build:
-        if args.build in ['cpu', 'both']:
-            if not builder.build_version('cpu'):
-                build_ok = False
-        if args.build in ['gpu', 'both'] and build_ok:
-            if not builder.build_version('gpu'):
-                build_ok = False
-    
-    if not build_ok:
-        print("\n" + "=" * 60)
-        print("BUILD FAILED!")
-        print("=" * 60)
-        sys.exit(1)
-    elif not args.skip_updates:
-        print("\n" + "=" * 60)
-        print("BUILD COMPLETED SUCCESSFULLY! NOW PACKAGING UPDATES...")
-        print("=" * 60)
+    versions_to_process = []
+    if args.build in ['cpu', 'both']:
+        versions_to_process.append('cpu')
+    if args.build in ['gpu', 'both']:
+        versions_to_process.append('gpu')
 
-    if not args.skip_updates:
-        builder.backup_config()
-        updates_ok = True
-        try:
-            if args.build in ['cpu', 'both']:
-                if not builder.package_updates('cpu'):
-                    updates_ok = False
-            if args.build in ['gpu', 'both'] and updates_ok:
-                if not builder.package_updates('gpu'):
-                    updates_ok = False
-        finally:
-            builder.restore_config()
+    for v_type in versions_to_process:
+        if not args.skip_build:
+            if not builder.build_executables(v_type):
+                print(f"\nFATAL: Build failed for {v_type.upper()}. Halting.")
+                sys.exit(1)
         
-        if not updates_ok:
-            print("\n" + "=" * 60)
-            print("UPDATE PACKAGING FAILED!")
-            print("=" * 60)
-            sys.exit(1)
+        if not args.skip_updates:
+            if not builder.package_updates(v_type):
+                print(f"\nFATAL: Update packaging failed for {v_type.upper()}. Halting.")
+                sys.exit(1)
 
     print("\n" + "=" * 60)
     print("ALL TASKS COMPLETED SUCCESSFULLY!")
     print("=" * 60)
     if not args.skip_updates:
-        print("Please upload the contents of the 'pyu-data/deploy' directory to your update server.")
+        print("Next steps:")
+        print("1. Commit and push the 'update_repository/' directory to your git repository.")
+        print("2. Create a new release on GitHub with the tag matching your version.")
+        print("3. Upload the application bundles from the 'dist/' directory as release assets.")
 
 if __name__ == "__main__":
     main()

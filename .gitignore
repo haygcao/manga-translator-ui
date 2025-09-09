@@ -36,10 +36,8 @@ result/
 *.bak
 *.backup
 
-# Packaging & Update Scripts/Configs
-update_manager.py
-desktop-ui/client_config_*.py
-.pyupdater/
+# Tufup auto-update
+.tufup-repo-config
 keys/
 
 # Vendored projects

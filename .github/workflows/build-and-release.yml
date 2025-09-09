@@ -41,15 +41,7 @@ jobs:
         name: manga-translator-cpu
         path: dist/manga-translator-cpu-final/
     
-    - name: Create CPU update package
-      run: |
-        python update_manager.py --build-updates
     
-    - name: Upload CPU update package
-      uses: actions/upload-artifact@v3
-      with:
-        name: cpu-updates
-        path: updates/cpu/
 
   build-gpu:
     runs-on: windows-latest
