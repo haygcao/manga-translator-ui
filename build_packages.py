@@ -33,25 +33,29 @@ def run_command_realtime(cmd, cwd=None):
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
+            text=False, # Read as bytes
             shell=use_shell,
             env=env
         )
+        
         while True:
-            output = process.stdout.readline()
-            if output == '' and process.poll() is not None:
+            output_bytes = process.stdout.readline()
+            if not output_bytes and process.poll() is not None:
                 break
-            if output:
-                print(output.strip())
+            if output_bytes:
+                output_str = output_bytes.decode('utf-8', errors='replace').strip()
+                print(output_str)
         
         returncode = process.poll()
         print(f"Exit code: {returncode}")
         return returncode == 0
     except Exception as e:
-        print(f"Error executing command: {e}")
+        try:
+            print(f"Error executing command: {e}")
+        except UnicodeEncodeError:
+            print(f"Error executing command (ascii representation): {repr(e)}")
         return False
+
 
 
 class Builder:
