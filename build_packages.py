@@ -5,6 +5,11 @@ import json
 import argparse
 from pathlib import Path
 import shutil
+import io
+
+# Force stdout and stderr to use UTF-8 encoding
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # Try to import tufup, and provide a helpful error message if it's not installed.
 try:
