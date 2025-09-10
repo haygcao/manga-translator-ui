@@ -104,12 +104,14 @@ jobs:
         cp -r models dist/manga-translator-cpu/__pycache__/
         cp -r update_repository dist/manga-translator-cpu/__pycache__/
         cp -r MangaStudio_Data dist/manga-translator-cpu/__pycache__/
+        cp VERSION dist/manga-translator-cpu/__pycache__/
         
         cp -r examples dist/manga-translator-gpu/__pycache__/
         cp -r fonts dist/manga-translator-gpu/__pycache__/
         cp -r models dist/manga-translator-gpu/__pycache__/
         cp -r update_repository dist/manga-translator-gpu/__pycache__/
         cp -r MangaStudio_Data dist/manga-translator-gpu/__pycache__/
+        cp VERSION dist/manga-translator-gpu/__pycache__/
 
     - name: Create Release Archives using 7-Zip with Splitting
       run: |
