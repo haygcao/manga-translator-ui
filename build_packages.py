@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 import shutil
 import io
+from packaging.version import parse as parse_version
 
 # Force stdout and stderr to use UTF-8 encoding
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -77,7 +78,7 @@ class Builder:
             repo_dir=repo_path,
             keys_dir=Path(KEYS_DIR),
             app_name=APP_NAME,
-            app_version_attr=APP_VERSION_ATTR
+            app_version_parser=parse_version
         )
 
         # If creating keys, the `builder.create_keys()` method will handle loading.
