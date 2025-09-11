@@ -140,25 +140,25 @@ jobs:
         commit_message: 'Deploy TUF repository for ${{ github.ref_name }}'
         exclude_assets: '*.tar.gz'
 
-    - name: Bundle extra directories into __pycache__
+    - name: Bundle extra directories into _internal
       run: |
-        echo "Bundling extra directories into __pycache__..."
-        mkdir -p dist/manga-translator-cpu/__pycache__
-        mkdir -p dist/manga-translator-gpu/__pycache__
+        echo "Bundling extra directories into _internal..."
+        mkdir -p dist/manga-translator-cpu/_internal
+        mkdir -p dist/manga-translator-gpu/_internal
         
-        cp -r examples dist/manga-translator-cpu/__pycache__/
-        cp -r fonts dist/manga-translator-cpu/__pycache__/
-        cp -r models dist/manga-translator-cpu/__pycache__/
-        cp -r update_repository dist/manga-translator-cpu/__pycache__/
-        cp -r MangaStudio_Data dist/manga-translator-cpu/__pycache__/
-        cp VERSION dist/manga-translator-cpu/__pycache__/
+        cp -r examples dist/manga-translator-cpu/_internal/
+        cp -r fonts dist/manga-translator-cpu/_internal/
+        cp -r models dist/manga-translator-cpu/_internal/
+        cp -r update_repository dist/manga-translator-cpu/_internal/
+        cp -r MangaStudio_Data dist/manga-translator-cpu/_internal/
+        cp VERSION dist/manga-translator-cpu/_internal/
         
-        cp -r examples dist/manga-translator-gpu/__pycache__/
-        cp -r fonts dist/manga-translator-gpu/__pycache__/
-        cp -r models dist/manga-translator-gpu/__pycache__/
-        cp -r update_repository dist/manga-translator-gpu/__pycache__/
-        cp -r MangaStudio_Data dist/manga-translator-gpu/__pycache__/
-        cp VERSION dist/manga-translator-gpu/__pycache__/
+        cp -r examples dist/manga-translator-gpu/_internal/
+        cp -r fonts dist/manga-translator-gpu/_internal/
+        cp -r models dist/manga-translator-gpu/_internal/
+        cp -r update_repository dist/manga-translator-gpu/_internal/
+        cp -r MangaStudio_Data dist/manga-translator-gpu/_internal/
+        cp VERSION dist/manga-translator-gpu/_internal/
 
     - name: Create Release Archives using 7-Zip with Splitting
       run: |
