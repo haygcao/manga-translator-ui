@@ -54,3 +54,11 @@ manga-image-translator-main/
 
 # Ignore temporary clone check directory
 temp_clone_check/
+
+# User-requested ignores
+.gitignore11
+.qoderignore
+.vscode/
+models/ocr/ocr-ctc.ckpt
+高质量翻译实现文档.md
+dict/high_quality_translation_prompt.txt
