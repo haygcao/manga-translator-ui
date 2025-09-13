@@ -116,7 +116,7 @@ def main():
             app_install_dir=app_install_dir,
             current_version=current_version,
             metadata_dir=metadata_dir,
-            metadata_base_url=f'https://hgmzhn.github.io/manga-translator-ui-package/',
+            metadata_base_url=f'https://hgmzhn.github.io/manga-translator-ui/',
             target_dir=target_dir,
             target_base_url=f'https://github.com/hgmzhn/manga-translator-ui-package/releases/download/'
         )

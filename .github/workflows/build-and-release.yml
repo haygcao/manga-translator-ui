@@ -134,6 +134,11 @@ jobs:
       run: |
         python build_packages.py ${{ github.ref_name }} --update-repo --skip-build
 
+    - name: Verify TUF metadata
+      run: |
+        echo "Verifying contents of update_repository before deployment:"
+        ls -lR update_repository/
+
     - name: Deploy Repository to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
