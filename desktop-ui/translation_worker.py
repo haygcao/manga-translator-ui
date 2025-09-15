@@ -228,8 +228,14 @@ def main():
                         
                         # 异步翻译
                         ctx = loop.run_until_complete(translator.translate(image, config, image_name=image.name))
-                        
+
+                        # Check if we should skip this image
                         cli_params = config_dict.get('cli', {})
+                        skip_no_text = cli_params.get('skip_no_text', False)
+                        if skip_no_text and (not ctx or not ctx.text_regions):
+                            flush_print(f"  -> ⏩ 跳过无文本图片: {os.path.basename(file_path)}")
+                            continue
+                        
                         save_text_mode = cli_params.get('save_text', False)
                         task_successful = (ctx and ctx.result) or (ctx and save_text_mode and ctx.result is None)
 

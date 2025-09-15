@@ -71,24 +71,24 @@ def load_dictionary(file_path):
         path_to_check = file_path if os.path.isabs(file_path) else os.path.join(BASE_PATH, file_path)
         if os.path.exists(path_to_check):
             with open(path_to_check, 'r', encoding='utf-8') as file:
-            for line_number, line in enumerate(file, start=1):
-                # Ignore empty lines and lines starting with '#' or '//'
-                if not line.strip() or line.strip().startswith('#') or line.strip().startswith('//'):
-                    continue
-                # Remove comment parts
-                line = line.split('#')[0].strip()
-                line = line.split('//')[0].strip()
-                parts = line.split()
-                if len(parts) == 1:
-                    # If there is only the left part, the right part defaults to an empty string, meaning delete the left part
-                    pattern = re.compile(parts[0])
-                    dictionary.append((pattern, '', line_number))
-                elif len(parts) == 2:
-                    # If both left and right parts are present, perform the replacement
-                    pattern = re.compile(parts[0])
-                    dictionary.append((pattern, parts[1], line_number))
-                else:
-                    logger.error(f'Invalid dictionary entry at line {line_number}: {line.strip()}')
+                for line_number, line in enumerate(file, start=1):
+                    # Ignore empty lines and lines starting with '#' or '//'
+                    if not line.strip() or line.strip().startswith('#') or line.strip().startswith('//'):
+                        continue
+                    # Remove comment parts
+                    line = line.split('#')[0].strip()
+                    line = line.split('//')[0].strip()
+                    parts = line.split()
+                    if len(parts) == 1:
+                        # If there is only the left part, the right part defaults to an empty string, meaning delete the left part
+                        pattern = re.compile(parts[0])
+                        dictionary.append((pattern, '', line_number))
+                    elif len(parts) == 2:
+                        # If both left and right parts are present, perform the replacement
+                        pattern = re.compile(parts[0])
+                        dictionary.append((pattern, parts[1], line_number))
+                    else:
+                        logger.error(f'Invalid dictionary entry at line {line_number}: {line.strip()}')
     return dictionary
 
 def apply_dictionary(text, dictionary):
@@ -319,6 +319,8 @@ class MangaTranslator:
         self.template = params.get('template', False)
         self.is_ui_mode = params.get('is_ui_mode', False)
         self.attempts = params.get('attempts', -1)
+        self.save_quality = params.get('save_quality', 100)
+        self.skip_no_text = params.get('skip_no_text', False)
         
         
         # batch_concurrent 已在初始化时设置并验证
@@ -393,6 +395,7 @@ class MangaTranslator:
         ctx.image_name = image_name
         ctx.result = None
         ctx.verbose = self.verbose
+        ctx.save_quality = self.save_quality
 
         # 设置图片上下文以生成调试图片子文件夹
         self._set_image_context(config, image)
