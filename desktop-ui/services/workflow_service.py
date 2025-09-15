@@ -400,9 +400,20 @@ def import_with_custom_template(
         return f"导入过程中出错: {e}"
 
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    import sys
+    import os
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    return os.path.join(base_path, relative_path)
+
 def get_default_template_path() -> str:
     """获取默认模板文件路径"""
-    return os.path.join(os.path.dirname(__file__), "..", "..", "examples", "translation_template.json")
+    return resource_path(os.path.join("examples", "translation_template.json"))
 
 
 def ensure_default_template_exists() -> str:

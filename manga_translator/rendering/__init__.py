@@ -204,6 +204,16 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                         logger.warning(f"Failed to apply dynamic scaling: {e}")
                     
                     target_font_size = int(target_font_size * font_scale_factor)
+                elif diff_ratio < 0:
+                    # If text is smaller, enlarge font to fill the box
+                    try:
+                        area_ratio = original_area / required_area
+                        font_scale_factor = np.sqrt(area_ratio)
+                        target_font_size = int(target_font_size * font_scale_factor)
+                        unrotated_points = np.array(unrotated_base_poly.exterior.coords[:4])
+                        dst_points = rotate_polygons(region.center, unrotated_points.reshape(1, -1), -region.angle, to_int=False).reshape(-1, 4, 2)
+                    except Exception as e:
+                        logger.warning(f"Failed to apply font enlargement: {e}")
                 else:
                     # If no scaling is needed, still use the calculated base polygon for rendering
                     try:
@@ -261,6 +271,14 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                         logger.warning(f"Failed to apply dynamic scaling: {e}")
                     
                     target_font_size = int(target_font_size * font_scale_factor)
+                elif diff_ratio < 0:
+                    # If text is smaller, enlarge font to fill the box
+                    try:
+                        area_ratio = original_area / required_area
+                        font_scale_factor = np.sqrt(area_ratio)
+                        target_font_size = int(target_font_size * font_scale_factor)
+                    except Exception as e:
+                        logger.warning(f"Failed to apply font enlargement: {e}")
                 
                 dst_points_list.append(dst_points)
                 region.font_size = int(target_font_size)

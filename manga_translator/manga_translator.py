@@ -316,7 +316,7 @@ class MangaTranslator:
         self.save_mask = not params.get('no_save_mask', False)
         self.template = params.get('template', False)
         self.is_ui_mode = params.get('is_ui_mode', False)
-        self.attempts = params.get('cli', {}).get('attempts', -1)
+        self.attempts = params.get('attempts', -1)
         
         
         # batch_concurrent 已在初始化时设置并验证
@@ -1463,13 +1463,20 @@ class MangaTranslator:
 
         # Load custom high-quality prompt from JSON file if specified
         ctx.custom_prompt_json = None
-        if config.translator.high_quality_prompt_path and os.path.exists(config.translator.high_quality_prompt_path):
-            try:
-                with open(config.translator.high_quality_prompt_path, 'r', encoding='utf-8') as f:
-                    ctx.custom_prompt_json = json.load(f)
-                logger.info(f"Successfully loaded custom high-quality prompt from {config.translator.high_quality_prompt_path}")
-            except Exception as e:
-                logger.error(f"Failed to load or parse custom prompt JSON from {config.translator.high_quality_prompt_path}: {e}")
+        if config.translator.high_quality_prompt_path:
+            prompt_path = config.translator.high_quality_prompt_path
+            if not os.path.isabs(prompt_path):
+                prompt_path = os.path.join(BASE_PATH, prompt_path)
+            
+            if os.path.exists(prompt_path):
+                try:
+                    with open(prompt_path, 'r', encoding='utf-8') as f:
+                        ctx.custom_prompt_json = json.load(f)
+                    logger.info(f"Successfully loaded custom high-quality prompt from {prompt_path}")
+                except Exception as e:
+                    logger.error(f"Failed to load or parse custom prompt JSON from {prompt_path}: {e}")
+            else:
+                logger.warning(f"Custom high-quality prompt file not found at {prompt_path}")
 
         if config.translator.translator in [Translator.gemini_hq, Translator.openai_hq]:
             from PIL import Image
@@ -1859,9 +1866,15 @@ class MangaTranslator:
             if first_config and hasattr(first_config.translator, 'translator'):
                 from manga_translator.config import Translator
                 translator_type = first_config.translator.translator
-                if translator_type in [Translator.openai_hq, Translator.gemini_hq]:
+                is_hq_translator = translator_type in [Translator.openai_hq, Translator.gemini_hq]
+                is_import_export_mode = self.load_text or self.template
+
+                if is_hq_translator and not is_import_export_mode:
                     logger.info(f"检测到高质量翻译器 {translator_type}，自动启用高质量翻译模式")
                     return await self._translate_batch_high_quality(images_with_configs, save_info)
+                
+                if is_hq_translator and is_import_export_mode:
+                    logger.warning("检测到导入/导出翻译模式，高质量翻译流程将被跳过，将使用标准流程进行渲染。")
         
         # 检查是否为"仅生成模板"模式
         is_template_save_mode = self.template and self.save_text

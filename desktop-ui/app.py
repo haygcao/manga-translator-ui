@@ -564,33 +564,33 @@ class AppController:
             "kernel_size": "卷积核大小",
             "mask_dilation_offset": "遮罩扩张偏移",
             "filter_text": "过滤文本 (Regex)",
-            "YOUDAO_APP_KEY": "有道翻译应用ID (YOUDAO_APP_KEY)",
-            "YOUDAO_SECRET_KEY": "有道翻译应用秘钥 (YOUDAO_SECRET_KEY)",
-            "BAIDU_APP_ID": "百度翻译 AppID (BAIDU_APP_ID)",
-            "BAIDU_SECRET_KEY": "百度翻译密钥 (BAIDU_SECRET_KEY)",
-            "DEEPL_AUTH_KEY": "DeepL 授权密钥 (DEEPL_AUTH_KEY)",
-            "CAIYUN_TOKEN": "彩云小译 API 令牌 (CAIYUN_TOKEN)",
-            "OPENAI_API_KEY": "OpenAI API 密钥 (OPENAI_API_KEY)",
-            "OPENAI_MODEL": "OpenAI 模型 (OPENAI_MODEL)",
-            "OPENAI_API_BASE": "OpenAI API 地址 (OPENAI_API_BASE)",
-            "OPENAI_HTTP_PROXY": "HTTP 代理 (OPENAI_HTTP_PROXY)",
-            "OPENAI_GLOSSARY_PATH": "术语表路径 (OPENAI_GLOSSARY_PATH)",
-            "DEEPSEEK_API_KEY": "DeepSeek API 密钥 (DEEPSEEK_API_KEY)",
-            "DEEPSEEK_API_BASE": "DeepSeek API 地址 (DEEPSEEK_API_BASE)",
-            "DEEPSEEK_MODEL": "DeepSeek 模型 (DEEPSEEK_MODEL)",
-            "GROQ_API_KEY": "Groq API 密钥 (GROQ_API_KEY)",
-            "GROQ_MODEL": "Groq 模型 (GROQ_MODEL)",
-            "GEMINI_API_KEY": "Gemini API 密钥 (GEMINI_API_KEY)",
-            "GEMINI_MODEL": "Gemini 模型 (GEMINI_MODEL)",
-            "GEMINI_API_BASE": "Gemini API 地址 (GEMINI_API_BASE)",
+            "YOUDAO_APP_KEY": "有道翻译应用ID",
+            "YOUDAO_SECRET_KEY": "有道翻译应用秘钥",
+            "BAIDU_APP_ID": "百度翻译 AppID",
+            "BAIDU_SECRET_KEY": "百度翻译密钥",
+            "DEEPL_AUTH_KEY": "DeepL 授权密钥",
+            "CAIYUN_TOKEN": "彩云小译 API 令牌",
+            "OPENAI_API_KEY": "OpenAI API 密钥",
+            "OPENAI_MODEL": "OpenAI 模型",
+            "OPENAI_API_BASE": "OpenAI API 地址",
+            "OPENAI_HTTP_PROXY": "HTTP 代理",
+            "OPENAI_GLOSSARY_PATH": "术语表路径",
+            "DEEPSEEK_API_KEY": "DeepSeek API 密钥",
+            "DEEPSEEK_API_BASE": "DeepSeek API 地址",
+            "DEEPSEEK_MODEL": "DeepSeek 模型",
+            "GROQ_API_KEY": "Groq API 密钥",
+            "GROQ_MODEL": "Groq 模型",
+            "GEMINI_API_KEY": "Gemini API 密钥",
+            "GEMINI_MODEL": "Gemini 模型",
+            "GEMINI_API_BASE": "Gemini API 地址",
             "translator_parameters": "翻译器参数",
-            "SAKURA_API_BASE": "SAKURA API 地址 (SAKURA_API_BASE)",
-            "SAKURA_DICT_PATH": "SAKURA 词典路径 (SAKURA_DICT_PATH)",
-            "SAKURA_VERSION": "SAKURA API 版本 (SAKURA_VERSION)",
-            "CUSTOM_OPENAI_API_BASE": "自定义 OpenAI API 地址 (CUSTOM_OPENAI_API_BASE)",
-            "CUSTOM_OPENAI_MODEL": "自定义 OpenAI 模型 (CUSTOM_OPENAI_MODEL)",
-            "CUSTOM_OPENAI_API_KEY": "自定义 OpenAI API 密钥 (CUSTOM_OPENAI_API_KEY)",
-            "CUSTOM_OPENAI_MODEL_CONF": "自定义 OpenAI 模型配置 (CUSTOM_OPENAI_MODEL_CONF)",
+            "SAKURA_API_BASE": "SAKURA API 地址",
+            "SAKURA_DICT_PATH": "SAKURA 词典路径",
+            "SAKURA_VERSION": "SAKURA API 版本",
+            "CUSTOM_OPENAI_API_BASE": "自定义 OpenAI API 地址",
+            "CUSTOM_OPENAI_MODEL": "自定义 OpenAI 模型",
+            "CUSTOM_OPENAI_API_KEY": "自定义 OpenAI API 密钥",
+            "CUSTOM_OPENAI_MODEL_CONF": "自定义 OpenAI 模型配置",
             "source": "源",
             "target": "目标",
             "add_files": "添加文件",
@@ -618,7 +618,6 @@ class AppController:
             "font_path": "字体路径",
             "pre_dict": "译前替换字典",
             "post_dict": "译后替换字典",
-            "kernel_size": "卷积核大小",
             "context_size": "上下文页数",
             "format": "输出格式",
             "batch_size": "批量大小",
@@ -722,16 +721,17 @@ class AppController:
 
                 # The combobox will be populated by the scan function
                 def on_prompt_select(filename):
-                    full_path = os.path.join(resource_path('dict'), filename) if filename else None
-                    self._save_widget_change("translator.high_quality_prompt_path", value=full_path)
+                    # Save a path relative to the project root, e.g., "dict/prompt.json"
+                    relative_path = Path('dict', filename).as_posix() if filename else None
+                    self._save_widget_change("translator.high_quality_prompt_path", value=relative_path)
 
                 widget = ctk.CTkComboBox(widget_frame, values=[], command=on_prompt_select)
                 
                 # Bind the click event to refresh the list
                 widget.bind('<Button-1>', lambda event: self._scan_and_update_hq_prompt_dropdown())
 
-                # When loading, we only have the full path, so we extract the filename
-                filename = os.path.basename(value) if value and os.path.exists(value) else ""
+                # When loading, we have a relative path. We just need the filename part for display.
+                filename = os.path.basename(value) if value else ""
                 widget.set(filename)
                 widget.grid(row=0, column=0, sticky="ew")
 
@@ -2251,9 +2251,34 @@ class AppController:
             # Special handling for translator to convert display name to internal name
             elif full_key == 'translator.translator' and isinstance(value, str):
                 reverse_mapping = {
+                    "有道翻译": "youdao",
+                    "百度翻译": "baidu",
+                    "DeepL": "deepl",
+                    "Papago": "papago",
+                    "彩云翻译": "caiyun",
                     "openai": "chatgpt",
+                    "ChatGPT (2-Stage)": "chatgpt_2stage",
+                    "无": "none",
+                    "原文": "original",
+                    "Sakura": "sakura",
+                    "DeepSeek": "deepseek",
+                    "Groq": "groq",
+                    "Google Gemini": "gemini",
+                    "Gemini (2-Stage)": "gemini_2stage",
                     "高质量翻译 OpenAI": "openai_hq",
-                    "高质量翻译 Gemini": "gemini_hq"
+                    "高质量翻译 Gemini": "gemini_hq",
+                    "自定义 OpenAI": "custom_openai",
+                    "离线翻译": "offline",
+                    "NLLB": "nllb",
+                    "NLLB (Big)": "nllb_big",
+                    "Sugoi": "sugoi",
+                    "JParaCrawl": "jparacrawl",
+                    "JParaCrawl (Big)": "jparacrawl_big",
+                    "M2M100": "m2m100",
+                    "M2M100 (Big)": "m2m100_big",
+                    "mBART50": "mbart50",
+                    "Qwen2": "qwen2",
+                    "Qwen2 (Big)": "qwen2_big",
                 }
                 value = reverse_mapping.get(value, value)
 

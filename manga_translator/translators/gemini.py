@@ -109,7 +109,16 @@ class GeminiTranslator(CommonGPTTranslator):
                         'before using the Gemini translator.'
                     )
 
-        self.client = genai.Client(api_key=GEMINI_API_KEY)
+        import os
+        api_base = os.getenv('GEMINI_API_BASE')
+        client_options = {"api_endpoint": api_base} if api_base else None
+        
+        genai.configure(
+            api_key=GEMINI_API_KEY,
+            client_options=client_options
+        )
+
+        self.client = genai.Client()
 
         try:
             model_list=list(self.client.models.list())

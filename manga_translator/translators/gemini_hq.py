@@ -74,16 +74,13 @@ class GeminiHighQualityTranslator(CommonTranslator):
     def _setup_client(self):
         """设置Gemini客户端"""
         if not self.client and self.api_key:
+            client_options = {"api_endpoint": self.base_url} if self.base_url else None
+
             genai.configure(
                 api_key=self.api_key,
-                transport='rest'  # 支持自定义base_url
+                transport='rest',  # 支持自定义base_url
+                client_options=client_options
             )
-            
-            # 如果有自定义base_url，需要特殊处理
-            if self.base_url and self.base_url != "https://generativelanguage.googleapis.com":
-                # 注意：Gemini的base_url配置可能需要特殊处理
-                # 这里提供基本框架，具体实现可能需要根据实际API调整
-                os.environ['GOOGLE_AI_API_BASE'] = self.base_url
             
             generation_config = {
                 "temperature": self.temperature,
@@ -92,12 +89,20 @@ class GeminiHighQualityTranslator(CommonTranslator):
                 "max_output_tokens": self.max_tokens,
                 "response_mime_type": "text/plain",
             }
-            
-            self.client = genai.GenerativeModel(
-                model_name=self.model_name,
-                generation_config=generation_config,
-                safety_settings=self.safety_settings,
-            )
+
+            model_args = {
+                "model_name": self.model_name,
+                "generation_config": generation_config,
+            }
+
+            # Conditionally add safety settings
+            is_third_party_api = self.base_url and self.base_url != 'https://generativelanguage.googleapis.com'
+            if not is_third_party_api:
+                model_args["safety_settings"] = self.safety_settings
+            else:
+                self.logger.info("检测到第三方API，已禁用安全设置。")
+
+            self.client = genai.GenerativeModel(**model_args)
     
     def parse_args(self, config):
         """解析配置参数，使用和原有Gemini翻译器相同的环境变量"""
@@ -133,23 +138,53 @@ class GeminiHighQualityTranslator(CommonTranslator):
         
         custom_prompt_str = "\n\n".join(custom_prompts)
 
-        base_prompt = f"""You are an expert manga translator. Your primary goal is to provide a high-quality, natural-sounding translation that is faithful to the original's intent, emotion, and context.
+        base_prompt = f"""You are an expert manga translator. Your task is to accurately translate manga text from the source language into **{{{target_lang}}}**. You will be given the full manga page for context.
 
-**CONTEXT:**
-You will be given a batch of manga pages. The user prompt will first list the original text grouped by page (e.g., under `=== Image 1 ===`, `=== Image 2 ===`). Then, it will provide a flat, numbered list of all texts that need translating. You will also receive the corresponding image files. Analyze all of this information together to ensure consistency in tone, style, and character voice.
+**CRITICAL INSTRUCTIONS (FOLLOW STRICTLY):**
 
-**CRITICAL RULES (Do not break these):**
-1.  You MUST translate every text region provided, even single characters or sound effects.
-2.  Your output MUST have the exact same number of lines as the input text regions. Each line of your output corresponds to one text region. Do not merge or split regions.
-3.  Your output MUST contain ONLY the translated text, with each translation on a new line. Do not add any extra explanations, apologies, or formatting.
-4.  You MUST return text in {{{target_lang}}}. NEVER return the original text.
+1.  **DIRECT TRANSLATION ONLY**: Your output MUST contain ONLY the raw, translated text. Nothing else.
+    -   DO NOT include the original text.
+    -   DO NOT include any explanations, greetings, apologies, or any conversational text.
+    -   DO NOT use Markdown formatting (like ```json or ```).
+    -   The output is fed directly to an automated script. Any extra text will cause it to fail.
 
-**TRANSLATION GUIDELINES:**
-- **Natural Language:** The translation must be natural and conform to {{{target_lang}}} linguistic habits. Don't make it sound like a literal machine translation.
-- **Character & Scene:** The translation must fit the character's personality, the scene's mood, and the overall context.
-- **Terminology:** Ensure consistent translation of names, places, and special terms.
-- **Cultural Nuances:** If you encounter humor, puns, or cultural references, find an appropriate equivalent in {{{target_lang}}}.
-- **Sound Effects:** For onomatopoeia, provide the equivalent sound in {{{target_lang}}} or a brief description of the sound (e.g., '(rumble)', '(thud)')."""
+2.  **MATCH LINE COUNT**: The number of lines in your output MUST EXACTLY match the number of text regions you are asked to translate. Each line in your output corresponds to one numbered text region in the input.
+
+3.  **TRANSLATE EVERYTHING**: Translate all text provided, including sound effects and single characters. Do not leave any line untranslated.
+
+4.  **ACCURACY AND TONE**:
+    -   Preserve the original tone, emotion, and character's voice.
+    -   Ensure consistent translation of names, places, and special terms.
+    -   For onomatopoeia (sound effects), provide the equivalent sound in {{{target_lang}}} or a brief description (e.g., '(rumble)', '(thud)').
+
+---
+
+**EXAMPLE OF CORRECT AND INCORRECT OUTPUT:**
+
+**[ CORRECT OUTPUT EXAMPLE ]**
+This is a correct response. Notice it only contains the translated text, with each translation on a new line.
+
+(Imagine the user input was: "1. うるさい！", "2. 黙れ！")
+```
+吵死了！
+闭嘴！
+```
+
+**[ ❌ INCORRECT OUTPUT EXAMPLE ]**
+This is an incorrect response because it includes extra text and explanations.
+
+(Imagine the user input was: "1. うるさい！", "2. 黙れ！")
+```
+好的，这是您的翻译：
+1. 吵死了！
+2. 闭嘴！
+```
+**REASONING:** The above example is WRONG because it includes "好的，这是您的翻译：" and numbering. Your response must be ONLY the translated text, line by line.
+
+---
+
+**FINAL INSTRUCTION:** Now, perform the translation task. Remember, your response must be clean, containing only the translated text.
+"""
 
         if custom_prompt_str:
             return f"{custom_prompt_str}\n\n---\n\n{base_prompt}"
