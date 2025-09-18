@@ -394,6 +394,20 @@ async def dispatch(
     config: Config = None
     ) -> np.ndarray:
 
+    # 强制启用调试日志显示
+    import logging
+    logger.setLevel(logging.DEBUG)
+    for handler in logger.handlers:
+        handler.setLevel(logging.DEBUG)
+    # 同时设置根logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    for handler in root_logger.handlers:
+        handler.setLevel(logging.DEBUG)
+
+    logger.debug(f"[渲染入口调试] 强制设置日志级别为DEBUG")
+    logger.debug(f"[渲染入口调试] logger级别: {logger.level}, 根logger级别: {root_logger.level}")
+
     if config is None:
         from ..config import Config
         config = Config()

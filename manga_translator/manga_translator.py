@@ -1805,16 +1805,33 @@ class MangaTranslator:
     async def _run_text_rendering(self, config: Config, ctx: Context):
         current_time = time.time()
         self._model_usage_timestamps[("rendering", config.render.renderer)] = current_time
-        if config.render.renderer == Renderer.none:
-            output = ctx.img_inpainted
-        # manga2eng currently only supports horizontal left to right rendering
-        elif (config.render.renderer == Renderer.manga2Eng or config.render.renderer == Renderer.manga2EngPillow) and ctx.text_regions and LANGUAGE_ORIENTATION_PRESETS.get(ctx.text_regions[0].target_lang) == 'h':
-            if config.render.renderer == Renderer.manga2EngPillow:
-                output = await dispatch_eng_render_pillow(ctx.img_inpainted, ctx.img_rgb, ctx.text_regions, self.font_path, config.render.line_spacing)
+
+        # 临时设置渲染模块的日志级别为DEBUG以显示排版调试信息
+        render_logger = logging.getLogger('manga-translator.render')
+        original_level = render_logger.level
+        render_logger.setLevel(logging.DEBUG)
+        logger.info(f"[高质量翻译调试] 临时设置渲染日志级别为DEBUG，原级别: {original_level}")
+
+        try:
+            if config.render.renderer == Renderer.none:
+                output = ctx.img_inpainted
+            # manga2eng currently only supports horizontal left to right rendering
+            elif (config.render.renderer == Renderer.manga2Eng or config.render.renderer == Renderer.manga2EngPillow) and ctx.text_regions and LANGUAGE_ORIENTATION_PRESETS.get(ctx.text_regions[0].target_lang) == 'h':
+                if config.render.renderer == Renderer.manga2EngPillow:
+                    output = await dispatch_eng_render_pillow(ctx.img_inpainted, ctx.img_rgb, ctx.text_regions, self.font_path, config.render.line_spacing)
+                else:
+                    output = await dispatch_eng_render(ctx.img_inpainted, ctx.img_rgb, ctx.text_regions, self.font_path, config.render.line_spacing)
             else:
-                output = await dispatch_eng_render(ctx.img_inpainted, ctx.img_rgb, ctx.text_regions, self.font_path, config.render.line_spacing)
-        else:
-            output = await dispatch_rendering(ctx.img_inpainted, ctx.text_regions, self.font_path, config)
+                logger.info(f"[高质量翻译调试] 调用主要渲染流程，配置的渲染器: {config.render.renderer}")
+                logger.info(f"[高质量翻译调试] 排版模式: {config.render.layout_mode}")
+                logger.info(f"[高质量翻译调试] 文本区域数量: {len(ctx.text_regions)}")
+                output = await dispatch_rendering(ctx.img_inpainted, ctx.text_regions, self.font_path, config)
+                logger.info(f"[高质量翻译调试] 渲染完成")
+        finally:
+            # 恢复原始日志级别
+            render_logger.setLevel(original_level)
+            logger.info(f"[高质量翻译调试] 恢复渲染日志级别为: {original_level}")
+
         return output
 
     def _result_path(self, path: str) -> str:
