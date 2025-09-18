@@ -1464,15 +1464,15 @@ class MangaTranslator:
                 return await translator._translate(ctx.from_lang, config.translator.target_lang, texts, ctx)
             else:
                 return await translator._translate(ctx.from_lang, config.translator.target_lang, texts)
-
-                return await dispatch_translation(
-                    config.translator.translator_gen,
-                    texts,
-                    config,
-                    self.use_mtpe,
-                    ctx,
-                    'cpu' if self._gpu_limited_memory else self.device
-                )
+        else:
+            return await dispatch_translation(
+                config.translator.translator_gen,
+                texts,
+                config,
+                self.use_mtpe,
+                ctx,
+                'cpu' if self._gpu_limited_memory else self.device
+            )
         
     async def _load_and_prepare_prompts(self, config: Config, ctx: Context):
         """Loads custom HQ and line break prompts into the context object."""
@@ -1938,186 +1938,100 @@ class MangaTranslator:
             return results
         
         logger.debug(f'Starting batch translation: {len(images_with_configs)} images, batch size: {batch_size}')
-        
-        # 简化的内存检查
-        memory_optimization_enabled = not self.disable_memory_optimization
-        if not memory_optimization_enabled:
-            logger.debug('Memory optimization disabled for batch translation')
-        
         results = []
-        
-        # 处理所有图片到翻译之前的步骤
-        logger.debug('Starting pre-processing phase...')
-        pre_translation_contexts = []
-        
-        for i, (image, config) in enumerate(images_with_configs):
-            logger.debug(f'Pre-processing image {i+1}/{len(images_with_configs)}')
+        total_images = len(images_with_configs)
+
+        for batch_start in range(0, total_images, batch_size):
+            batch_end = min(batch_start + batch_size, total_images)
+            current_batch_images = images_with_configs[batch_start:batch_end]
             
-            # 简化的内存检查
-            if memory_optimization_enabled:
+            logger.info(f"Processing rolling batch {batch_start//batch_size + 1}/{(total_images + batch_size - 1)//batch_size} (images {batch_start+1}-{batch_end})")
+
+            # 阶段一：预处理当前批次
+            preprocessed_contexts = []
+            for i, (image, config) in enumerate(current_batch_images):
                 try:
-                    import psutil
-                    memory_percent = psutil.virtual_memory().percent
-                    if memory_percent > 85:
-                        logger.warning(f'High memory usage during pre-processing: {memory_percent:.1f}%')
-                        import gc
-                        gc.collect()
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                except ImportError:
-                    pass  # psutil 不可用时忽略
+                    self._set_image_context(config, image)
+                    ctx = await self._translate_until_translation(image, config)
+                    if hasattr(image, 'name'):
+                        ctx.image_name = image.name
+                    preprocessed_contexts.append((ctx, config))
                 except Exception as e:
-                    logger.debug(f'Memory check failed: {e}')
-                
-            try:
-                # 为批量处理中的每张图片设置上下文
-                self._set_image_context(config, image)
-                # 保存图片上下文，确保后处理阶段使用相同的文件夹
-                if self._current_image_context:
-                    image_md5 = self._current_image_context['file_md5']
-                    self._save_current_image_context(image_md5)
-                ctx = await self._translate_until_translation(image, config)
-                # 保存图片上下文到Context对象中，用于后续批量处理
-                if self._current_image_context:
-                    ctx.image_context = self._current_image_context.copy()
-                # 保存verbose标志到Context对象中
-                ctx.verbose = self.verbose
-                pre_translation_contexts.append((ctx, config))
-                logger.debug(f'Image {i+1} pre-processing successful')
-            except MemoryError as e:
-                logger.error(f'Memory error in pre-processing image {i+1}: {e}')
-                if not memory_optimization_enabled:
-                    logger.error('Consider enabling memory optimization')
-                    raise
-                    
-                # 尝试降级处理
-                try:
-                    logger.warning(f'Image {i+1} attempting fallback processing...')
-                    import copy
-                    recovery_config = copy.deepcopy(config)
-                    
-                    # 强制清理
-                    import gc
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    
-                    # 重新设置图片上下文
-                    self._set_image_context(recovery_config, image)
-                    # 保存fallback图片上下文
-                    if self._current_image_context:
-                        image_md5 = self._current_image_context['file_md5']
-                        self._save_current_image_context(image_md5)
-                    ctx = await self._translate_until_translation(image, recovery_config)
-                    # 保存图片上下文到Context对象中
-                    if self._current_image_context:
-                        ctx.image_context = self._current_image_context.copy()
-                    # 保存verbose标志到Context对象中
-                    ctx.verbose = self.verbose
-                    pre_translation_contexts.append((ctx, recovery_config))
-                    logger.info(f'Image {i+1} fallback processing successful')
-                except Exception as retry_error:
-                    logger.error(f'Image {i+1} fallback processing also failed: {retry_error}')
-                    # 创建空context作为占位符
+                    logger.error(f"Error pre-processing image {i+1} in batch: {e}")
                     ctx = Context()
                     ctx.input = image
-                    ctx.text_regions = []  # 确保text_regions被初始化为空列表
-                    pre_translation_contexts.append((ctx, config))
-            except Exception as e:
-                logger.error(f'Image {i+1} pre-processing error: {e}')
-                # 创建空context作为占位符
-                ctx = Context()
-                ctx.input = image
-                ctx.text_regions = []  # 确保text_regions被初始化为空列表
-                pre_translation_contexts.append((ctx, config))
-        
-        if not pre_translation_contexts:
-            logger.warning('No images pre-processed successfully')
-            return results
-            
-        logger.debug(f'Pre-processing completed: {len(pre_translation_contexts)} images')
-            
-        # 批量翻译处理
-        logger.debug('Starting batch translation phase...')
-        try:
-            if self.batch_concurrent:
-                logger.info(f'Using concurrent mode for batch translation')
-                translated_contexts = await self._concurrent_translate_contexts(pre_translation_contexts)
-            else:
-                logger.debug(f'Using standard batch mode for translation')
-                translated_contexts = await self._batch_translate_contexts(pre_translation_contexts, batch_size)
-        except MemoryError as e:
-            logger.error(f'Memory error in batch translation: {e}')
-            if not memory_optimization_enabled:
-                logger.error('Consider enabling memory optimization')
-                raise
-                
-            logger.warning('Batch translation failed, switching to individual page translation mode...')
-            # 降级到每页逐个翻译
-            translated_contexts = []
-            for ctx, config in pre_translation_contexts:
-                try:
-                    if ctx.text_regions:  # 检查text_regions是否不为None且不为空
-                        # 对整页进行翻译处理
-                        translated_texts = await self._batch_translate_texts([region.text for region in ctx.text_regions], config, ctx)
-                        
-                        # 将翻译结果应用到各个region
-                        for region, translation in zip(ctx.text_regions, translated_texts):
-                            region.translation = translation
-                            region.target_lang = config.translator.target_lang
-                            region._alignment = config.render.alignment
-                            region._direction = config.render.direction
-                    translated_contexts.append((ctx, config))
-                    
-                    # 每页翻译后都清理内存
-                    import gc
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                        
-                except Exception as individual_error:
-                    logger.error(f'Individual page translation failed: {individual_error}')
-                    translated_contexts.append((ctx, config))
-        
-        # 完成翻译后的处理
-        logger.debug('Starting post-processing phase...')
-        for i, (ctx, config) in enumerate(translated_contexts):
+                    ctx.text_regions = []
+                    if hasattr(image, 'name'):
+                        ctx.image_name = image.name
+                    preprocessed_contexts.append((ctx, config))
+
+            # 阶段二：翻译当前批次
             try:
-                if ctx.text_regions:
-                    # 恢复预处理阶段保存的图片上下文，确保使用相同的文件夹
-                    # 通过图片计算MD5来恢复上下文
-                    from .utils.generic import get_image_md5
-                    image = ctx.input  # 从context中获取原始图片
-                    image_md5 = get_image_md5(image)
-                    if not self._restore_image_context(image_md5):
-                        # 如果恢复失败，作为fallback重新设置（理论上不应该发生）
-                        logger.warning(f"Failed to restore image context for MD5 {image_md5}, creating new context")
-                        self._set_image_context(config, image)
-                    ctx = await self._complete_translation_pipeline(ctx, config)
-                results.append(ctx)
-                logger.debug(f'Image {i+1} post-processing completed')
+                translated_contexts = await self._batch_translate_contexts(preprocessed_contexts, batch_size)
             except Exception as e:
-                logger.error(f'Image {i+1} post-processing error: {e}')
-                results.append(ctx)
-        
-        logger.info(f'Batch translation completed: processed {len(results)} images')
+                logger.error(f"Error during batch translation stage: {e}")
+                translated_contexts = preprocessed_contexts
 
-        # 批处理完成后，保存所有页面的最终翻译结果
-        for ctx in results:
-            if ctx.text_regions:
-                # 汇总本页翻译，供下一页做上文
-                page_translations = {r.text_raw if hasattr(r, "text_raw") else r.text: r.translation
-                                     for r in ctx.text_regions}
-                self.all_page_translations.append(page_translations)
+            # 阶段三：渲染并保存当前批次
+            for ctx, config in translated_contexts:
+                try:
+                    if hasattr(ctx, 'input'):
+                        from .utils.generic import get_image_md5
+                        image_md5 = get_image_md5(ctx.input)
+                        if not self._restore_image_context(image_md5):
+                            self._set_image_context(config, ctx.input)
+                    
+                    ctx = await self._complete_translation_pipeline(ctx, config)
 
-                # 同时保存原文用于并发模式的上下文
-                page_original_texts = {i: (r.text_raw if hasattr(r, "text_raw") else r.text)
-                                      for i, r in enumerate(ctx.text_regions)}
-                self._original_page_texts.append(page_original_texts)
+                    if save_info and ctx.result:
+                        try:
+                            output_folder = save_info.get('output_folder')
+                            input_folders = save_info.get('input_folders', set())
+                            output_format = save_info.get('format')
+                            overwrite = save_info.get('overwrite', True)
 
-        # 清理批量处理的图片上下文缓存
-        self._saved_image_contexts.clear()
-        
+                            file_path = ctx.image_name
+                            final_output_dir = output_folder
+                            parent_dir = os.path.normpath(os.path.dirname(file_path))
+                            for folder in input_folders:
+                                if parent_dir.startswith(folder):
+                                    relative_path = os.path.relpath(parent_dir, folder)
+                                    final_output_dir = os.path.join(output_folder, os.path.basename(folder), relative_path)
+                                    break
+                            
+                            os.makedirs(final_output_dir, exist_ok=True)
+
+                            base_filename, _ = os.path.splitext(os.path.basename(file_path))
+                            if output_format and output_format.strip() and output_format.lower() != 'none':
+                                output_filename = f"{base_filename}.{output_format}"
+                            else:
+                                output_filename = os.path.basename(file_path)
+                            
+                            final_output_path = os.path.join(final_output_dir, output_filename)
+
+                            if not overwrite and os.path.exists(final_output_path):
+                                logger.info(f"  -> ⚠️ [BATCH] Skipping existing file: {os.path.basename(final_output_path)}")
+                            else:
+                                image_to_save = ctx.result
+                                if final_output_path.lower().endswith(('.jpg', '.jpeg')) and image_to_save.mode in ('RGBA', 'LA'):
+                                    image_to_save = image_to_save.convert('RGB')
+                                
+                                image_to_save.save(final_output_path, quality=self.save_quality)
+                                logger.info(f"  -> ✅ [BATCH] Saved successfully: {os.path.basename(final_output_path)}")
+                                self._update_translation_map(file_path, final_output_path)
+
+                        except Exception as save_err:
+                            logger.error(f"Error saving standard batch result for {os.path.basename(ctx.image_name)}: {save_err}")
+
+                    if ctx.text_regions and hasattr(ctx, 'image_name') and ctx.image_name:
+                        self._save_text_to_file(ctx.image_name, ctx)
+
+                    results.append(ctx)
+                except Exception as e:
+                    logger.error(f"Error rendering image in batch: {e}")
+                    results.append(ctx)
+
+        logger.info(f"Batch translation completed: processed {len(results)} images")
         return results
 
     async def _translate_until_translation(self, image: Image.Image, config: Config) -> Context:
@@ -3264,6 +3178,33 @@ class MangaTranslator:
         
         return region.translation
 
+    def _update_translation_map(self, source_path: str, translated_path: str):
+        """在输出目录创建或更新 translation_map.json"""
+        try:
+            output_dir = os.path.dirname(translated_path)
+            map_path = os.path.join(output_dir, 'translation_map.json')
+            
+            # 规范化路径以确保一致性
+            source_path_norm = os.path.normpath(source_path)
+            translated_path_norm = os.path.normpath(translated_path)
+
+            translation_map = {}
+            if os.path.exists(map_path):
+                with open(map_path, 'r', encoding='utf-8') as f:
+                    try:
+                        translation_map = json.load(f)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Could not decode {map_path}, creating a new one.")
+            
+            # 使用翻译后的路径作为键，确保唯一性
+            translation_map[translated_path_norm] = source_path_norm
+            
+            with open(map_path, 'w', encoding='utf-8') as f:
+                json.dump(translation_map, f, ensure_ascii=False, indent=4)
+
+        except Exception as e:
+            logger.error(f"Failed to update translation map: {e}")
+
     async def _translate_batch_high_quality(self, images_with_configs: List[tuple], save_info: dict = None) -> List[Context]:
         """
         高质量翻译模式：按批次滚动处理，每批独立完成预处理、翻译、渲染全流程。
@@ -3393,6 +3334,8 @@ class MangaTranslator:
                                 
                                 image_to_save.save(final_output_path, quality=self.save_quality)
                                 logger.info(f"  -> ✅ [HQ] Saved successfully: {os.path.basename(final_output_path)}")
+                                # 更新翻译映射文件
+                                self._update_translation_map(file_path, final_output_path)
 
                         except Exception as save_err:
                             logger.error(f"Error saving high-quality result for {os.path.basename(ctx.image_name)}: {save_err}")

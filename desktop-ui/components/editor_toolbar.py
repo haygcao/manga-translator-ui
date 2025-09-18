@@ -117,7 +117,7 @@ class EditorToolbar(ctk.CTkFrame):
         
         self.display_menu = ctk.CTkOptionMenu(
             self.display_frame,
-            values=["文字文本框显示", "只显示文字", "只显示框线", "都不显示", "蒙版视图"],
+            values=["文字文本框显示", "只显示文字", "只显示框线", "都不显示"],
             width=120,
             command=self._on_display_option_changed
         )

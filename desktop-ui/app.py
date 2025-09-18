@@ -1402,7 +1402,11 @@ class AppController:
             self.update_log(f"Failed to launch updater: {e}")
 
     def add_files(self):
-        files = filedialog.askopenfilenames(parent=self.app)
+        filetypes = [
+            ("Image Files", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"),
+            ("All files", "*.*")
+        ]
+        files = filedialog.askopenfilenames(parent=self.app, filetypes=filetypes)
         for f in files:
             self.input_files.append(f)
         self.update_file_list_display()

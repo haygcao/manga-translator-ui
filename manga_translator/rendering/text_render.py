@@ -476,18 +476,7 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
 
 def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tuple[int, int, int], bg: Optional[Tuple[int, int, int]], line_spacing: int, config=None):
 
-    # Conditionally apply horizontal tagging based on the global switch
-    auto_rotate = False
-    if config:
-        # Handle dict from editor UI
-        if isinstance(config, dict):
-            auto_rotate = config.get('auto_rotate_symbols', False)
-        # Handle Pydantic object from main pipeline
-        else:
-            auto_rotate = getattr(getattr(config, 'render', object()), 'auto_rotate_symbols', False)
 
-    if auto_rotate:
-        text = auto_add_horizontal_tags(text)
 
     text = compact_special_symbols(text)
     if not text:

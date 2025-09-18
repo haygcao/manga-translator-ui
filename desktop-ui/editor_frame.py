@@ -60,6 +60,7 @@ class EditorFrame(ctk.CTkFrame):
         self.mask_brush_size: int = 20
         self.mask_edit_start_state: Optional[np.ndarray] = None
         self.is_mask_edit_expanded: bool = True
+        self.export_target_path: Optional[str] = None
         
         self.history_manager = EditorStateManager()
         self.transform_service = TransformService()
@@ -79,6 +80,42 @@ class EditorFrame(ctk.CTkFrame):
 
         self.config_service.reload_from_disk()
 
+    def _find_file_pair(self, file_path: str) -> (str, Optional[str]):
+        """Given a file path, find its source/translated pair using translation_map.json."""
+        norm_path = os.path.normpath(file_path)
+        
+        # Case 1: The given file is a translated file (a key in a map)
+        try:
+            output_dir = os.path.dirname(norm_path)
+            map_path = os.path.join(output_dir, 'translation_map.json')
+            if os.path.exists(map_path):
+                with open(map_path, 'r', encoding='utf-8') as f:
+                    t_map = json.load(f)
+                if norm_path in t_map:
+                    source = t_map[norm_path]
+                    if os.path.exists(source):
+                        return source, file_path
+        except Exception: pass
+        
+        # Case 2: The given file is a source file (a value in a map)
+        try:
+            # This is inefficient, but necessary as the source file doesn't know its output dir.
+            # We check against already known translated files.
+            for trans_file in self.translated_files:
+                if not trans_file: continue
+                norm_trans = os.path.normpath(trans_file)
+                output_dir = os.path.dirname(norm_trans)
+                map_path = os.path.join(output_dir, 'translation_map.json')
+                if os.path.exists(map_path):
+                    with open(map_path, 'r', encoding='utf-8') as f:
+                        t_map = json.load(f)
+                    if t_map.get(norm_trans) == norm_path:
+                        return file_path, trans_file
+        except Exception: pass
+
+        # Case 3: No pair found, it's a source file with no known translation.
+        return file_path, None
+
     def _build_ui(self):
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -91,49 +128,7 @@ class EditorFrame(ctk.CTkFrame):
         self.property_panel = PropertyPanel(self, shortcut_manager=self.shortcut_manager)
         self.property_panel.grid(row=1, column=0, sticky="ns", padx=(2,1), pady=2)
 
-        self.mask_edit_collapsible_frame = CollapsibleFrame(self.property_panel, title="蒙版编辑", start_expanded=True)
-        self.mask_edit_collapsible_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
-        self.mask_edit_collapsible_frame.grid_remove() # Hide by default
-        content_frame = self.mask_edit_collapsible_frame.content_frame
-        content_frame.grid_columnconfigure(0, weight=1)
-        self.mask_tool_menu = ctk.CTkOptionMenu(content_frame, values=["不选择", "画笔", "橡皮擦"], command=self._on_mask_tool_changed)
-        self.mask_tool_menu.grid(row=0, column=0, pady=5, padx=5, sticky="ew")
-        ctk.CTkLabel(content_frame, text="笔刷大小:").grid(row=1, column=0, pady=5, padx=5, sticky="w")
-        self.brush_size_slider = ctk.CTkSlider(content_frame, from_=1, to=100, command=self._on_brush_size_changed)
-        self.brush_size_slider.set(20)
-        self.brush_size_slider.grid(row=2, column=0, pady=5, padx=5, sticky="ew")
-        self.show_mask_checkbox = ctk.CTkCheckBox(content_frame, text="显示蒙版", command=lambda: self._on_toggle_mask_visibility(self.show_mask_checkbox.get()))
-        self.show_mask_checkbox.select()
-        self.show_mask_checkbox.grid(row=3, column=0, pady=5, padx=5, sticky="w")
-        
-        # 新增：蒙版优化参数
-        ctk.CTkLabel(content_frame, text="扩张偏移:").grid(row=4, column=0, pady=(10, 2), padx=5, sticky="w")
-        self.mask_dilation_offset_entry = ctk.CTkEntry(content_frame, placeholder_text="0")
-        self.mask_dilation_offset_entry.grid(row=5, column=0, pady=2, padx=5, sticky="ew")
-        self.mask_dilation_offset_entry.bind("<FocusOut>", self._on_mask_setting_changed)
 
-        ctk.CTkLabel(content_frame, text="内核大小:").grid(row=6, column=0, pady=(10, 2), padx=5, sticky="w")
-        self.mask_kernel_size_entry = ctk.CTkEntry(content_frame, placeholder_text="3")
-        self.mask_kernel_size_entry.grid(row=7, column=0, pady=2, padx=5, sticky="ew")
-        self.mask_kernel_size_entry.bind("<FocusOut>", self._on_mask_setting_changed)
-
-        self.ignore_bubble_checkbox = ctk.CTkCheckBox(content_frame, text="忽略气泡", command=self._on_mask_setting_changed)
-        self.ignore_bubble_checkbox.grid(row=8, column=0, pady=10, padx=5, sticky="w")
-
-        # 添加蒙版更新按钮
-        self.update_mask_button = ctk.CTkButton(
-            content_frame, 
-            text="更新蒙版", 
-            command=self._update_mask_with_config,
-            height=28
-        )
-        self.update_mask_button.grid(row=9, column=0, pady=5, padx=5, sticky="ew")
-        
-        # 添加显示被优化掉区域的选项
-        self.show_removed_checkbox = ctk.CTkCheckBox(content_frame, text="显示被优化掉的区域", command=lambda: self._on_toggle_removed_mask_visibility(self.show_removed_checkbox.get()))
-        # 默认不显示被优化掉的区域
-        self.show_removed_checkbox.deselect()
-        self.show_removed_checkbox.grid(row=10, column=0, pady=5, padx=5, sticky="w")
 
         self.canvas_frame = CanvasFrame(self, self.transform_service, 
                                         on_region_selected=self._on_region_selected, 
@@ -202,6 +197,14 @@ class EditorFrame(ctk.CTkFrame):
         self.property_panel.register_callback('ocr_model_changed', self._on_ocr_model_changed)
         self.property_panel.register_callback('translator_changed', self._on_translator_changed)
         self.property_panel.register_callback('target_language_changed', self._on_target_language_changed)
+
+        # Property Panel Mask Editor Callbacks
+        self.property_panel.register_callback('mask_tool_changed', self._on_mask_tool_changed)
+        self.property_panel.register_callback('brush_size_changed', self._on_brush_size_changed)
+        self.property_panel.register_callback('toggle_mask_visibility', self._on_toggle_mask_visibility)
+        self.property_panel.register_callback('mask_setting_changed', self._on_mask_setting_changed)
+        self.property_panel.register_callback('update_mask_with_config', self._update_mask_with_config)
+        self.property_panel.register_callback('toggle_removed_mask_visibility', self._on_toggle_removed_mask_visibility)
 
 
 
@@ -372,11 +375,12 @@ class EditorFrame(ctk.CTkFrame):
         regions, raw_mask, original_size = self.file_manager.load_json_data(image_path)
         
         # 检查是否是作为源文件加载，并且找到了JSON
-        if image_path in self.source_files and regions:
+        if regions:
             # 这是为编辑而加载的原始图像
             self.regions_data = regions
             self.raw_mask = raw_mask
             self.original_size = original_size
+            self.property_panel.show_mask_editor()
             
             show_toast(self, "检测到JSON，自动修复背景...", level="info")
             # 自动触发蒙版和修复渲染
@@ -391,7 +395,23 @@ class EditorFrame(ctk.CTkFrame):
             self.regions_data = []
             self.raw_mask = None
             self.original_size = image.size
-            if not regions and image_path in self.source_files:
+            self.property_panel.hide_mask_editor()
+
+            # 检查是否在translation_map中存在对应关系
+            has_translation_mapping = False
+            try:
+                output_dir = os.path.dirname(image_path)
+                map_path = os.path.join(output_dir, 'translation_map.json')
+                if os.path.exists(map_path):
+                    with open(map_path, 'r', encoding='utf-8') as f:
+                        translation_map = json.load(f)
+                    has_translation_mapping = os.path.normpath(image_path) in translation_map
+            except:
+                pass
+
+            # 仅当文件在source_files列表中但未找到JSON时才显示提示
+            # 如果在地图中有对应关系，说明是翻译图，不显示提示
+            if image_path in self.source_files and not has_translation_mapping:
                  show_toast(self, "未找到JSON翻译数据，请返回主界面翻译或手动编辑", level="info")
 
         # Set default font for regions that don't have one
@@ -423,6 +443,19 @@ class EditorFrame(ctk.CTkFrame):
 
     def _on_file_selected_from_list(self, file_path: str):
         self.file_manager.load_image_from_path(file_path)
+
+        # 检查翻译映射
+        output_dir = os.path.dirname(file_path)
+        map_path = os.path.join(output_dir, 'translation_map.json')
+        if os.path.exists(map_path):
+            with open(map_path, 'r', encoding='utf-8') as f:
+                try:
+                    translation_map = json.load(f)
+                    source_file = translation_map.get(os.path.normpath(file_path))
+                    if source_file:
+                        self.set_file_lists([source_file], [file_path])
+                except json.JSONDecodeError:
+                    pass # Ignore if map is corrupted
     
     def _generate_mask_for_new_file(self):
         """为新文件生成蒙版（在蒙版视图切换文件时使用）"""
@@ -453,47 +486,65 @@ class EditorFrame(ctk.CTkFrame):
             return True
 
     def set_file_lists(self, source_files: List[str], translated_files: List[str]):
-        """Adds new source and translated files to the editor's lists, preventing duplicates."""
-        newly_added_for_ui = []
-        # Using a copy of source_files to check for existence, as we modify it in the loop
-        current_source_files = self.source_files.copy()
+        """
+        Adds new source and translated files to the editor's lists using the unified logic.
+        It processes the translated files first as they are the primary items of interest.
+        """
+        # We process the translated files first, then sources. 
+        # The robust `_add_files_to_list` will handle duplicates and find pairs correctly.
+        files_to_process = [f for f in translated_files if f] + [f for f in source_files if f]
+        self._add_files_to_list(files_to_process)
 
-        for i, src in enumerate(source_files):
-            if src not in current_source_files:
-                self.source_files.append(src)
-                if i < len(translated_files):
-                    # This assumes parallel lists, which is how app.py constructs them.
-                    trans = translated_files[i]
-                    self.translated_files.append(trans)
-                    newly_added_for_ui.append(trans)
-
-        if newly_added_for_ui:
-            self.file_list_frame.add_files(newly_added_for_ui)
+    def load_first_file(self):
+        """Selects and loads the first file in the file list."""
+        if self.file_list_frame.get_file_count() > 0:
+            first_file_path = self.file_list_frame.get_path_at_index(0)
+            if first_file_path:
+                print(f"--- EDITOR DEBUG: Auto-loading first file: {first_file_path} ---")
+                # Select the item in the listbox
+                self.file_list_frame.select_file_at_index(0)
+                # Trigger the loading mechanism
+                self._on_file_selected_from_list(first_file_path)
 
     def _on_edit_clicked(self):
         """
-        When viewing a translated image, this switches to editing the original file.
+        当查看翻译图时，此方法会查找并切换到其原始文件进行编辑。
         """
         current_file = self.file_manager.current_file_path
-        if not current_file or current_file not in self.translated_files:
-            show_toast(self, "请先从右侧列表选择一个翻译后的图片", level="warning")
+        if not current_file:
+            show_toast(self, "当前没有加载任何文件", level="warning")
             return
 
-        try:
-            idx = self.translated_files.index(current_file)
-            source_file_to_load = self.source_files[idx]
-            
-            show_toast(self, f"正在加载原图 {os.path.basename(source_file_to_load)} 进行编辑...", level="info")
-            
-            # This will trigger the full loading process including JSON
-            self.file_manager.load_image_from_path(source_file_to_load)
-            
-            # Automatically run mask generation and inpainting as requested
-            self.after(500, lambda: self.async_service.submit_task(self._generate_refined_mask_then_render()))
+        # 如果已经有regions数据，说明已经是编辑模式
+        if self.regions_data:
+            show_toast(self, "已经是编辑模式。", level="info")
+            return
 
-        except (ValueError, IndexError):
-            show_toast(self, "无法找到对应的原始文件", level="error")
-            print(f"Error finding source for {current_file}. Index not found or out of bounds.")
+        # 从translation_map.json中查找源文件
+        source_file = None
+        try:
+            # 假设地图在翻译文件的同级目录
+            output_dir = os.path.dirname(current_file)
+            map_path = os.path.join(output_dir, 'translation_map.json')
+            
+            if os.path.exists(map_path):
+                with open(map_path, 'r', encoding='utf-8') as f:
+                    translation_map = json.load(f)
+                # 使用规范化路径进行查找
+                source_file = translation_map.get(os.path.normpath(current_file))
+        except Exception as e:
+            show_toast(self, f"查找翻译地图时出错: {e}", level="error")
+            return
+
+        if source_file and os.path.exists(source_file):
+            # 关键步骤：在加载前，先更新内部文件列表状态
+            self.set_file_lists([source_file], [current_file])
+
+            show_toast(self, f"正在加载原图 {os.path.basename(source_file)} 进行编辑...", level="info")
+            # 加载原图，这将触发_on_image_loaded并加载JSON
+            self.file_manager.load_image_from_path(source_file)
+        else:
+            show_toast(self, "在翻译地图中未找到对应的源文件。", level="warning")
 
     def _on_file_unload(self, file_path: str):
         """处理文件卸载请求"""
@@ -528,35 +579,181 @@ class EditorFrame(ctk.CTkFrame):
     def perform_unload(self, file_path: str):
         """Helper function to actually perform the unload operation."""
         try:
+            print(f"\n=== UNLOAD DEBUG START ===")
+            print(f"要卸载的文件: {file_path}")
+            print(f"当前显示文件: {getattr(self.file_manager, 'current_file_path', None)}")
+            print(f"source_files: {self.source_files}")
+            print(f"translated_files: {self.translated_files}")
+
             is_translated = file_path in self.translated_files
             is_source = file_path in self.source_files
 
-            # Remove from UI list
-            self.file_list_frame.remove_file(file_path)
+            print(f"is_translated: {is_translated}, is_source: {is_source}")
 
+            # 保存当前状态
+            current_file = getattr(self.file_manager, 'current_file_path', None)
+
+            # 检查是否需要清空编辑器（在删除之前检查）
+            should_clear_editor = False
+
+            # 标准化路径以进行比较
+            normalized_file_path = os.path.normpath(file_path)
+            normalized_current_file = os.path.normpath(current_file) if current_file else None
+
+            # 情况1：直接卸载当前显示的文件
+            if normalized_current_file and normalized_current_file == normalized_file_path:
+                should_clear_editor = True
+                print(f"情况1: 直接卸载当前显示的文件")
+
+            # 情况2：卸载翻译图，但当前显示的是对应的源图（编辑模式）
+            elif is_translated and normalized_current_file:
+                print(f"检查情况2: 卸载翻译图，当前显示文件是否为对应源图")
+                try:
+                    corresponding_source = None
+                    output_dir = os.path.dirname(file_path)
+                    map_path = os.path.join(output_dir, 'translation_map.json')
+                    if os.path.exists(map_path):
+                        with open(map_path, 'r', encoding='utf-8') as f:
+                            translation_map = json.load(f)
+                        # Use normpath for lookup to match the key format
+                        corresponding_source = translation_map.get(os.path.normpath(file_path))
+
+                    if corresponding_source:
+                        normalized_corresponding_source = os.path.normpath(corresponding_source)
+                        print(f"对应的源图 (来自地图): {corresponding_source}")
+                        print(f"标准化后比较: {normalized_current_file} vs {normalized_corresponding_source}")
+                        if normalized_current_file == normalized_corresponding_source:
+                            should_clear_editor = True
+                            print(f"匹配! 检测到卸载翻译图 {os.path.basename(file_path)}，当前编辑的源图 {os.path.basename(current_file)} 对应此翻译图，将清空编辑器")
+                        else:
+                            print(f"不匹配: 当前文件 {normalized_current_file} != 对应源图 {normalized_corresponding_source}")
+                    else:
+                        print(f"在 translation_map.json 中未找到 {file_path} 的源图")
+                except Exception as e:
+                    print(f"查找翻译地图时出错: {e}")
+                    pass
+
+            # 情况3：卸载源图，但当前显示的是对应的翻译图
+            elif is_source and normalized_current_file:
+                print(f"检查情况3: 卸载源图，当前显示文件是否为对应翻译图")
+                try:
+                    source_idx = self.source_files.index(file_path)
+                    print(f"源图索引: {source_idx}")
+                    if source_idx < len(self.translated_files):
+                        corresponding_trans = self.translated_files[source_idx]
+                        normalized_corresponding_trans = os.path.normpath(corresponding_trans)
+                        print(f"对应的翻译图: {corresponding_trans}")
+                        print(f"标准化后比较: {normalized_current_file} vs {normalized_corresponding_trans}")
+                        if normalized_current_file == normalized_corresponding_trans:
+                            should_clear_editor = True
+                            print(f"匹配! 需要清空编辑器")
+                        else:
+                            print(f"不匹配: 当前文件 {normalized_current_file} != 对应翻译图 {normalized_corresponding_trans}")
+                    else:
+                        print(f"索引超出范围: {source_idx} >= {len(self.translated_files)}")
+                except (ValueError, IndexError) as e:
+                    print(f"异常: {e}")
+                    pass
+            else:
+                print(f"未匹配任何情况")
+
+            print(f"should_clear_editor: {should_clear_editor}")
+
+            # --- 执行卸载操作 ---
+            source_to_remove = None
+            translated_to_remove = None
+            norm_file_path = os.path.normpath(file_path)
+
+            # 确定要删除的完整文件对
             if is_translated:
-                idx = self.translated_files.index(file_path)
-                self.translated_files.pop(idx)
-                if idx < len(self.source_files):
-                    self.source_files.pop(idx)
+                translated_to_remove = file_path
+                try:
+                    output_dir = os.path.dirname(norm_file_path)
+                    map_path = os.path.join(output_dir, 'translation_map.json')
+                    if os.path.exists(map_path):
+                        with open(map_path, 'r', encoding='utf-8') as f:
+                            t_map = json.load(f)
+                        source_to_remove = t_map.get(norm_file_path)
+                except Exception:
+                    pass # 忽略地图读取错误
             elif is_source:
-                # This handles files added manually through the editor
-                self.source_files.remove(file_path)
+                source_to_remove = file_path
+                # 通过遍历查找对应的翻译文件
+                try:
+                    found = False
+                    for f in self.translated_files:
+                        output_dir = os.path.dirname(os.path.normpath(f))
+                        map_path = os.path.join(output_dir, 'translation_map.json')
+                        if os.path.exists(map_path):
+                            with open(map_path, 'r', encoding='utf-8') as f:
+                                t_map = json.load(f)
+                            for trans, src in t_map.items():
+                                if os.path.normpath(src) == norm_file_path:
+                                    translated_to_remove = trans
+                                    found = True
+                                    break
+                        if found: break
+                except Exception:
+                    pass
 
-            # If unloading the currently displayed file, clear the editor
-            if (hasattr(self.file_manager, 'current_file_path') and 
-                self.file_manager.current_file_path == file_path):
+            # 为提示消息收集将要被移除的文件
+            files_to_remove = []
+            if source_to_remove:
+                files_to_remove.append(source_to_remove)
+            if translated_to_remove:
+                files_to_remove.append(translated_to_remove)
+
+            # 从内部列表中精确移除（按值移除）
+            if translated_to_remove and translated_to_remove in self.translated_files:
+                self.translated_files.remove(translated_to_remove)
+                print(f"从translated_files中移除了: {translated_to_remove}")
+            
+            if source_to_remove and source_to_remove in self.source_files:
+                self.source_files.remove(source_to_remove)
+                print(f"从source_files中移除了: {source_to_remove}")
+
+            # 清理可能被污染的列表项
+            if translated_to_remove and translated_to_remove in self.source_files:
+                self.source_files.remove(translated_to_remove)
+                print(f"从source_files中清理了污染的翻译文件: {translated_to_remove}")
+            if source_to_remove and source_to_remove in self.translated_files:
+                self.translated_files.remove(source_to_remove)
+                print(f"从translated_files中清理了污染的源文件: {source_to_remove}")
+
+            # 从UI列表中移除 (file_path 是用户右键点击的文件)
+            self.file_list_frame.remove_file(file_path)
+            print(f"从UI列表中移除了: {file_path}")
+
+            # 如果需要清空编辑器
+            if should_clear_editor:
+                print(f"执行清空编辑器...")
                 self._clear_editor()
-                
-                # If there are other files, load the first one
+                print("已清空编辑器状态")
+
+                # 如果还有其他文件，加载第一个
                 if self.translated_files:
+                    print(f"加载下一个翻译图: {self.translated_files[0]}")
                     self._on_file_selected_from_list(self.translated_files[0])
                 elif self.source_files:
+                    print(f"加载下一个源图: {self.source_files[0]}")
                     self._on_file_selected_from_list(self.source_files[0])
-                    
-            show_toast(self, f"已卸载文件: {os.path.basename(file_path)}", level="success")
+                else:
+                    print("没有其他文件可加载")
+            else:
+                print("不需要清空编辑器")
+
+            file_names = [os.path.basename(f) for f in files_to_remove if f != file_path]
+            if file_names:
+                show_toast(self, f"已卸载文件: {os.path.basename(file_path)} 及关联文件: {', '.join(file_names)}", level="success")
+            else:
+                show_toast(self, f"已卸载文件: {os.path.basename(file_path)}", level="success")
+
+            print(f"=== UNLOAD DEBUG END ===\n")
+
         except Exception as e:
             print(f"Error in perform_unload: {e}")
+            import traceback
+            traceback.print_exc()
 
 
     async def _async_export_and_unload(self, output_path: str, file_to_unload: str):
@@ -620,15 +817,44 @@ class EditorFrame(ctk.CTkFrame):
             self._add_files_to_list(files)
 
     def _add_files_to_list(self, file_paths: List[str]):
-        # When adding files from within the editor, they are always treated as new source files.
-        # If we were in a "translated view" mode, this will break the parallel structure.
-        # For now, we just add to the source list and the UI list.
-        # The "Edit" button might fail for these new files, which is expected.
-        new_files = [fp for fp in file_paths if fp not in self.source_files]
-        self.source_files.extend(new_files)
-        self.file_list_frame.add_files(new_files)
-        if new_files and not self.image:
-            self._on_file_selected_from_list(new_files[0])
+        """
+        Rigorously finds file pairs and adds them to the internal lists and UI.
+        This is the new unified and cumulative file adding logic.
+        """
+        existing_sources_norm = [os.path.normpath(f) for f in self.source_files]
+        existing_trans_norm = [os.path.normpath(f) for f in self.translated_files if f]
+        
+        new_ui_files = []
+        files_added_to_internal_lists = False
+
+        for file_path in file_paths:
+            norm_path = os.path.normpath(file_path)
+            
+            # Skip if this exact path is already in either list
+            if norm_path in existing_sources_norm or norm_path in existing_trans_norm:
+                continue
+
+            source_to_add, translated_to_add = self._find_file_pair(file_path)
+
+            if source_to_add:
+                norm_src = os.path.normpath(source_to_add)
+                if norm_src not in existing_sources_norm:
+                    self.source_files.append(source_to_add)
+                    self.translated_files.append(translated_to_add) # Can be None
+                    existing_sources_norm.append(norm_src)
+                    if translated_to_add:
+                        existing_trans_norm.append(os.path.normpath(translated_to_add))
+
+                    file_for_ui = translated_to_add if translated_to_add else source_to_add
+                    new_ui_files.append(file_for_ui)
+                    files_added_to_internal_lists = True
+
+        if new_ui_files:
+            self.file_list_frame.add_files(new_ui_files)
+        
+        # If we added files and nothing is displayed yet, load the first new one
+        if files_added_to_internal_lists and not self.image and new_ui_files:
+            self._on_file_selected_from_list(new_ui_files[0])
 
     def _show_context_menu(self, event):
         self.last_mouse_event = event
@@ -751,16 +977,16 @@ class EditorFrame(ctk.CTkFrame):
             kernel = config.get('kernel_size', 3)
             ignore_bubble = config.get('ocr', {}).get('ignore_bubble', 0)  # ignore_bubble仍然在OCR中
             
-            self.mask_dilation_offset_entry.delete(0, "end")
-            self.mask_dilation_offset_entry.insert(0, str(dilation))
+            self.property_panel.widgets['mask_dilation_offset_entry'].delete(0, "end")
+            self.property_panel.widgets['mask_dilation_offset_entry'].insert(0, str(dilation))
             
-            self.mask_kernel_size_entry.delete(0, "end")
-            self.mask_kernel_size_entry.insert(0, str(kernel))
+            self.property_panel.widgets['mask_kernel_size_entry'].delete(0, "end")
+            self.property_panel.widgets['mask_kernel_size_entry'].insert(0, str(kernel))
             
             if ignore_bubble:
-                self.ignore_bubble_checkbox.select()
+                self.property_panel.widgets['ignore_bubble_checkbox'].select()
             else:
-                self.ignore_bubble_checkbox.deselect()
+                self.property_panel.widgets['ignore_bubble_checkbox'].deselect()
         except Exception as e:
             print(f"Error loading mask settings to UI: {e}")
 
@@ -770,12 +996,12 @@ class EditorFrame(ctk.CTkFrame):
             config = self.config_service.get_config()
             
             # 保存到顶级配置，而不是OCR配置
-            config['mask_dilation_offset'] = int(self.mask_dilation_offset_entry.get() or 20)
-            config['kernel_size'] = int(self.mask_kernel_size_entry.get() or 3)
+            config['mask_dilation_offset'] = int(self.property_panel.widgets['mask_dilation_offset_entry'].get() or 20)
+            config['kernel_size'] = int(self.property_panel.widgets['mask_kernel_size_entry'].get() or 3)
             
             # ignore_bubble 仍然保存在OCR配置中
             ocr_config = config.setdefault('ocr', {})
-            ocr_config['ignore_bubble'] = self.ignore_bubble_checkbox.get()
+            ocr_config['ignore_bubble'] = self.property_panel.widgets['ignore_bubble_checkbox'].get()
             
             self.config_service.set_config(config)
             self.config_service.save_config_file()
@@ -931,6 +1157,9 @@ class EditorFrame(ctk.CTkFrame):
             self.mask_edit_start_state = None
             self.canvas_frame.set_refined_mask(self.refined_mask)
             self._update_history_buttons()
+            # Trigger immediate inpainting preview
+            if self.refined_mask is not None:
+                self.async_service.submit_task(self._generate_inpainted_preview(mask_to_use=self.refined_mask.copy()))
 
     def _on_mask_draw_preview(self, points: List[Tuple[int, int]]):
         self.canvas_frame.draw_mask_preview(points, self.mask_brush_size, self.mask_edit_mode)
@@ -938,14 +1167,9 @@ class EditorFrame(ctk.CTkFrame):
     def _on_display_mode_changed(self, choice: str):
         # print(f"--- DEBUG: Entering _on_display_mode_changed with choice: {choice} ---")
         # When switching away from mask view, reset the tool selection.
-        if choice != "蒙版视图":
-            self.mask_edit_mode = "不选择"
-            # Update the visual state of the tool menu in the property panel
-            if 'mask_tool_menu' in self.property_panel.widgets:
-                self.property_panel.widgets['mask_tool_menu'].set("不选择")
-            self.canvas_frame.mouse_handler.set_mode('select')
+        self.mask_edit_mode = "不选择"
+        self.canvas_frame.mouse_handler.set_mode('select')
 
-        self.mask_edit_collapsible_frame.grid_remove()
         self.canvas_frame.set_view_mode('normal')
 
         if choice == "文字文本框显示":
@@ -960,16 +1184,6 @@ class EditorFrame(ctk.CTkFrame):
         elif choice == "都不显示":
             self.canvas_frame.set_text_visibility(False)
             self.canvas_frame.set_boxes_visibility(False)
-        elif choice == "蒙版视图":
-            self.view_mode = 'mask'
-            self.mask_edit_collapsible_frame.grid()
-            if self.refined_mask is None:
-                show_toast(self, "正在生成蒙版...", level="info")
-                self.toolbar.set_render_button_state("disabled")
-                self.async_service.submit_task(self._generate_refined_mask())
-            else:
-                self.canvas_frame.set_refined_mask(self.refined_mask)
-            self.canvas_frame.set_view_mode('mask')
 
     def _on_preview_alpha_changed(self, alpha_value):
         alpha_float = alpha_value / 100.0
@@ -977,7 +1191,7 @@ class EditorFrame(ctk.CTkFrame):
 
     def _render_inpainted_image(self):
         if self.inpainting_in_progress:
-            show_toast(self, "渲染已经在进行中...", "info")
+            show_toast(self, "渲染已经在进行中...", level="info")
             return
         
         # 如果没有蒙版，先生成蒙版
@@ -1545,7 +1759,7 @@ class EditorFrame(ctk.CTkFrame):
                 output_path = base_name + new_extension
                 file_name_for_prompt = os.path.basename(output_path)
 
-                self.logger.info(f"[EXPORT] Detected translated file. Target path: {output_path}")
+                print(f"[EXPORT] Detected translated file. Target path: {output_path}")
                 
                 # Confirm overwrite
                 if not messagebox.askyesno("确认覆盖", f"是否要覆盖/保存为 '{file_name_for_prompt}'？"):
@@ -1681,14 +1895,14 @@ class EditorFrame(ctk.CTkFrame):
         self.source_files.clear()
         self.translated_files.clear()
         self._clear_editor()
-        show_toast(self, "列表已清空", "info")
+        self.after(10, lambda: show_toast(self.winfo_toplevel(), "列表已清空", "info"))
 
     def _on_clear_list_requested(self):
         """Handles the request to clear the file list, with confirmations."""
         from tkinter import messagebox
 
         if not self.source_files and not self.translated_files:
-            show_toast(self, "列表已经为空", "info")
+            self.after(10, lambda: show_toast(self.winfo_toplevel(), "列表已经为空", "info"))
             return
 
         # Check for unsaved changes in the currently loaded file

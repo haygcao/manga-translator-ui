@@ -255,7 +255,7 @@ class TextBlock(object):
             'text': self.text,
             'translation': self.translation,
             'angle': self.angle,
-            'font_size': getattr(self, 'original_font_size', self.font_size),  # 导出原始字体大小而不是调整后的
+            'font_size': getattr(self, 'offset_applied_font_size', getattr(self, 'original_font_size', self.font_size)),  # 导出应用偏移量后的字体大小
             'fg_colors': self.fg_colors,
             'bg_colors': self.bg_colors,
             'direction': self.direction,

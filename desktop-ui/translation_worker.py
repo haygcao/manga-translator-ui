@@ -193,8 +193,10 @@ def main():
             # 检查是否应该强制使用批量模式
             translator_type = config_dict.get('translator', {}).get('translator')
             is_hq = translator_type in ['openai_hq', 'gemini_hq']
-            
-            if len(resolved_files) > 1 or is_hq:
+            batch_size = config_dict.get('cli', {}).get('batch_size', 1)
+
+            # 仅在高质量模式或用户明确设置了大于1的批处理大小时，才使用批处理逻辑
+            if is_hq or (len(resolved_files) > 1 and batch_size > 1):
                 flush_print(f"开始批量翻译 {len(resolved_files)} 个文件...")
                 if is_hq and len(resolved_files) == 1:
                     flush_print("检测到高质量翻译器，强制使用批量模式处理单个文件...")
@@ -264,6 +266,7 @@ def main():
                                     image_to_save.save(final_output_path, quality=save_quality)
                                 else:
                                     image_to_save.save(final_output_path)
+                                translator._update_translation_map(file_path, final_output_path)
                                 flush_print(f"  -> ✅ [BATCH] 保存成功: {os.path.basename(final_output_path)}")
                             except Exception as e:
                                 flush_print(f"  -> ❌ [BATCH] 保存文件时出错 {os.path.basename(ctx.image_name)}: {e}")
@@ -338,6 +341,7 @@ def main():
                                         image_to_save.save(final_output_path, quality=save_quality)
                                     else:
                                         image_to_save.save(final_output_path)
+                                    translator._update_translation_map(file_path, final_output_path)
                                     flush_print(f"  -> ✅ 翻译完成: {os.path.basename(final_output_path)}")
                             else:
                                 flush_print(f"  -> ✅ 文本导出成功: {os.path.basename(file_path)}")

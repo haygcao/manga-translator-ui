@@ -83,17 +83,18 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         # 区域信息
         self._create_region_info_section()
         
+        # 蒙版编辑 (新)
+        self._create_mask_edit_section()
+        
         # 文本内容
         self._create_text_section()
         
         # 样式设置
         self._create_style_section()
-
-
         
         # 操作按钮
         self._create_action_section()
-    
+
     def _create_region_info_section(self):
         """创建区域信息部分"""
         # 区域信息标题
@@ -124,6 +125,65 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         ctk.CTkLabel(info_frame, text="角度:").grid(row=3, column=0, sticky="w", pady=2)
         self.widgets['angle_label'] = ctk.CTkLabel(info_frame, text="-")
         self.widgets['angle_label'].grid(row=3, column=1, sticky="w", padx=(10, 0))
+
+    def _create_mask_edit_section(self):
+        """创建蒙版编辑部分 (新)"""
+        self.mask_edit_frame = CollapsibleFrame(self, title="蒙版编辑", start_expanded=False)
+        self.mask_edit_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=5)
+        
+        content_frame = self.mask_edit_frame.content_frame
+        content_frame.grid_columnconfigure(0, weight=1)
+
+        mask_button_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        mask_button_frame.grid(row=0, column=0, pady=5, padx=5, sticky="ew")
+        mask_button_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self.widgets['brush_button'] = ctk.CTkButton(mask_button_frame, text="画笔", command=lambda: self._execute_callback("mask_tool_changed", "画笔"))
+        self.widgets['brush_button'].grid(row=0, column=0, padx=2)
+
+        self.widgets['eraser_button'] = ctk.CTkButton(mask_button_frame, text="橡皮擦", command=lambda: self._execute_callback("mask_tool_changed", "橡皮擦"))
+        self.widgets['eraser_button'].grid(row=0, column=1, padx=2)
+
+        self.widgets['select_button'] = ctk.CTkButton(mask_button_frame, text="不选择", command=lambda: self._execute_callback("mask_tool_changed", "不选择"))
+        self.widgets['select_button'].grid(row=0, column=2, padx=2)
+        
+        ctk.CTkLabel(content_frame, text="笔刷大小:").grid(row=1, column=0, pady=5, padx=5, sticky="w")
+        self.widgets['brush_size_slider'] = ctk.CTkSlider(content_frame, from_=1, to=100, command=lambda val: self._execute_callback('brush_size_changed', val))
+        self.widgets['brush_size_slider'].set(20)
+        self.widgets['brush_size_slider'].grid(row=2, column=0, pady=5, padx=5, sticky="ew")
+        
+        self.widgets['show_mask_checkbox'] = ctk.CTkCheckBox(content_frame, text="显示蒙版", command=lambda: self._execute_callback('toggle_mask_visibility', self.widgets['show_mask_checkbox'].get()))
+        self.widgets['show_mask_checkbox'].deselect()
+        self.widgets['show_mask_checkbox'].grid(row=3, column=0, pady=5, padx=5, sticky="w")
+        
+        ctk.CTkLabel(content_frame, text="扩张偏移:").grid(row=4, column=0, pady=(10, 2), padx=5, sticky="w")
+        self.widgets['mask_dilation_offset_entry'] = ctk.CTkEntry(content_frame, placeholder_text="0")
+        self.widgets['mask_dilation_offset_entry'].grid(row=5, column=0, pady=2, padx=5, sticky="ew")
+        self.widgets['mask_dilation_offset_entry'].bind("<FocusOut>", lambda e: self._execute_callback('mask_setting_changed'))
+
+        ctk.CTkLabel(content_frame, text="内核大小:").grid(row=6, column=0, pady=(10, 2), padx=5, sticky="w")
+        self.widgets['mask_kernel_size_entry'] = ctk.CTkEntry(content_frame, placeholder_text="3")
+        self.widgets['mask_kernel_size_entry'].grid(row=7, column=0, pady=2, padx=5, sticky="ew")
+        self.widgets['mask_kernel_size_entry'].bind("<FocusOut>", lambda e: self._execute_callback('mask_setting_changed'))
+
+        self.widgets['ignore_bubble_checkbox'] = ctk.CTkCheckBox(content_frame, text="忽略气泡", command=lambda: self._execute_callback('mask_setting_changed'))
+        self.widgets['ignore_bubble_checkbox'].grid(row=8, column=0, pady=10, padx=5, sticky="w")
+
+        self.widgets['update_mask_button'] = ctk.CTkButton(content_frame, text="更新蒙版", command=lambda: self._execute_callback('update_mask_with_config'), height=28)
+        self.widgets['update_mask_button'].grid(row=9, column=0, pady=5, padx=5, sticky="ew")
+        
+        self.widgets['show_removed_checkbox'] = ctk.CTkCheckBox(content_frame, text="显示被优化掉的区域", command=lambda: self._execute_callback('toggle_removed_mask_visibility', self.widgets['show_removed_checkbox'].get()))
+        self.widgets['show_removed_checkbox'].deselect()
+        self.widgets['show_removed_checkbox'].grid(row=10, column=0, pady=5, padx=5, sticky="w")
+
+        # Initially hide the frame
+        self.mask_edit_frame.grid_remove()
+
+    def show_mask_editor(self):
+        self.mask_edit_frame.grid()
+
+    def hide_mask_editor(self):
+        self.mask_edit_frame.grid_remove()
     
     def _insert_placeholder(self):
         if 'translation_text' in self.widgets:
@@ -171,15 +231,15 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         """创建文本编辑部分"""
         # 文本内容标题
         text_label = ctk.CTkLabel(self, text="文本内容", font=ctk.CTkFont(size=14, weight="bold"))
-        text_label.grid(row=2, column=0, sticky="w", padx=5, pady=(15, 0))
+        text_label.grid(row=3, column=0, sticky="w", padx=5, pady=(15, 0))
         
         # OCR和翻译配置
         self._create_ocr_translate_config_section()
         
         # 原文
-        ctk.CTkLabel(self, text="原文:", anchor="w").grid(row=5, column=0, sticky="ew", padx=5, pady=(5, 0))
+        ctk.CTkLabel(self, text="原文:", anchor="w").grid(row=6, column=0, sticky="ew", padx=5, pady=(5, 0))
         self.widgets['original_text'] = ctk.CTkTextbox(self, height=60, undo=True, maxundo=-1)
-        self.widgets['original_text'].grid(row=6, column=0, sticky="ew", padx=5, pady=2)
+        self.widgets['original_text'].grid(row=7, column=0, sticky="ew", padx=5, pady=2)
         
         # 绑定原文编辑事件
         self.widgets['original_text'].bind("<KeyRelease>", self._on_original_text_change)
@@ -189,12 +249,12 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         
         # 原文编辑状态标签
         self.widgets['original_edit_status'] = ctk.CTkLabel(self, text="点击编辑原文", font=ctk.CTkFont(size=10), text_color="gray")
-        self.widgets['original_edit_status'].grid(row=7, column=0, sticky="w", padx=5, pady=(0, 5))
+        self.widgets['original_edit_status'].grid(row=8, column=0, sticky="w", padx=5, pady=(0, 5))
         
         # 译文
-        ctk.CTkLabel(self, text="译文:", anchor="w").grid(row=8, column=0, sticky="ew", padx=5, pady=(10, 0))
+        ctk.CTkLabel(self, text="译文:", anchor="w").grid(row=9, column=0, sticky="ew", padx=5, pady=(10, 0))
         self.widgets['translation_text'] = ctk.CTkTextbox(self, height=80, undo=True, maxundo=-1)
-        self.widgets['translation_text'].grid(row=9, column=0, sticky="ew", padx=5, pady=2)
+        self.widgets['translation_text'].grid(row=10, column=0, sticky="ew", padx=5, pady=2)
         
         # 确保文本框可编辑
         self.widgets['translation_text'].configure(state="normal")
@@ -217,7 +277,7 @@ class PropertyPanel(ctk.CTkScrollableFrame):
 
         # --- Insert Buttons Frame ---
         button_frame = ctk.CTkFrame(self)
-        button_frame.grid(row=10, column=0, sticky="ew", padx=5, pady=(0, 0))
+        button_frame.grid(row=11, column=0, sticky="ew", padx=5, pady=(0, 0))
         button_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.widgets['insert_placeholder_button'] = ctk.CTkButton(
@@ -243,7 +303,7 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         
         # 文本统计
         self.widgets['text_stats'] = ctk.CTkLabel(self, text="字符数: 0", font=ctk.CTkFont(size=10))
-        self.widgets['text_stats'].grid(row=11, column=0, sticky="w", padx=5, pady=2)
+        self.widgets['text_stats'].grid(row=12, column=0, sticky="w", padx=5, pady=2)
 
     def _handle_textbox_key_press(self, event):
         """处理文本框中的按键事件，以允许全局快捷键"""
@@ -285,11 +345,11 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         """创建样式设置部分"""
         # 样式标题
         style_label = ctk.CTkLabel(self, text="样式设置", font=ctk.CTkFont(size=14, weight="bold"))
-        style_label.grid(row=11, column=0, sticky="w", padx=5, pady=(15, 0))
+        style_label.grid(row=13, column=0, sticky="w", padx=5, pady=(15, 0))
         
         # 样式框架
         style_frame = ctk.CTkFrame(self, fg_color="transparent")
-        style_frame.grid(row=12, column=0, sticky="ew", padx=5, pady=5)
+        style_frame.grid(row=14, column=0, sticky="ew", padx=5, pady=5)
         style_frame.grid_columnconfigure(1, weight=1)
         
         # 字体大小
@@ -355,11 +415,11 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         """创建操作按钮部分"""
         # 操作标题
         action_label = ctk.CTkLabel(self, text="操作", font=ctk.CTkFont(size=14, weight="bold"))
-        action_label.grid(row=15, column=0, sticky="w", padx=5, pady=(15, 0))
+        action_label.grid(row=16, column=0, sticky="w", padx=5, pady=(15, 0))
         
         # 操作按钮框架
         action_frame = ctk.CTkFrame(self, fg_color="transparent")
-        action_frame.grid(row=16, column=0, sticky="ew", padx=5, pady=5)
+        action_frame.grid(row=17, column=0, sticky="ew", padx=5, pady=5)
         action_frame.grid_columnconfigure((0, 1, 2), weight=1)
         
         # 第一行按钮
@@ -385,7 +445,7 @@ class PropertyPanel(ctk.CTkScrollableFrame):
     
     def _create_ocr_translate_config_section(self):
         config_frame = ctk.CTkFrame(self, fg_color="transparent")
-        config_frame.grid(row=3, column=0, sticky="ew", padx=5, pady=5)
+        config_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
         config_frame.grid_columnconfigure(1, weight=1)
 
         if not all([self.ocr_service, self.translation_service, self.config_service]):

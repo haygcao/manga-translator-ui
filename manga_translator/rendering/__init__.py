@@ -65,6 +65,9 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
         min_font_size = max(config.render.font_size_minimum if config.render.font_size_minimum > 0 else 1, 1)
         target_font_size = max(original_region_font_size + font_size_offset, min_font_size)
 
+        # 保存应用偏移量后的字体大小，用于JSON导出
+        region.offset_applied_font_size = int(target_font_size)
+
 
         # --- Mode 1: disable_all (unchanged) ---
         if mode == 'disable_all':

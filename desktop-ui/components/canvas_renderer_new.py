@@ -32,7 +32,7 @@ class CanvasRenderer:
         
         # 防抖定时器
         self._debounce_timer = None
-        self.show_mask = True
+        self.show_mask = False
 
     def set_image(self, image_path):
         if image_path is None:
@@ -79,7 +79,6 @@ class CanvasRenderer:
 
     def set_removed_mask_visibility(self, visible: bool):
         self.show_removed_mask = visible
-        self.redraw_mask_overlay()
 
     def set_mask_visibility(self, visible: bool):
         self.show_mask = visible
@@ -200,25 +199,24 @@ class CanvasRenderer:
             
             self.canvas.create_image(x_offset, y_offset, anchor="nw", image=self.tk_inpainted_image)
 
-        if view_mode == 'mask':
-            # Only redraw the full mask overlay when the zoom action is finished (not in fast_mode)
-            if not fast_mode:
-                self.redraw_mask_overlay()
-        else:
-            # NORMAL VIEW MODE
-            if regions:
-                self.text_renderer.draw_regions(
-                    self.text_blocks_cache, 
-                    self.dst_points_cache, 
-                    selected_indices, 
-                    self.transform_service, 
-                    hide_indices=hide_indices,
-                    fast_mode=fast_mode,
-                    hyphenate=hyphenate,
-                    line_spacing=line_spacing,
-                    disable_font_border=disable_font_border,
-                    render_config=render_config
-                )
+        # Always draw mask overlays if they are enabled
+        if not fast_mode:
+            self.redraw_mask_overlay()
+
+        # Draw text regions only in normal view mode
+        if view_mode == 'normal' and regions:
+            self.text_renderer.draw_regions(
+                self.text_blocks_cache, 
+                self.dst_points_cache, 
+                selected_indices, 
+                self.transform_service, 
+                hide_indices=hide_indices,
+                fast_mode=fast_mode,
+                hyphenate=hyphenate,
+                line_spacing=line_spacing,
+                disable_font_border=disable_font_border,
+                render_config=render_config
+            )
 
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
 

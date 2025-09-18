@@ -7,7 +7,7 @@ import logging
 import numpy as np
 import sys
 import os
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from dataclasses import dataclass
 from PIL import Image
 

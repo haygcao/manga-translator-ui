@@ -152,9 +152,9 @@ class BackendTextRenderer:
             # 1. Normalize newlines and [BR] tags
             processed_text = re.sub(r'\s*\[BR\]\s*', '\n', text_to_process.replace('↵', '\n'), flags=re.IGNORECASE)
 
-            # 2. For vertical text, auto-add horizontal tags (This is now handled inside put_text_vertical based on config)
-            # if not text_block.horizontal:
-            #     processed_text = auto_add_horizontal_tags(processed_text)
+            # 2. For vertical text, auto-add horizontal tags
+            if not text_block.horizontal and render_config and render_config.get('auto_rotate_symbols'):
+                processed_text = auto_add_horizontal_tags(processed_text)
             
             # 3. Temporarily overwrite the translation on the object for caching and rendering
             text_block.translation = processed_text
