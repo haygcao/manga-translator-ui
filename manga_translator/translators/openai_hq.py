@@ -16,26 +16,41 @@ from ..utils import Context
 
 def encode_image_for_openai(image, max_size=1024):
     """将图片编码为base64格式，适合OpenAI API"""
-    # 转换图片格式
+    # 转换图片格式为RGB（处理所有可能的图片模式）
     if image.mode == "P":
+        # 调色板模式：转换为RGBA（如果有透明度）或RGB
         image = image.convert("RGBA" if "transparency" in image.info else "RGB")
-    elif image.mode == "RGBA":
-        # 创建一个白色背景
+
+    if image.mode == "RGBA":
+        # RGBA模式：创建白色背景并合并透明通道
         background = Image.new('RGB', image.size, (255, 255, 255))
-        # 将带有透明通道的图片粘贴到白色背景上
         background.paste(image, mask=image.split()[-1])
         image = background
-    
+    elif image.mode in ("LA", "L", "1", "CMYK"):
+        # LA（灰度+透明）、L（灰度）、1（二值）、CMYK：统一转换为RGB
+        if image.mode == "LA":
+            # 灰度+透明：先转RGBA再合并到白色背景
+            image = image.convert("RGBA")
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[-1])
+            image = background
+        else:
+            # 其他模式：直接转RGB
+            image = image.convert("RGB")
+    elif image.mode != "RGB":
+        # 其他未知模式：强制转换为RGB
+        image = image.convert("RGB")
+
     # 调整图片大小
     w, h = image.size
     if max(w, h) > max_size:
         scale = max_size / max(w, h)
         new_w, new_h = int(w * scale), int(h * scale)
         image = image.resize((new_w, new_h), Image.LANCZOS)
-    
-    # 编码为base64
+
+    # 编码为base64（使用PNG格式确保质量和兼容性）
     buf = BytesIO()
-    image.save(buf, format="JPEG", quality=85)
+    image.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 
@@ -238,7 +253,7 @@ This is an incorrect response because it includes extra text and explanations.
             base64_img = encode_image_for_openai(image)
             image_contents.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}
+                "image_url": {"url": f"data:image/png;base64,{base64_img}"}
             })
         
         # 构建消息

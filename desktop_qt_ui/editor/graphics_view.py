@@ -921,7 +921,17 @@ class GraphicsView(QGraphicsView):
             dummy_event = event.clone()
             dummy_event.setButton(Qt.MouseButton.LeftButton)
             super().mousePressEvent(dummy_event)
-        else:
+        elif event.button() == Qt.MouseButton.LeftButton:
+            # 检查是否点击在空白区域
+            item_at_pos = self.itemAt(event.pos())
+
+            # 如果点击在空白区域（没有 item 或只有图片），启用拖动模式
+            if item_at_pos is None or item_at_pos == self._image_item:
+                self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+                dummy_event = event.clone()
+                super().mousePressEvent(dummy_event)
+                return
+
             # 先记录当前选择
             old_selection = self.model.get_selection().copy()
 
@@ -934,6 +944,8 @@ class GraphicsView(QGraphicsView):
                 # 只有真正点击空白时，event 才不会被 accept
                 if not event.isAccepted():
                     self.model.set_selection([])
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         """Handle mouse move for drawing."""
@@ -1007,7 +1019,7 @@ class GraphicsView(QGraphicsView):
         if self._is_drawing and event.button() == Qt.MouseButton.LeftButton:
             self._finish_drawing()
 
-        if event.button() == Qt.MouseButton.MiddleButton:
+        if event.button() == Qt.MouseButton.MiddleButton or event.button() == Qt.MouseButton.LeftButton:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
         super().mouseReleaseEvent(event)
 

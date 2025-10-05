@@ -67,9 +67,11 @@ translator_cache = {}
 def get_translator(key: Translator, *args, **kwargs) -> CommonTranslator:
     if key not in TRANSLATORS:
         raise ValueError(f'Could not find translator for: "{key}". Choose from the following: %s' % ','.join(TRANSLATORS))
-    # Always create a new instance to avoid caching issues in editor mode
-    translator = TRANSLATORS[key]
-    return translator(*args, **kwargs)
+    # Use cache to avoid reloading models in the same translation session
+    if key not in translator_cache:
+        translator = TRANSLATORS[key]
+        translator_cache[key] = translator(*args, **kwargs)
+    return translator_cache[key]
 
 prepare_selective_translator(get_translator)
 

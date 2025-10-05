@@ -499,9 +499,28 @@ class MainAppLogic(QObject):
             self.logger.warning("一个任务已经在运行中。")
             return
 
+        # 检查文件列表是否为空
         files_to_process = self._resolve_input_files()
         if not files_to_process:
             self.logger.warning("没有找到有效的图片文件，任务中止")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                None,
+                "文件列表为空",
+                "请先添加要翻译的图片文件！\n\n可以通过以下方式添加：\n• 点击「添加文件」按钮\n• 点击「添加文件夹」按钮\n• 直接拖拽文件到文件列表"
+            )
+            return
+
+        # 检查输出目录是否合法
+        output_path = self.config_service.get_config().app.last_output_path
+        if not output_path or not os.path.isdir(output_path):
+            self.logger.warning(f"输出目录不合法: {output_path}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                None,
+                "输出目录不合法",
+                "请先设置有效的输出目录！\n\n可以通过以下方式设置：\n• 点击「浏览...」按钮选择输出目录\n• 直接在输出目录输入框中输入路径"
+            )
             return
 
         self.saved_files_count = 0
@@ -644,20 +663,40 @@ class MainAppLogic(QObject):
             self.state_manager.set_translating(False)
             self.state_manager.set_status_message("正在停止翻译...")
 
+            # 1. 先通知 worker 停止
             if self.worker:
                 self.worker.stop()
+
+            # 2. 请求线程退出
             self.thread.quit()
 
             # 保存线程引用，避免在等待过程中被清空
             thread_ref = self.thread
+            worker_ref = self.worker
 
             # 在后台等待线程停止，不阻塞UI
             from PyQt6.QtCore import QTimer
+            timeout_counter = [0]  # 使用列表以便在闭包中修改
+
             def wait_for_thread():
                 try:
                     if thread_ref and not thread_ref.wait(100):  # 等待100ms
-                        # 如果还没停止，继续等待
-                        QTimer.singleShot(100, wait_for_thread)
+                        timeout_counter[0] += 100
+
+                        # 如果超过5秒还没停止，强制终止
+                        if timeout_counter[0] >= 5000:
+                            self.logger.warning("线程5秒内未停止，强制终止...")
+                            try:
+                                thread_ref.terminate()
+                                thread_ref.wait(1000)  # 等待1秒
+                                self.logger.info("翻译线程已被强制终止。")
+                                self.state_manager.set_status_message("任务已强制停止")
+                            except Exception as e:
+                                self.logger.error(f"强制终止线程失败: {e}")
+                                self.state_manager.set_status_message("停止失败")
+                        else:
+                            # 继续等待
+                            QTimer.singleShot(100, wait_for_thread)
                     else:
                         # 线程已停止
                         self.logger.info("翻译线程已成功停止。")
@@ -839,8 +878,31 @@ class TranslationWorker(QObject):
                 'input_folders': input_folders
             }
 
+            # 确定翻译流程模式
+            workflow_mode = "正常翻译流程"
+            workflow_tip = ""
+            cli_config = self.config_dict.get('cli', {})
+            if cli_config.get('generate_and_export', False):
+                workflow_mode = "导出翻译"
+                workflow_tip = "💡 提示：导出翻译后，可在 manga_translator_work/translations/ 目录查看 图片名_translated.txt 文件"
+            elif cli_config.get('template', False):
+                workflow_mode = "导出原文"
+                workflow_tip = "💡 提示：导出原文后，可在 manga_translator_work/originals/ 目录手动翻译 图片名_original.txt 文件，然后使用「导入翻译并渲染」模式"
+            elif cli_config.get('load_text', False):
+                workflow_mode = "导入翻译并渲染"
+                workflow_tip = "💡 提示：将从 manga_translator_work/originals/ 或 translations/ 目录读取 TXT 文件并渲染（优先使用 _original.txt）"
+
             if is_hq or (len(self.files) > 1 and batch_size > 1):
                 self.log_received.emit(f"--- [12] THREAD: Starting batch processing ({'HQ mode' if is_hq else 'Batch mode'})...")
+
+                # 输出批量处理信息
+                total_images = len(self.files)
+                total_batches = (total_images + batch_size - 1) // batch_size if batch_size > 0 else 1
+                self.log_received.emit(f"📊 批量处理模式：共 {total_images} 张图片，分 {total_batches} 个批次处理")
+                self.log_received.emit(f"🔧 翻译流程：{workflow_mode}")
+                self.log_received.emit(f"📁 输出目录：{self.output_folder}")
+                if workflow_tip:
+                    self.log_received.emit(workflow_tip)
 
                 images_with_configs = []
                 for file_path in self.files:
@@ -850,39 +912,62 @@ class TranslationWorker(QObject):
                     image.name = file_path
                     images_with_configs.append((image, config))
 
+                self.log_received.emit(f"🚀 开始翻译...")
                 contexts = await translator.translate_batch(images_with_configs, save_info=save_info)
 
                 # The backend now handles saving for batch jobs. We just need to collect the paths/status.
+                success_count = 0
                 for ctx in contexts:
                     if not self._is_running: raise asyncio.CancelledError("Task stopped by user.")
                     if ctx:
                         results.append({'success': True, 'original_path': ctx.image_name, 'image_data': None})
+                        success_count += 1
                     else:
                         results.append({'success': False, 'original_path': 'Unknown', 'error': 'Batch translation returned no context'})
 
-            else: 
+                self.log_received.emit(f"✅ 批量翻译完成：成功 {success_count}/{total_images} 张")
+                self.log_received.emit(f"💾 文件已保存到：{self.output_folder}")
+
+            else:
                 self.log_received.emit("--- [12] THREAD: Starting sequential processing...")
                 total_files = len(self.files)
+
+                # 输出顺序处理信息
+                self.log_received.emit(f"📊 顺序处理模式：共 {total_files} 张图片")
+                self.log_received.emit(f"🔧 翻译流程：{workflow_mode}")
+                self.log_received.emit(f"📁 输出目录：{self.output_folder}")
+                if workflow_tip:
+                    self.log_received.emit(workflow_tip)
+
+                success_count = 0
                 for i, file_path in enumerate(self.files):
                     if not self._is_running:
                         raise asyncio.CancelledError("Task stopped by user.")
 
+                    current_num = i + 1
                     self.progress.emit(i, total_files, f"Processing: {os.path.basename(file_path)}")
-                    
+                    self.log_received.emit(f"🔄 [{current_num}/{total_files}] 正在处理：{os.path.basename(file_path)}")
+
                     try:
                         image = Image.open(file_path)
                         image.name = file_path
-                        
+
                         ctx = await translator.translate(image, config, image_name=image.name)
-                        
+
                         if ctx and ctx.result:
                             self.file_processed.emit({'success': True, 'original_path': file_path, 'image_data': ctx.result})
+                            success_count += 1
+                            self.log_received.emit(f"✅ [{current_num}/{total_files}] 完成：{os.path.basename(file_path)}")
                         else:
                             self.file_processed.emit({'success': False, 'original_path': file_path, 'error': 'Translation returned no result or image'})
+                            self.log_received.emit(f"❌ [{current_num}/{total_files}] 失败：{os.path.basename(file_path)}")
 
                     except Exception as e:
-                        self.log_received.emit(f"Error processing file {os.path.basename(file_path)}: {e}")
+                        self.log_received.emit(f"❌ [{current_num}/{total_files}] 错误：{os.path.basename(file_path)} - {e}")
                         self.file_processed.emit({'success': False, 'original_path': file_path, 'error': str(e)})
+
+                self.log_received.emit(f"✅ 顺序翻译完成：成功 {success_count}/{total_files} 张")
+                self.log_received.emit(f"💾 文件已保存到：{self.output_folder}")
             
             self.finished.emit(results)
 

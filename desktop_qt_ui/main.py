@@ -3,6 +3,9 @@ import os
 import logging
 import warnings
 
+# 设置 Hugging Face 镜像站（国内用户加速下载）
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
 # 修复PyInstaller打包后onnxruntime的DLL加载问题
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     # 运行在PyInstaller打包环境中

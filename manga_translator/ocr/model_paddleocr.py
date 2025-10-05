@@ -256,7 +256,7 @@ class ModelPaddleOCR(OfflineOCR):
         return text, confidence
 
     def _estimate_colors(self, region: np.ndarray, textline: Quadrilateral):
-        """Estimate foreground/background colors using Otsu thresholding"""
+        """Estimate foreground/background colors using improved Otsu thresholding"""
         try:
             if len(region.shape) == 3:
                 gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
@@ -281,17 +281,43 @@ class ModelPaddleOCR(OfflineOCR):
 
                 if np.any(fg_mask):
                     fg_pixels = region_rgb[fg_mask]
-                    textline.fg_r = int(np.mean(fg_pixels[:, 0]))
-                    textline.fg_g = int(np.mean(fg_pixels[:, 1]))
-                    textline.fg_b = int(np.mean(fg_pixels[:, 2]))
+
+                    # 改进：使用中位数代替平均值，减少抗锯齿像素的影响
+                    fg_r = int(np.median(fg_pixels[:, 0]))
+                    fg_g = int(np.median(fg_pixels[:, 1]))
+                    fg_b = int(np.median(fg_pixels[:, 2]))
+
+                    # 颜色量化：如果接近黑色（RGB < 40），强制设为纯黑
+                    if fg_r < 40 and fg_g < 40 and fg_b < 40:
+                        textline.fg_r = textline.fg_g = textline.fg_b = 0
+                    # 如果接近白色（RGB > 215），强制设为纯白
+                    elif fg_r > 215 and fg_g > 215 and fg_b > 215:
+                        textline.fg_r = textline.fg_g = textline.fg_b = 255
+                    else:
+                        textline.fg_r = fg_r
+                        textline.fg_g = fg_g
+                        textline.fg_b = fg_b
                 else:
                     textline.fg_r = textline.fg_g = textline.fg_b = 0
 
                 if np.any(bg_mask):
                     bg_pixels = region_rgb[bg_mask]
-                    textline.bg_r = int(np.mean(bg_pixels[:, 0]))
-                    textline.bg_g = int(np.mean(bg_pixels[:, 1]))
-                    textline.bg_b = int(np.mean(bg_pixels[:, 2]))
+
+                    # 改进：使用中位数代替平均值
+                    bg_r = int(np.median(bg_pixels[:, 0]))
+                    bg_g = int(np.median(bg_pixels[:, 1]))
+                    bg_b = int(np.median(bg_pixels[:, 2]))
+
+                    # 颜色量化：如果接近白色（RGB > 215），强制设为纯白
+                    if bg_r > 215 and bg_g > 215 and bg_b > 215:
+                        textline.bg_r = textline.bg_g = textline.bg_b = 255
+                    # 如果接近黑色（RGB < 40），强制设为纯黑
+                    elif bg_r < 40 and bg_g < 40 and bg_b < 40:
+                        textline.bg_r = textline.bg_g = textline.bg_b = 0
+                    else:
+                        textline.bg_r = bg_r
+                        textline.bg_g = bg_g
+                        textline.bg_b = bg_b
                 else:
                     textline.bg_r = textline.bg_g = textline.bg_b = 255
             else:

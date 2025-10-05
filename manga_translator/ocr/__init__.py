@@ -22,9 +22,11 @@ ocr_cache = {}
 def get_ocr(key: Ocr, *args, **kwargs) -> CommonOCR:
     if key not in OCRS:
         raise ValueError(f'Could not find OCR for: "{key}". Choose from the following: %s' % ','.join(OCRS))
-    # Always create a new instance to avoid caching issues in editor mode
-    ocr = OCRS[key]
-    return ocr(*args, **kwargs)
+    # Use cache to avoid reloading models in the same translation session
+    if key not in ocr_cache:
+        ocr = OCRS[key]
+        ocr_cache[key] = ocr(*args, **kwargs)
+    return ocr_cache[key]
 
 async def prepare(ocr_key: Ocr, device: str = 'cpu'):
     ocr = get_ocr(ocr_key)

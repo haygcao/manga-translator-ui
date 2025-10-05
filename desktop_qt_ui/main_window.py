@@ -84,6 +84,7 @@ class MainWindow(QMainWindow):
         self.app_logic.file_removed.connect(self.main_view.file_list.remove_file)
         self.app_logic.output_path_updated.connect(self.main_view.update_output_path_display)
         self.app_logic.task_completed.connect(self.on_task_completed, type=Qt.ConnectionType.QueuedConnection)
+        self.app_logic.log_message.connect(self.main_view.append_log)
 
         # --- View to Logic Connections ---
         self.main_view.setting_changed.connect(self.app_logic.update_single_config)
