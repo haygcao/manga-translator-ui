@@ -53,10 +53,19 @@ class ConfigService(QObject):
 
         # Set the correct default config path
         self.default_config_path = self.get_default_config_path()
+        self.logger.info(f"默认配置文件路径: {self.default_config_path}")
+        self.logger.info(f"配置文件是否存在: {os.path.exists(self.default_config_path)}")
+        if hasattr(sys, '_MEIPASS'):
+            self.logger.info(f"打包环境，sys._MEIPASS = {sys._MEIPASS}")
 
         # Try to load the default config on startup
         if os.path.exists(self.default_config_path):
-            self.load_config_file(self.default_config_path)
+            self.logger.info(f"正在加载配置文件: {self.default_config_path}")
+            success = self.load_config_file(self.default_config_path)
+            if success:
+                self.logger.info("配置文件加载成功")
+            else:
+                self.logger.error("配置文件加载失败")
         else:
             self.logger.warning(f"Default config file not found at: {self.default_config_path}")
         
@@ -307,10 +316,18 @@ class ConfigService(QObject):
         return len(missing_vars) == 0
     
     def get_default_config_path(self) -> str:
-        """获取默认配置文件路径"""
+        """
+        获取默认配置文件路径
+
+        打包后配置文件在 _internal/examples/config-example.json
+        开发时在 项目根目录/examples/config-example.json
+        """
         if hasattr(sys, '_MEIPASS'):
+            # 打包环境：sys._MEIPASS 指向 _internal 目录
             return os.path.join(sys._MEIPASS, 'examples', 'config-example.json')
-        return os.path.join(self.root_dir, "examples", "config-example.json")
+        else:
+            # 开发环境
+            return os.path.join(self.root_dir, "examples", "config-example.json")
     
     def load_default_config(self) -> bool:
         """加载默认配置"""

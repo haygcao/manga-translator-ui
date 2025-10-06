@@ -92,3 +92,7 @@ desktop_qt_ui/.claude/
 desktop_qt_ui/.mypy_cache/
 desktop_qt_ui/logs/
 .qoder/
+
+# Ignore user-added images
+4535423.jpg
+profile.svg

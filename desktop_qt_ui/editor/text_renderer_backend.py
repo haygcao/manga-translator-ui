@@ -92,10 +92,18 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
         config_obj = Config(render=RenderConfig(**config_data)) if config_data else Config()
         line_spacing_from_params = render_params.get('line_spacing')
 
+        # 获取区域数（lines数组的长度），用于智能排版模式的换行判断
+        region_count = 1
+        if hasattr(text_block, 'lines') and text_block.lines is not None:
+            try:
+                region_count = len(text_block.lines)
+            except:
+                region_count = 1
+
         if text_block.horizontal:
-            rendered_surface = put_text_horizontal(font_size, text_block.get_translation_for_rendering(), render_w, render_h, text_block.alignment, text_block.direction == 'hl', fg_color, bg_color, text_block.target_lang, hyphenate, line_spacing_from_params, config=config_obj, region_count=total_regions)
+            rendered_surface = put_text_horizontal(font_size, text_block.get_translation_for_rendering(), render_w, render_h, text_block.alignment, text_block.direction == 'hl', fg_color, bg_color, text_block.target_lang, hyphenate, line_spacing_from_params, config=config_obj, region_count=region_count)
         else:
-            rendered_surface = put_text_vertical(font_size, text_block.get_translation_for_rendering(), render_h, text_block.alignment, fg_color, bg_color, line_spacing_from_params, config=config_obj, region_count=total_regions)
+            rendered_surface = put_text_vertical(font_size, text_block.get_translation_for_rendering(), render_h, text_block.alignment, fg_color, bg_color, line_spacing_from_params, config=config_obj, region_count=region_count)
 
         if rendered_surface is None or rendered_surface.size == 0: return None
         

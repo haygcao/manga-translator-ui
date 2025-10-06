@@ -227,9 +227,10 @@ This is an incorrect response because it includes extra text and explanations.
                     region_count = 1
                 prompt += f"{text_index}. [Original regions: {region_count}] {text_to_translate}\n"
                 text_index += 1
-        
+
         prompt += "\nCRITICAL: Provide translations in the exact same order as the numbered input text regions. Your first line of output must be the translation for text region #1, your second line for #2, and so on. DO NOT CHANGE THE ORDER."
-        
+
+        # self.logger.debug(f"User prompt:\n{prompt}")
         return prompt
 
     async def _translate_batch_high_quality(self, texts: List[str], batch_data: List[Dict], source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, ctx: Any = None) -> List[str]:
@@ -262,9 +263,10 @@ This is an incorrect response because it includes extra text and explanations.
         # 构建消息
         system_prompt = self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
         user_prompt = self._build_user_prompt(batch_data, ctx)
-        
+
         # Combine system and user prompts into a single user message, similar to Gemini's approach
         combined_prompt_text = system_prompt + "\n\n" + user_prompt
+        # self.logger.debug(f"Combined prompt:\n{combined_prompt_text}")
         user_content = [{"type": "text", "text": combined_prompt_text}]
         user_content.extend(image_contents)
         
@@ -307,7 +309,7 @@ This is an incorrect response because it includes extra text and explanations.
                     
                     while len(translations) < len(texts):
                         translations.append(texts[len(translations)] if len(translations) < len(texts) else "")
-                    
+
                     self.logger.info("--- Translation Results ---")
                     for original, translated in zip(texts, translations):
                         self.logger.info(f'{original} -> {translated}')
