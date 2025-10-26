@@ -111,6 +111,8 @@ class TextBlock(object):
 
         # self.stroke_width = stroke_width
         self.font_family: str = font_family
+        # Support font_path from kwargs (used by desktop-ui for per-region fonts)
+        self.font_path: str = kwargs.get('font_path', '')
         self.bold: bool = bold
         self.underline: bool = underline
         self.italic: bool = italic

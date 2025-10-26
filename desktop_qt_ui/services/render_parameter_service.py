@@ -268,6 +268,10 @@ class RenderParameterService:
                 if 'font_weight' in region_data:
                     params.font_weight = region_data['font_weight']
 
+                # 字体路径
+                if 'font_path' in region_data and region_data['font_path']:
+                    params.font_path = region_data['font_path']
+
             return params
 
         # 动态从配置服务获取最新的默认参数
@@ -321,6 +325,10 @@ class RenderParameterService:
                 calculated_params.underline = region_data['underline']
             if 'font_weight' in region_data:
                 calculated_params.font_weight = region_data['font_weight']
+
+            # 字体路径
+            if 'font_path' in region_data and region_data['font_path']:
+                calculated_params.font_path = region_data['font_path']
 
             # 可以添加其他需要从配置服务获取的参数
             self.region_parameters[region_index] = calculated_params

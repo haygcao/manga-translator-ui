@@ -1,6 +1,7 @@
 import os
 import re
 import cv2
+import logging
 import numpy as np
 from typing import List
 from shapely import affinity
@@ -10,6 +11,7 @@ from tqdm import tqdm
 from . import text_render
 from .text_render_eng import render_textblock_list_eng
 from .text_render_pillow_eng import render_textblock_list_eng as render_textblock_list_eng_pillow
+from .ballon_extractor import extract_ballon_region
 from ..utils import (
     BASE_PATH,
     TextBlock,
@@ -20,6 +22,77 @@ from ..utils import (
 from ..config import Config
 
 logger = get_logger('render')
+
+# Global variable to store default font path for regions without specific fonts
+_global_default_font_path = ''
+
+def find_largest_inscribed_rect(mask: np.ndarray) -> tuple:
+    """
+    Find the largest axis-aligned rectangle that fits inside the mask.
+    Uses distance transform to find a good inscribed rectangle.
+    
+    Returns:
+        (x, y, width, height) of the largest inscribed rectangle
+    """
+    if mask.sum() == 0:
+        return 0, 0, 0, 0
+    
+    # Distance transform to find distances from edges
+    dist_transform = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+    
+    # Find the maximum distance (center of largest inscribed circle)
+    _, max_dist, _, max_loc = cv2.minMaxLoc(dist_transform)
+    center_x, center_y = max_loc
+    
+    h, w = mask.shape
+    
+    # Start with a rectangle based on distance transform
+    # Use 85% of max distance as initial radius for conservative estimate
+    radius = int(max_dist * 0.85)
+    
+    x1 = max(0, center_x - radius)
+    y1 = max(0, center_y - radius)
+    x2 = min(w, center_x + radius)
+    y2 = min(h, center_y + radius)
+    
+    # Expand rectangle while it stays inside the mask
+    # Try to expand in all four directions
+    max_iterations = 100
+    improved = True
+    iteration = 0
+    
+    while improved and iteration < max_iterations:
+        improved = False
+        iteration += 1
+        
+        # Try expanding left
+        if x1 > 0 and np.all(mask[y1:y2, x1-1] > 0):
+            x1 -= 1
+            improved = True
+        
+        # Try expanding right
+        if x2 < w and np.all(mask[y1:y2, x2] > 0):
+            x2 += 1
+            improved = True
+        
+        # Try expanding up
+        if y1 > 0 and np.all(mask[y1-1, x1:x2] > 0):
+            y1 -= 1
+            improved = True
+        
+        # Try expanding down
+        if y2 < h and np.all(mask[y2, x1:x2] > 0):
+            y2 += 1
+            improved = True
+    
+    rect_width = x2 - x1
+    rect_height = y2 - y1
+    
+    if rect_width <= 0 or rect_height <= 0:
+        # Fallback to a small rectangle at center
+        return max(0, center_x - 5), max(0, center_y - 5), 10, 10
+    
+    return x1, y1, rect_width, rect_height
 
 def parse_font_paths(path: str, default: List[str] = None) -> List[str]:
     if path:
@@ -46,8 +119,22 @@ def count_text_length(text: str) -> float:
             length += 1.0
     return length
 
-def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock'], config: Config):
+def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock'], config: Config, original_img: np.ndarray = None, return_debug_img: bool = False):
+    """
+    Resize text regions based on layout mode.
+    
+    Args:
+        return_debug_img: If True, returns (dst_points_list, debug_img) for balloon_fill mode
+    """
     mode = config.render.layout_mode
+    logger.info(f"=== resize_regions_to_font_size called with mode='{mode}' ===")
+    logger.info(f"Total regions: {len(text_regions)}, original_img provided: {original_img is not None}")
+
+    # Prepare debug image for balloon_fill mode (only when requested)
+    debug_img = None
+    if mode == 'balloon_fill' and original_img is not None and return_debug_img:
+        debug_img = original_img.copy()
+        logger.debug("Created debug image for balloon_fill visualization")
 
     dst_points_list = []
     for region_idx, region in enumerate(text_regions):
@@ -74,6 +161,163 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
         # 保存应用偏移量后的字体大小，用于JSON导出
         region.offset_applied_font_size = int(target_font_size)
 
+        # --- Mode 5: balloon_fill (MUST BE FIRST to override other modes) ---
+        if mode == 'balloon_fill':
+            logger.info(f"=== balloon_fill mode activated for region {region_idx} ===")
+            logger.info(f"OCR box (xywh): {region.xywh}")
+            
+            if original_img is None:
+                # Fallback to default if no original image
+                logger.warning("balloon_fill mode requires original_img, falling back to OCR box")
+                dst_points_list.append(region.min_rect)
+                region.font_size = target_font_size
+                continue
+            
+            try:
+                # Step 1: Extract balloon region
+                enlarge_ratio = min(max(region.xywh[2] / region.xywh[3], region.xywh[3] / region.xywh[2]) * 1.5, 3)
+                logger.info(f"Enlarge ratio: {enlarge_ratio}")
+                
+                ballon_mask, xyxy = extract_ballon_region(original_img, region.xywh, enlarge_ratio=enlarge_ratio)
+                ballon_area = (ballon_mask > 0).sum()
+                
+                if ballon_area == 0:
+                    # Balloon detection failed, use original OCR box
+                    logger.warning(f"Balloon detection failed for region {region_idx}, using OCR box")
+                    dst_points_list.append(region.min_rect)
+                    region.font_size = target_font_size
+                    continue
+                
+                # Calculate balloon bounding rect (minimum bounding rectangle)
+                region_x, region_y, region_w, region_h = cv2.boundingRect(cv2.findNonZero(ballon_mask))
+                
+                # Convert to absolute coordinates
+                balloon_x1 = xyxy[0] + region_x
+                balloon_y1 = xyxy[1] + region_y
+                balloon_width = region_w
+                balloon_height = region_h
+                
+                logger.info(f"Balloon size: {balloon_width}x{balloon_height} at ({balloon_x1}, {balloon_y1})")
+                
+                # Step 2: Calculate required text dimensions
+                required_width = 0
+                required_height = 0
+                
+                # Determine max dimensions for text calculation (following smart_scaling logic)
+                text_for_calc = region.translation
+                if config.render.disable_auto_wrap:
+                    # AI line breaking enabled
+                    text_for_calc = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text_for_calc, flags=re.IGNORECASE)
+                    use_unlimited_dimension = True
+                elif '\n' not in text_for_calc and len(text_regions) <= 1:
+                    # Smart scaling: no manual breaks and single region
+                    use_unlimited_dimension = True
+                else:
+                    use_unlimited_dimension = False
+                
+                logger.info(f"Use unlimited dimension: {use_unlimited_dimension}")
+                
+                if region.horizontal:
+                    # Horizontal text
+                    max_width_for_calc = 99999 if use_unlimited_dimension else balloon_width
+                    max_height_for_calc = 99999  # Height is always unlimited for horizontal
+                    
+                    lines, widths = text_render.calc_horizontal(
+                        target_font_size, 
+                        text_for_calc, 
+                        max_width=max_width_for_calc, 
+                        max_height=max_height_for_calc, 
+                        language=region.target_lang
+                    )
+                    if widths:
+                        spacing_y = int(target_font_size * (config.render.line_spacing or 0.01))
+                        required_width = max(widths)
+                        required_height = target_font_size * len(lines) + spacing_y * max(0, len(lines) - 1)
+                else:
+                    # Vertical text
+                    text_for_calc = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text_for_calc, flags=re.IGNORECASE)
+                    if config.render.auto_rotate_symbols:
+                        text_for_calc = text_render.auto_add_horizontal_tags(text_for_calc)
+                    
+                    max_height_for_calc = 99999 if use_unlimited_dimension else balloon_height
+                    
+                    lines, heights = text_render.calc_vertical(
+                        target_font_size, 
+                        text_for_calc, 
+                        max_height=max_height_for_calc
+                    )
+                    if heights:
+                        spacing_x = int(target_font_size * (config.render.line_spacing or 0.2))
+                        required_height = max(heights)
+                        required_width = target_font_size * len(lines) + spacing_x * max(0, len(lines) - 1)
+                
+                logger.info(f"Required text size: {required_width}x{required_height}")
+                
+                # Step 3: Calculate font scale factor
+                if required_width > 0 and required_height > 0:
+                    width_scale = balloon_width / required_width
+                    height_scale = balloon_height / required_height
+                    font_scale_factor = min(width_scale, height_scale)
+                    
+                    # Clamp to reasonable range
+                    font_scale_factor = max(min(font_scale_factor, 2.0), 0.3)
+                    
+                    logger.info(f"Font scale factor: {font_scale_factor} (width_scale={width_scale:.2f}, height_scale={height_scale:.2f})")
+                    
+                    # Apply font scaling
+                    target_font_size = int(target_font_size * font_scale_factor)
+                else:
+                    logger.warning(f"Invalid required dimensions, keeping original font size")
+                
+                # Step 4: Create dst_points based on balloon rectangle
+                new_dst_points = np.array([
+                    [balloon_x1, balloon_y1],
+                    [balloon_x1 + balloon_width, balloon_y1],
+                    [balloon_x1 + balloon_width, balloon_y1 + balloon_height],
+                    [balloon_x1, balloon_y1 + balloon_height]
+                ], dtype=np.float32).reshape(1, 4, 2)
+                
+                # Apply final font size adjustments
+                final_font_size = int(max(target_font_size, min_font_size) * config.render.font_scale_ratio)
+                if config.render.max_font_size > 0:
+                    final_font_size = min(final_font_size, config.render.max_font_size)
+                
+                region.font_size = final_font_size
+                dst_points_list.append(new_dst_points)
+                
+                logger.info(f"Final font size: {final_font_size}, dst_points: {new_dst_points[0]}")
+                
+                # === DEBUG: Draw rectangles on shared debug image ===
+                if debug_img is not None:
+                    # Draw OCR box (red) - convert to int
+                    ocr_x1, ocr_y1, ocr_w, ocr_h = map(int, region.xywh)
+                    cv2.rectangle(debug_img, (ocr_x1, ocr_y1), (ocr_x1 + ocr_w, ocr_y1 + ocr_h), (0, 0, 255), 2)
+                    cv2.putText(debug_img, f'OCR{region_idx}', (ocr_x1, ocr_y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                    
+                    # Draw enlarged search area (yellow) - convert to int
+                    search_x1, search_y1, search_x2, search_y2 = map(int, xyxy)
+                    cv2.rectangle(debug_img, (search_x1, search_y1), (search_x2, search_y2), (0, 255, 255), 2)
+                    
+                    # Draw balloon mask contour (blue) - actual detected balloon shape
+                    contours, _ = cv2.findContours(ballon_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if contours:
+                        # Offset contours to original image coordinates
+                        offset_contours = [cnt + np.array([[[xyxy[0], xyxy[1]]]]) for cnt in contours]
+                        cv2.drawContours(debug_img, offset_contours, -1, (255, 0, 0), 2)
+                    
+                    # Draw balloon bounding box (green) - the rectangle used for text rendering
+                    cv2.rectangle(debug_img, (int(balloon_x1), int(balloon_y1)), (int(balloon_x1 + balloon_width), int(balloon_y1 + balloon_height)), (0, 255, 0), 3)
+                    cv2.putText(debug_img, f'B{region_idx}', (int(balloon_x1), int(balloon_y1) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+            except Exception as e:
+                logger.error(f"Error in balloon_fill mode: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                # Fallback to OCR box
+                dst_points_list.append(region.min_rect)
+                region.font_size = target_font_size
+            
+            continue
 
         # --- Mode 1: disable_all (unchanged) ---
         if mode == 'disable_all':
@@ -476,7 +720,18 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
             region.font_size = final_font_size
             dst_points_list.append(dst_points)
             continue
-
+        
+    # Add legend to debug image
+    if return_debug_img and debug_img is not None:
+        # Add legend in top-left corner
+        legend_y = 30
+        cv2.putText(debug_img, 'Balloon Fill Debug:', (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(debug_img, 'Red = OCR Box', (10, legend_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        cv2.putText(debug_img, 'Yellow = Search Area', (10, legend_y + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+        cv2.putText(debug_img, 'Blue = Balloon Mask', (10, legend_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        cv2.putText(debug_img, 'Green = Render Box', (10, legend_y + 105), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        return dst_points_list, debug_img
+    
     return dst_points_list
 
 
@@ -484,20 +739,36 @@ async def dispatch(
     img: np.ndarray,
     text_regions: List[TextBlock],
     font_path: str = '',
-    config: Config = None
-    ) -> np.ndarray:
+    config: Config = None,
+    original_img: np.ndarray = None,
+    return_debug_img: bool = False
+    ):
 
     if config is None:
         from ..config import Config
         config = Config()
 
+    # Save global default font path for regions without specific fonts
+    global _global_default_font_path
+    _global_default_font_path = font_path
+    
     text_render.set_font(font_path)
     text_regions = list(filter(lambda region: region.translation, text_regions))
 
-    dst_points_list = resize_regions_to_font_size(img, text_regions, config)
+    result = resize_regions_to_font_size(img, text_regions, config, original_img, return_debug_img)
+    
+    # Handle return value (may be tuple if debug image is included)
+    if return_debug_img and isinstance(result, tuple):
+        dst_points_list, debug_img = result
+    else:
+        dst_points_list = result
+        debug_img = None
 
     for region, dst_points in tqdm(zip(text_regions, dst_points_list), '[render]', total=len(text_regions)):
         img = render(img, region, dst_points, not config.render.no_hyphenation, config.render.line_spacing, config.render.disable_font_border, config)
+    
+    if return_debug_img and debug_img is not None:
+        return img, debug_img
     return img
 
 def render(
@@ -509,6 +780,20 @@ def render(
     disable_font_border,
     config: Config
 ):
+    global _global_default_font_path
+    
+    # Set region-specific font if specified, otherwise use global default
+    if hasattr(region, 'font_path') and region.font_path:
+        if os.path.exists(region.font_path):
+            text_render.set_font(region.font_path)
+        else:
+            logger.warning(f"Font path not found for region: {region.font_path}, using default font")
+            # Fall back to global default font
+            text_render.set_font(_global_default_font_path)
+    else:
+        # No region-specific font, use global default font (from UI config)
+        text_render.set_font(_global_default_font_path)
+    
     # --- START BRUTEFORCE COLOR FIX ---
     fg = (0, 0, 0) # Default to black
     try:
@@ -523,7 +808,7 @@ def render(
         # Priority 2: Check for a pre-converted tuple
         elif hasattr(region, 'fg_colors') and isinstance(region.fg_colors, (tuple, list)) and len(region.fg_colors) == 3:
             fg = tuple(region.fg_colors)
-        # Last resort: Use the method
+        # Last resort: Use the method2
         else:
             fg, _ = region.get_font_colors()
     except Exception as e:
