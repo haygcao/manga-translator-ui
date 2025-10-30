@@ -25,7 +25,7 @@ result/
 *.spec
 
 # Batch files and executables
-*.bat
+
 *.exe
 *.sh
 

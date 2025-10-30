@@ -1,0 +1,154 @@
+@echo off
+chcp 936 >nul
+setlocal EnableDelayedExpansion
+
+echo.
+echo ========================================
+echo 漫画翻译器 - 更新维护工具
+echo Manga Translator UI - Update Tool
+echo ========================================
+echo.
+
+REM 检查虚拟环境
+if not exist "venv\Scripts\activate.bat" (
+    echo [ERROR] 虚拟环境不存在
+    echo 请先运行 步骤1-首次安装.bat
+    pause
+    exit /b 1
+)
+
+REM 激活虚拟环境
+call venv\Scripts\activate.bat
+
+REM 检查是否有便携版 Git
+if exist "PortableGit\cmd\git.exe" (
+    set GIT=PortableGit\cmd\git.exe
+    set PATH=%~dp0PortableGit\cmd;%PATH%
+) else (
+    git --version >nul 2>&1
+    if %ERRORLEVEL% == 0 (
+        set GIT=git
+    ) else (
+        echo [ERROR] 未找到 Git
+        echo 请先安装 Git 或运行 步骤1-首次安装.bat
+        pause
+        exit /b 1
+    )
+)
+
+REM 菜单
+:menu
+echo.
+echo 请选择操作:
+echo [1] 更新代码
+echo [2] 更新/安装依赖
+echo [3] 完整更新 (代码+依赖)
+echo [4] 退出
+echo.
+set /p choice="请选择 (1/2/3/4): "
+
+if "%choice%"=="1" goto update_code
+if "%choice%"=="2" goto update_deps
+if "%choice%"=="3" goto full_update
+if "%choice%"=="4" goto end
+
+echo 无效选项
+goto menu
+
+:update_code
+echo.
+echo ========================================
+echo 更新代码
+echo ========================================
+echo.
+
+echo 检查本地修改...
+%GIT% diff --quiet
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo [警告] 检测到本地文件已修改
+    echo git pull 会覆盖本地修改的文件
+    echo 新添加的文件不会被删除
+    echo.
+    set /p continue="是否继续更新? (y/n): "
+    if /i not "!continue!"=="y" (
+        echo 取消更新
+        goto menu
+    )
+)
+
+echo 正在拉取最新代码...
+%GIT% pull
+
+if %ERRORLEVEL% == 0 (
+    echo [OK] 代码更新完成
+) else (
+    echo [ERROR] 代码更新失败
+)
+pause
+goto menu
+
+:update_deps
+echo.
+echo ========================================
+echo 更新/安装依赖
+echo ========================================
+echo.
+
+python launch.py --frozen
+
+if %ERRORLEVEL% == 0 (
+    echo [OK] 依赖更新完成
+) else (
+    echo [ERROR] 依赖更新失败
+)
+pause
+goto menu
+
+:full_update
+echo.
+echo ========================================
+echo 完整更新 (代码+依赖)
+echo ========================================
+echo.
+
+echo [1/2] 更新代码...
+%GIT% diff --quiet
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo [警告] 检测到本地文件已修改
+    echo git pull 会覆盖本地修改的文件
+    echo 新添加的文件不会被删除
+    echo.
+    set /p continue="是否继续更新? (y/n): "
+    if /i not "!continue!"=="y" (
+        echo 取消更新
+        goto menu
+    )
+)
+
+%GIT% pull
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] 代码更新失败
+    pause
+    goto menu
+)
+echo [OK] 代码更新完成
+
+echo.
+echo [2/2] 更新依赖...
+python launch.py --frozen
+
+if %ERRORLEVEL% == 0 (
+    echo.
+    echo [OK] 完整更新完成
+) else (
+    echo [ERROR] 依赖更新失败
+)
+pause
+goto menu
+
+:end
+echo.
+echo 退出更新工具
+pause
