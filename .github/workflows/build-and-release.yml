@@ -25,7 +25,7 @@ jobs:
         pip install -r requirements_cpu.txt
         pip install pyinstaller
     - name: Build CPU version
-      run: python build_packages.py "${{ github.ref_name }}" --build cpu
+      run: python packaging/build_packages.py "${{ github.ref_name }}" --build cpu
     - name: Upload CPU artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -47,7 +47,7 @@ jobs:
         pip install -r requirements_gpu.txt
         pip install pyinstaller
     - name: Build GPU version
-      run: python build_packages.py "${{ github.ref_name }}" --build gpu
+      run: python packaging/build_packages.py "${{ github.ref_name }}" --build gpu
     - name: Upload GPU artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -172,18 +172,12 @@ jobs:
         cp -r fonts dist/manga-translator-cpu/_internal/
         cp -r models dist/manga-translator-cpu/_internal/
         cp -r dict dist/manga-translator-cpu/_internal/
-        # cp -r update_repository/metadata dist/manga-translator-cpu/_internal/update_repository/
-        cp -r MangaStudio_Data dist/manga-translator-cpu/_internal/
->>>>>>> b86b72fb53a721cad4a1c672cacaafeb591c060d
         cp VERSION dist/manga-translator-cpu/_internal/
         
         cp -r examples dist/manga-translator-gpu/_internal/
         cp -r fonts dist/manga-translator-gpu/_internal/
         cp -r models dist/manga-translator-gpu/_internal/
         cp -r dict dist/manga-translator-gpu/_internal/
-        # cp -r update_repository/metadata dist/manga-translator-gpu/_internal/update_repository/
-        cp -r MangaStudio_Data dist/manga-translator-gpu/_internal/
->>>>>>> b86b72fb53a721cad4a1c672cacaafeb591c060d
         cp VERSION dist/manga-translator-gpu/_internal/
 
     - name: Create Release Archives using 7-Zip with Splitting

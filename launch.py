@@ -16,6 +16,7 @@ from pathlib import Path
 BRANCH = 'main'
 VERSION = '1.7.6'
 PYTHON_VERSION_MIN = (3, 12)
+PYTHON_VERSION_MAX = (3, 12)  # 仅支持Python 3.12,不支持3.13+
 
 # 路径配置
 PATH_ROOT = Path(__file__).parent
@@ -40,6 +41,11 @@ def is_python_version_valid():
     if sys.version_info < PYTHON_VERSION_MIN:
         print(f'错误: 需要 Python {PYTHON_VERSION_MIN[0]}.{PYTHON_VERSION_MIN[1]}+ ')
         print(f'当前版本: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')
+        return False
+    if sys.version_info[:2] > PYTHON_VERSION_MAX:
+        print(f'错误: 仅支持 Python {PYTHON_VERSION_MAX[0]}.{PYTHON_VERSION_MAX[1]},不支持更高版本')
+        print(f'当前版本: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')
+        print(f'请使用 Python {PYTHON_VERSION_MAX[0]}.{PYTHON_VERSION_MAX[1]} 版本')
         return False
     return True
 
