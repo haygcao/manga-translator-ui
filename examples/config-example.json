@@ -11,7 +11,8 @@
     "target_lang": "CHS",
     "no_text_lang_skip": false,
     "gpt_config": "../examples/gpt_config-example.yaml",
-    "high_quality_prompt_path": "dict/prompt_example.json"
+    "high_quality_prompt_path": "dict/prompt_example.json",
+    "max_requests_per_minute": 1
   },
   "ocr": {
     "use_mocr_merge": false,
@@ -95,7 +96,7 @@
     "template": false,
     "prep_manual": false,
     "save_quality": 100,
-    "batch_size": 3,
+    "batch_size": "3",
     "batch_concurrent": false,
     "generate_and_export": false,
     "colorize_only": false,
