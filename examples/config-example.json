@@ -12,7 +12,7 @@
     "no_text_lang_skip": false,
     "gpt_config": "../examples/gpt_config-example.yaml",
     "high_quality_prompt_path": "dict/prompt_example.json",
-    "max_requests_per_minute": "0"
+    "max_requests_per_minute": 0
   },
   "ocr": {
     "use_mocr_merge": false,
@@ -69,6 +69,7 @@
     "font_scale_ratio": 1.0,
     "center_text_in_bubble": false,
     "optimize_line_breaks": true,
+    "check_br_and_retry": false,
     "strict_smart_scaling": true
   },
   "upscale": {
@@ -96,10 +97,10 @@
     "template": false,
     "prep_manual": false,
     "save_quality": 100,
-    "batch_size": 3,
+    "batch_size": 2,
     "batch_concurrent": false,
     "generate_and_export": false,
     "colorize_only": false,
-    "high_quality_batch_size": 3
+    "high_quality_batch_size": 1
   }
 }

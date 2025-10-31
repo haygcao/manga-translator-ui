@@ -82,6 +82,25 @@ class LanguageUnsupportedException(Exception):
             error += '. Supported languages: "%s"' % ','.join(supported_languages)
         super().__init__(error)
 
+class BRMarkersValidationException(Exception):
+    """AI断句检查失败异常"""
+    def __init__(self, missing_count: int, total_count: int, tolerance: int):
+        self.missing_count = missing_count
+        self.total_count = total_count
+        self.tolerance = tolerance
+        super().__init__(
+            f"AI断句检查失败：{missing_count}/{total_count} 条翻译缺失[BR]标记（容忍度：{tolerance}）"
+        )
+
+class MultimodalUnsupportedException(Exception):
+    """模型不支持多模态输入异常"""
+    def __init__(self, model_name: str, translator: str):
+        self.model_name = model_name
+        self.translator = translator
+        super().__init__(
+            f"模型 {model_name} 不支持多模态输入（图片+文本）"
+        )
+
 class MTPEAdapter():
     async def dispatch(self, queries: List[str], translations: List[str]) -> List[str]:
         # TODO: Make it work in windows (e.g. through os.startfile)
@@ -123,6 +142,117 @@ class CommonTranslator(InfererModule):
         self.post_check_repetition_threshold = 5
         self.post_check_max_retry_attempts = 2
         self.attempts = -1
+
+    def _validate_br_markers(self, translations: List[str], queries: List[str] = None, ctx=None, batch_indices: List[int] = None, batch_data: List = None, split_level: int = 0) -> bool:
+        """
+        检查翻译结果是否包含必要的[BR]标记
+        Check if translations contain necessary [BR] markers
+        
+        Args:
+            translations: 翻译结果列表
+            queries: 原始查询列表（可选）
+            ctx: 上下文（用于获取配置和区域信息）
+            batch_indices: 批次索引列表（可选，用于定位text_regions）
+            batch_data: 批次数据列表（可选，HQ翻译器使用）
+            split_level: 分割级别（可选，用于跳过深度分割时的检查）
+            
+        Returns:
+            True if validation passes, False if BR markers are missing
+        """
+        import re
+        
+        # 如果分割级别过深（>=3），跳过BR检查以避免无限重试
+        if split_level >= 3:
+            self.logger.info(f"[AI断句检查] 分割级别过深 (split_level={split_level})，跳过BR标记检查")
+            return True
+        
+        # 检查是否启用了BR检查
+        check_enabled = False
+        if ctx and hasattr(ctx, 'config') and hasattr(ctx.config, 'render'):
+            check_enabled = getattr(ctx.config.render, 'check_br_and_retry', False)
+        
+        if not check_enabled:
+            return True  # 检查未启用，直接通过
+        
+        # 检查是否启用了AI断句
+        ai_break_enabled = False
+        if ctx and hasattr(ctx, 'config') and hasattr(ctx.config, 'render'):
+            ai_break_enabled = getattr(ctx.config.render, 'disable_auto_wrap', False)
+        
+        if not ai_break_enabled:
+            return True  # AI断句未启用，不需要检查BR
+        
+        # 提取每个翻译对应的区域数
+        region_counts = []
+        if ctx and hasattr(ctx, 'text_regions') and ctx.text_regions:
+            for idx in range(len(translations)):
+                # 确定实际的region索引
+                if batch_indices and idx < len(batch_indices):
+                    region_idx = batch_indices[idx]
+                else:
+                    region_idx = idx
+                
+                if region_idx < len(ctx.text_regions):
+                    region = ctx.text_regions[region_idx]
+                    region_count = len(region.lines) if hasattr(region, 'lines') else 1
+                    region_counts.append(region_count)
+                else:
+                    region_counts.append(1)  # 默认为1
+        elif batch_data:
+            # HQ翻译器使用batch_data
+            for idx in range(len(translations)):
+                region_idx = idx
+                for data in batch_data:
+                    if 'text_regions' in data and data['text_regions'] and region_idx < len(data['text_regions']):
+                        region = data['text_regions'][region_idx]
+                        region_count = len(region.lines) if hasattr(region, 'lines') else 1
+                        region_counts.append(region_count)
+                        break
+                else:
+                    region_counts.append(1)
+        else:
+            region_counts = [1] * len(translations)  # 默认都为1
+        
+        # 检查每个翻译，统计缺失BR的数量
+        needs_check_count = 0
+        missing_br_count = 0
+        missing_indices = []
+        
+        for idx, (translation, region_count) in enumerate(zip(translations, region_counts)):
+            # 只检查区域数≥2的翻译
+            if region_count >= 2:
+                needs_check_count += 1
+                # 检查是否包含BR标记
+                has_br = bool(re.search(r'(\[BR\]|【BR】|<br>)', translation, flags=re.IGNORECASE))
+                if not has_br:
+                    missing_br_count += 1
+                    missing_indices.append(idx + 1)
+                    self.logger.warning(
+                        f"Translation {idx+1} missing [BR] markers (expected for {region_count} regions): {translation[:50]}..."
+                    )
+        
+        # 计算容忍的错误数量：十分之一，最少1个
+        if needs_check_count > 0:
+            tolerance = max(1, needs_check_count // 10)
+            
+            if missing_br_count > tolerance:
+                # 超过容忍度，验证失败
+                self.logger.warning(
+                    f"[AI断句检查] 缺失BR标记的翻译数 ({missing_br_count}/{needs_check_count}) 超过容忍度 ({tolerance})，需要重试"
+                )
+                return False
+            elif missing_br_count > 0:
+                # 在容忍度内，警告但通过
+                self.logger.warning(
+                    f"[AI断句检查] ⚠ {missing_br_count}/{needs_check_count} 条翻译缺失BR标记，但在容忍度内 ({tolerance})，继续执行"
+                )
+                return True
+            else:
+                # 全部通过
+                self.logger.info(f"[AI断句检查] ✓ 所有多行区域的翻译都包含[BR]标记 (检查了 {needs_check_count}/{len(translations)} 条)")
+                return True
+        
+        return True  # 没有需要检查的翻译，直接通过
 
     def parse_args(self, config):
         self.enable_post_translation_check = getattr(config, 'enable_post_translation_check', self.enable_post_translation_check)

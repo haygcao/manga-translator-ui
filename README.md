@@ -155,6 +155,8 @@
 ## 🙏 致谢
 
 - [zyddnys/manga-image-translator](https://github.com/zyddnys/manga-image-translator) - 核心翻译引擎
+- [lhj5426/YSG](https://github.com/lhj5426/YSG) - 提供模型支持
+- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 提供 OCR 模型支持
 - 所有贡献者和用户的支持
 
 ---

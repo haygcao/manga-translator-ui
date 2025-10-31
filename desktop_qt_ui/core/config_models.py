@@ -86,6 +86,7 @@ class RenderSettings(BaseModel):
     font_scale_ratio: float = 1.0
     center_text_in_bubble: bool = False
     optimize_line_breaks: bool = False
+    check_br_and_retry: bool = False
     strict_smart_scaling: bool = False
 
 class UpscaleSettings(BaseModel):
@@ -98,7 +99,7 @@ class ColorizerSettings(BaseModel):
     colorizer: str = "none"
 
 class CliSettings(BaseModel):
-    verbose: bool = True
+    verbose: bool = False  # 默认关闭详细日志
     attempts: int = -1
     ignore_errors: bool = False
     use_gpu: bool = True

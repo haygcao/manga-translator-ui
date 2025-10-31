@@ -1,392 +1,439 @@
+import os
 import re
-import google.generativeai as genai
-from google.generativeai import types
-
 import asyncio
-from typing import List
-from .common import MissingAPIKeyException, InvalidServerResponse
-from .common_gpt import CommonGPTTranslator, _CommonGPTTranslator_JSON
+import json
+from typing import List, Dict, Any
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+from .common import CommonTranslator, VALID_LANGUAGES
+from .keys import GEMINI_API_KEY
+from ..utils import Context
 
 
-# Text Formatting:
-# For Windows: enable ANSI escape code support
-from colorama import init as initColorama
+def _flatten_prompt_data(data: Any, indent: int = 0) -> str:
+    """Recursively flattens a dictionary or list into a formatted string."""
+    prompt_parts = []
+    prefix = "  " * indent
 
-BOLD='\033[1m' # Bold text
-NRML='\033[0m' # Revert to Normal formatting
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                prompt_parts.append(f"{prefix}- {key}:")
+                prompt_parts.append(_flatten_prompt_data(value, indent + 1))
+            else:
+                prompt_parts.append(f"{prefix}- {key}: {value}")
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, (dict, list)):
+                prompt_parts.append(_flatten_prompt_data(item, indent + 1))
+            else:
+                prompt_parts.append(f"{prefix}- {item}")
+    
+    return "\n".join(prompt_parts)
 
-class GeminiTranslator(CommonGPTTranslator):
-    _INVALID_REPEAT_COUNT = 0  # 现在这个参数没意义了
-    _MAX_REQUESTS_PER_MINUTE = 9999  # 无RPM限制
-    _TIMEOUT = 40  # 在重试之前等待服务器响应的时间（秒）
-    _RETRY_ATTEMPTS = 3  # 在放弃之前重试错误请求的次数
-    _TIMEOUT_RETRY_ATTEMPTS = 3  # 在放弃之前重试超时请求的次数
-    _RATELIMIT_RETRY_ATTEMPTS = 3  # 在放弃之前重试速率限制请求的次数
-
-    _MAX_TOKENS = 8192
-    _MAX_TOKENS_IN = _MAX_TOKENS // 2
-
+class GeminiTranslator(CommonTranslator):
+    """
+    Gemini纯文本翻译器
+    支持批量文本翻译，不包含图片处理
+    """
+    _LANGUAGE_CODE_MAP = VALID_LANGUAGES
+    
+    # 类变量: 跨实例共享的RPM限制时间戳
+    _GLOBAL_LAST_REQUEST_TS = {}  # {model_name: timestamp}
+    
     def __init__(self):
-        # 重新加载 .env 文件以获取最新配置 - 必须在任何环境变量读取之前
+        super().__init__()
+        self.client = None
+        self.prev_context = ""  # 用于存储多页上下文
+        # Initial setup from environment variables
+        # 重新加载 .env 文件以获取最新配置
         from dotenv import load_dotenv
-        import os
         load_dotenv(override=True)
-        
-        # 动态读取GEMINI_MODEL，而不是使用模块级常量
-        self.model = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash-002')
-        
-        _CONFIG_KEY = 'gemini.' + self.model
-        CommonGPTTranslator.__init__(self, config_key=_CONFIG_KEY)
-        initColorama()
-
-        self.cached_content = None
-        self.templateCache = None
-        self.cachedVals={None}
-        
-        # 初始化 attempts，将在 parse_args 中从 UI 配置读取
-        # 默认值 -1 表示无限重试，用于向后兼容
-        self.attempts = -1
-        
-        # 初始化配置
-        self._configure_api()
-
-    def _configure_api(self):
-        """配置或重新配置Gemini API"""
-        import os
-        
-        # 直接从环境变量读取,不使用keys.py中的常量
-        api_key = os.getenv('GEMINI_API_KEY', '')
-        api_base = os.getenv('GEMINI_API_BASE')
-
-        if not api_key:
-            raise MissingAPIKeyException(
-                        'Please set the GEMINI_API_KEY environment variable '
-                        'before using the Gemini translator.'
-                    )
-
-        client_options = {"api_endpoint": api_base} if api_base else None
-
-        genai.configure(
-            api_key=api_key,
-            transport='rest',
-            client_options=client_options
-        )
-
-        # 只有在使用官方API时才尝试获取模型信息，避免第三方API的404错误
-        # 判断是否为官方 API：未设置 base_url 或 base_url 是官方地址
-        is_official_api = not api_base or api_base == 'https://generativelanguage.googleapis.com' or api_base.startswith('https://generativelanguage.googleapis.com')
-        if is_official_api:
-            try:
-                model_info = genai.get_model(f'models/{self.model}')
-                self._MAX_TOKENS = model_info.output_token_limit
-                self._MAX_TOKENS_IN = self._MAX_TOKENS // 2
-            except Exception as e:
-                self.logger.warning(f"Could not get model info for {self.model}. Using default token limits. Error: {e}")
-
-        # 只有在使用官方API时才设置safety_settings，第三方API可能不支持
-        self.safety_settings = None
-        if is_official_api:
-            self.safety_settings = [
-                {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_NONE",
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH",
-                    "threshold": "BLOCK_NONE",
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_NONE",
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_NONE",
-                }
-            ]
-            self.logger.info(f"使用官方Google API，应用安全设置。Base URL: {api_base or '默认'}")
-        else:
-            self.logger.info(f"检测到第三方API，已禁用安全设置和模型信息获取。Base URL: {api_base}")
-        
-        generation_config = {
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-        }
-
-        self.client = genai.GenerativeModel(self.model, generation_config=generation_config, safety_settings=self.safety_settings)
-        
-        self.token_count = 0
-        self.token_count_last = 0 
-        self.config = None
-
-    @property
-    def useCache(self) -> bool:
-        return False
-
-    def withinTokenLimit(self, text: str) -> bool:
-        return True
-
-    def parse_args(self, args: CommonGPTTranslator):
-        super().parse_args(args)
-        # 从配置中读取重试次数
-        self.attempts = getattr(args, 'attempts', self.attempts)
+        self.api_key = os.getenv('GEMINI_API_KEY', GEMINI_API_KEY)
+        self.base_url = os.getenv('GEMINI_API_BASE', 'https://generativelanguage.googleapis.com')
+        self.model_name = os.getenv('GEMINI_MODEL', "gemini-1.5-flash")
+        self.max_tokens = 8000  # 设置为8000，避免超过API限制
+        self.temperature = 0.1
+        self._MAX_REQUESTS_PER_MINUTE = 0  # 默认无限制
+        # 使用全局时间戳,跨实例共享
+        if self.model_name not in GeminiTranslator._GLOBAL_LAST_REQUEST_TS:
+            GeminiTranslator._GLOBAL_LAST_REQUEST_TS[self.model_name] = 0
+        self._last_request_ts_key = self.model_name
+        self.safety_settings = [
+            {
+                "category": HarmCategory.HARM_CATEGORY_HARASSMENT,
+                "threshold": HarmBlockThreshold.BLOCK_NONE,
+            },
+            {
+                "category": HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                "threshold": HarmBlockThreshold.BLOCK_NONE,
+            },
+            {
+                "category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                "threshold": HarmBlockThreshold.BLOCK_NONE,
+            },
+            {
+                "category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                "threshold": HarmBlockThreshold.BLOCK_NONE,
+            },
+        ]
+        self._setup_client()
+    
+    def set_prev_context(self, context: str):
+        """设置多页上下文（用于context_size > 0时）"""
+        self.prev_context = context if context else ""
+    
+    def parse_args(self, args):
+        """解析配置参数"""
         # 从配置中读取RPM限制
         max_rpm = getattr(args, 'max_requests_per_minute', 0)
         if max_rpm > 0:
             self._MAX_REQUESTS_PER_MINUTE = max_rpm
             self.logger.info(f"Setting Gemini max requests per minute to: {max_rpm}")
-        if self.json_mode:
-            self._init_json_mode()
-        else:
-            self._init_standard_mode()
-
-    def _init_json_mode(self):
-        self._json_funcs = _GeminiTranslator_json(self)
-        self._createContext = self._json_funcs._createContext
-        self._request_translation = self._json_funcs._request_translation
-        self._assemble_prompts = self._json_funcs._assemble_prompts
-        self._parse_response = self._json_funcs._parse_response
-
-    def _init_standard_mode(self):
-        self._assemble_prompts = super()._assemble_prompts
-
-    def count_tokens(self, text: str) -> int:
-        # Bypassed by withinTokenLimit, but providing a safe fallback.
-        return len(text)
     
-    def _createContext(self, to_lang: str):
-        pass
+    def _setup_client(self):
+        """设置Gemini客户端"""
+        if not self.client and self.api_key:
+            client_options = {"api_endpoint": self.base_url} if self.base_url else None
+
+            genai.configure(
+                api_key=self.api_key,
+                transport='rest',  # 支持自定义base_url
+                client_options=client_options
+            )
+            
+            # Apply different configs for different API types
+            # 判断是否为官方 API：未设置 base_url 或 base_url 是官方地址
+            is_official_api = not self.base_url or self.base_url == 'https://generativelanguage.googleapis.com' or self.base_url.startswith('https://generativelanguage.googleapis.com')
+
+            if is_official_api:
+                # Official Google API - full config
+                generation_config = {
+                    "temperature": self.temperature,
+                    "top_p": 0.95,
+                    "top_k": 64,
+                    "max_output_tokens": self.max_tokens,
+                    "response_mime_type": "text/plain",
+                }
+                model_args = {
+                    "model_name": self.model_name,
+                    "generation_config": generation_config,
+                    "safety_settings": self.safety_settings
+                }
+                self.logger.info(f"使用官方Google API，应用完整配置（包含安全设置）。Base URL: {self.base_url or '默认'}")
+            else:
+                # Third-party API - minimal config to avoid format issues
+                generation_config = {
+                    "temperature": self.temperature,
+                    "max_output_tokens": self.max_tokens,
+                }
+                model_args = {
+                    "model_name": self.model_name,
+                    "generation_config": generation_config,
+                }
+                self.logger.info(f"检测到第三方API，使用简化配置（不发送安全设置）。Base URL: {self.base_url}")
+
+            self.client = genai.GenerativeModel(**model_args)
+    
+    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+        """构建系统提示词"""
+        # Map language codes to full names for clarity in the prompt
+        lang_map = {
+            "CHS": "Simplified Chinese",
+            "CHT": "Traditional Chinese",
+            "JPN": "Japanese",
+            "ENG": "English",
+            "KOR": "Korean",
+            "VIN": "Vietnamese",
+            "FRA": "French",
+            "DEU": "German",
+            "ITA": "Italian",
+        }
+        target_lang_full = lang_map.get(target_lang, target_lang)
+
+        custom_prompt_str = ""
+        if custom_prompt_json:
+            custom_prompt_str = _flatten_prompt_data(custom_prompt_json)
+
+        line_break_prompt_str = ""
+        if line_break_prompt_json and line_break_prompt_json.get('line_break_prompt'):
+            line_break_prompt_str = line_break_prompt_json['line_break_prompt']
+
+        try:
+            from ..utils import BASE_PATH
+            import os
+            import json
+            prompt_path = os.path.join(BASE_PATH, 'dict', 'system_prompt_hq.json')
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                base_prompt_data = json.load(f)
+            base_prompt = base_prompt_data['system_prompt']
+        except Exception as e:
+            self.logger.warning(f"Failed to load system prompt from file, falling back to hardcoded prompt. Error: {e}")
+            base_prompt = f"""You are an expert manga translator. Your task is to accurately translate manga text from the source language into **{{{target_lang}}}**.
+
+**CRITICAL INSTRUCTIONS (FOLLOW STRICTLY):**
+
+1.  **DIRECT TRANSLATION ONLY**: Your output MUST contain ONLY the raw, translated text. Nothing else.
+    -   DO NOT include the original text.
+    -   DO NOT include any explanations, greetings, apologies, or any conversational text.
+    -   DO NOT use Markdown formatting (like ```json or ```).
+    -   The output is fed directly to an automated script. Any extra text will cause it to fail.
+
+2.  **MATCH LINE COUNT**: The number of lines in your output MUST EXACTLY match the number of text regions you are asked to translate. Each line in your output corresponds to one numbered text region in the input.
+
+3.  **TRANSLATE EVERYTHING**: Translate all text provided, including sound effects and single characters. Do not leave any line untranslated.
+
+4.  **ACCURACY AND TONE**:
+    -   Preserve the original tone, emotion, and character's voice.
+    -   Ensure consistent translation of names, places, and special terms.
+    -   For onomatopoeia (sound effects), provide the equivalent sound in {{{target_lang}}} or a brief description (e.g., '(rumble)', '(thud)').
+
+---
+
+**EXAMPLE OF CORRECT AND INCORRECT OUTPUT:**
+
+**[ CORRECT OUTPUT EXAMPLE ]**
+This is a correct response. Notice it only contains the translated text, with each translation on a new line.
+
+(Imagine the user input was: "1. うるさい！", "2. 黙れ！")
+```
+吵死了！
+闭嘴！
+```
+
+**[ ❌ INCORRECT OUTPUT EXAMPLE ]**
+This is an incorrect response because it includes extra text and explanations.
+
+(Imagine the user input was: "1. うるさい！", "2. 黙れ！")
+```
+好的，这是您的翻译：
+1. 吵死了！
+2. 闭嘴！
+```
+**REASONING:** The above example is WRONG because it includes "好的，这是您的翻译：" and numbering. Your response must be ONLY the translated text, line by line.
+
+---
+
+**FINAL INSTRUCTION:** Now, perform the translation task. Remember, your response must be clean, containing only the translated text.
+"""
+
+        # Replace placeholder with the full language name
+        base_prompt = base_prompt.replace("{{{target_lang}}}", target_lang_full)
+
+        # Combine prompts
+        final_prompt = ""
+        if line_break_prompt_str:
+            final_prompt += f"{line_break_prompt_str}\n\n---\n\n"
+        if custom_prompt_str:
+            final_prompt += f"{custom_prompt_str}\n\n---\n\n"
         
-    def _needRecache(self) -> bool:
-        return False
+        final_prompt += base_prompt
+        return final_prompt
+
+    def _build_user_prompt(self, texts: List[str], ctx: Any) -> str:
+        """构建用户提示词（纯文本版）"""
+        # 检查是否开启AI断句
+        enable_ai_break = False
+        if ctx and hasattr(ctx, 'config') and ctx.config and hasattr(ctx.config, 'render'):
+            enable_ai_break = getattr(ctx.config.render, 'disable_auto_wrap', False)
+
+        prompt = ""
+        
+        # 添加多页上下文（如果有）
+        if self.prev_context:
+            prompt += f"{self.prev_context}\n\n---\n\n"
+            self.logger.info(f"[Gemini历史上下文] 长度: {len(self.prev_context)} 字符")
+            self.logger.info(f"[Gemini历史上下文内容]\n{self.prev_context[:500]}...")
+        else:
+            self.logger.info(f"[Gemini历史上下文] 无历史上下文（可能是第一张图片或context_size=0）")
+        
+        prompt += "Please translate the following manga text regions:\n\n"
+        
+        for i, text in enumerate(texts):
+            text_to_translate = text.replace('\n', ' ').replace('\ufffd', '')
+            # 只有开启AI断句时才添加区域信息
+            if enable_ai_break and ctx and hasattr(ctx, 'text_regions') and ctx.text_regions and i < len(ctx.text_regions):
+                region = ctx.text_regions[i]
+                region_count = len(region.lines) if hasattr(region, 'lines') else 1
+                prompt += f"{i+1}. [Original regions: {region_count}] {text_to_translate}\n"
+            else:
+                prompt += f"{i+1}. {text_to_translate}\n"
+        
+        prompt += "\nCRITICAL: Provide translations in the exact same order as the numbered input text regions. Your first line of output must be the translation for text region #1, your second line for #2, and so on. DO NOT CHANGE THE ORDER."
+        
+        return prompt
+
+    async def _translate_batch(self, texts: List[str], source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, ctx: Any = None) -> List[str]:
+        """批量翻译方法（纯文本）"""
+        if not texts:
+            return []
+        
+        if not self.client:
+            self._setup_client()
+        
+        if not self.client:
+            self.logger.error("Gemini客户端初始化失败")
+            return texts
+        
+        # 打印输入的原文 - 已注释以减少日志输出
+        # self.logger.info("--- Original Texts for Translation ---")
+        # for i, text in enumerate(texts):
+        #     self.logger.info(f"{i+1}: {text}")
+        # self.logger.info("------------------------------------")
+
+        # 添加系统提示词和用户提示词
+        system_prompt = self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
+        user_prompt = self._build_user_prompt(texts, ctx)
+        
+        combined_prompt = system_prompt + "\n\n" + user_prompt
+        
+        # 发送请求
+        max_retries = self.attempts
+        attempt = 0
+        is_infinite = max_retries == -1
+
+        # Dynamically construct arguments for generate_content
+        request_args = {
+            "contents": combined_prompt
+        }
+        is_third_party_api = self.base_url and self.base_url != 'https://generativelanguage.googleapis.com'
+        if is_third_party_api:
+            self.logger.warning("Omitting safety settings for third-party API request.")
+        else:
+            request_args["safety_settings"] = self.safety_settings
+
+        def generate_content_with_logging(**kwargs):
+            return self.client.generate_content(**kwargs)
+
+        while is_infinite or attempt < max_retries:
+            try:
+                # RPM限制
+                if self._MAX_REQUESTS_PER_MINUTE > 0:
+                    import time
+                    now = time.time()
+                    delay = 60.0 / self._MAX_REQUESTS_PER_MINUTE
+                    elapsed = now - GeminiTranslator._GLOBAL_LAST_REQUEST_TS[self._last_request_ts_key]
+                    if elapsed < delay:
+                        await asyncio.sleep(delay - elapsed)
+                    GeminiTranslator._GLOBAL_LAST_REQUEST_TS[self._last_request_ts_key] = time.time()
+                
+                response = await asyncio.to_thread(
+                    generate_content_with_logging,
+                    **request_args
+                )
+
+                # 检查finish_reason，只有成功(1)才继续，其他都重试
+                if hasattr(response, 'candidates') and response.candidates:
+                    candidate = response.candidates[0]
+                    if hasattr(candidate, 'finish_reason'):
+                        finish_reason = candidate.finish_reason
+
+                        if finish_reason != 1:  # 不是STOP(成功)
+                            attempt += 1
+                            log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+
+                            # 显示具体的finish_reason信息
+                            finish_reason_map = {
+                                1: "STOP(成功)",
+                                2: "SAFETY(安全策略拦截)",
+                                3: "MAX_TOKENS(达到最大token限制)",
+                                4: "RECITATION(内容重复检测)",
+                                5: "OTHER(其他未知错误)"
+                            }
+                            reason_desc = finish_reason_map.get(finish_reason, f"未知错误码({finish_reason})")
+
+                            self.logger.warning(f"Gemini API失败 ({log_attempt}): finish_reason={finish_reason} - {reason_desc}")
+
+                            if not is_infinite and attempt >= max_retries:
+                                self.logger.error(f"Gemini翻译在多次重试后仍失败: {reason_desc}")
+                                break
+                            await asyncio.sleep(1)
+                            continue
+
+                # 尝试访问 .text 属性，如果API因安全原因等返回空内容，这里会触发异常
+                result_text = response.text.strip()
+
+                # 调试日志：打印Gemini的原始返回内容
+                self.logger.info(f"--- Gemini Raw Response ---\n{result_text}\n---------------------------")
+
+                # 增加清理步骤，移除可能的Markdown代码块
+                if result_text.startswith("```") and result_text.endswith("```"):
+                    result_text = result_text[3:-3].strip()
+                
+                # 如果成功获取文本，则处理并返回
+                translations = []
+                for line in result_text.split('\n'):
+                    line = line.strip()
+                    if line:
+                        # 移除编号（如"1. "）
+                        line = re.sub(r'^\d+\.\s*', '', line)
+                        line = line.replace('\\n', '\n').replace('↵', '\n')
+                        translations.append(line)
+                
+                # 确保翻译数量匹配 - 用空字符串填充而不是原文
+                while len(translations) < len(texts):
+                    translations.append("")
+                
+                # 打印原文和译文的对应关系
+                self.logger.info("--- Translation Results ---")
+                for original, translated in zip(texts, translations):
+                    self.logger.info(f'{original} -> {translated}')
+                self.logger.info("---------------------------")
+
+                # BR检查：检查翻译结果是否包含必要的[BR]标记
+                if not self._validate_br_markers(translations, queries=texts, ctx=ctx):
+                    attempt += 1
+                    log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+                    self.logger.warning(f"[{log_attempt}] BR markers missing, retrying...")
+                    
+                    # 如果达到最大重试次数，抛出友好的异常
+                    if not is_infinite and attempt >= max_retries:
+                        from .common import BRMarkersValidationException
+                        self.logger.error("Gemini翻译在多次重试后仍然失败：AI断句检查失败。")
+                        raise BRMarkersValidationException(
+                            missing_count=0,  # 具体数字在_validate_br_markers中已记录
+                            total_count=len(texts),
+                            tolerance=max(1, len(texts) // 10)
+                        )
+                    
+                    await asyncio.sleep(2)
+                    continue
+
+                return translations[:len(texts)]
+
+            except Exception as e:
+                attempt += 1
+                log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+                self.logger.warning(f"Gemini翻译出错 ({log_attempt}): {e}")
+
+                if "finish_reason: 2" in str(e) or "finish_reason is 2" in str(e):
+                    self.logger.warning("检测到Gemini安全设置拦截。正在重试...")
+                
+                # 检查是否达到最大重试次数（注意：attempt已经+1了）
+                if not is_infinite and attempt >= max_retries:
+                    self.logger.error("Gemini翻译在多次重试后仍然失败。即将终止程序。")
+                    raise e
+                
+                await asyncio.sleep(1)
+        
+        return texts
 
     async def _translate(self, from_lang: str, to_lang: str, queries: List[str], ctx=None) -> List[str]:
-        # 保存ctx到实例变量，供_request_translation使用
-        self.ctx = ctx
-
-        self.to_lang=to_lang
-        translations = [''] * len(queries)
-        self.logger.debug(f'Temperature: {self.temperature}, TopP: {self.top_p}')
-        MAX_SPLIT_ATTEMPTS = 5
-        # 优先使用配置中的attempts，如果没有则使用默认的_RETRY_ATTEMPTS
-        RETRY_ATTEMPTS = self.attempts if hasattr(self, 'attempts') and self.attempts is not None else self._RETRY_ATTEMPTS
-
-        async def translate_batch(prompt_queries, prompt_query_indices, split_level=0):
-            nonlocal MAX_SPLIT_ATTEMPTS
-            prompt, query_size = self._assemble_prompts(from_lang, to_lang, prompt_queries, ctx).__next__()
-
-            server_error_attempt = 0
-            attempt = 0
-            while True:  # 使用while True来支持无限重试
-                if RETRY_ATTEMPTS != -1 and attempt >= RETRY_ATTEMPTS:
-                    break
-                try:
-                    response_text = await self._request_translation(to_lang, prompt)
-                    new_translations = self._parse_response(response_text, prompt_queries)
-
-                    if len(new_translations) < query_size:
-                        new_translations = re.split(r'\n', response_text)
-
-                    if len(new_translations) < query_size:
-                        self.logger.warning(f'Incomplete response, retrying...')
-                        attempt += 1
-                        continue
-
-                    new_translations = new_translations[:query_size] + [''] * (query_size - len(new_translations))
-                    new_translations = [t.split('\n')[0].strip() for t in new_translations]
-                    new_translations = [re.sub(r'^\s*<\|\d+\|>\s*', '', t) for t in new_translations]
-
-                    for idx, translation in zip(prompt_query_indices, new_translations):
-                        translations[idx] = translation
-
-                    self.logger.info(f'Batch translated: {len([t for t in translations if t])}/{len(queries)} completed.')
-                    return True
-                except Warning as e:
-                    if 'Single query response does not contain prefix' in str(e):
-                        # 对于没有前缀的单个查询响应，直接使用响应文本
-                        response_text = await self._request_translation(to_lang, prompt)
-                        new_translations = [response_text.strip()]
-
-                        for idx, translation in zip(prompt_query_indices, new_translations):
-                            translations[idx] = translation
-
-                        self.logger.info(f'Batch translated: {len([t for t in translations if t])}/{len(queries)} completed.')
-                        return True
-                    else:
-                        raise
-                except Exception as e:
-                    if isinstance(e, (types.BlockedPromptException, types.StopCandidateException)):
-                        self.logger.error(f"Translation blocked by API safety settings: {e}")
-                        raise
-
-                    server_error_attempt += 1
-                    # 检查是否超过重试次数（-1表示无限重试）
-                    if RETRY_ATTEMPTS != -1 and server_error_attempt >= RETRY_ATTEMPTS:
-                        self.logger.error(f'Gemini encountered a server error: {e}. Use a different translator or try again later.')
-                        raise
-                    self.logger.warning(f'Restarting request due to a server error. Attempt: {server_error_attempt}')
-                    await asyncio.sleep(1)
-
-                # 增加尝试计数器
-                attempt += 1
-
-            if split_level < MAX_SPLIT_ATTEMPTS:  
-                mid_index = len(prompt_queries) // 2  
-                futures = [translate_batch(prompt_queries[:mid_index], prompt_query_indices[:mid_index], split_level + 1),
-                           translate_batch(prompt_queries[mid_index:], prompt_query_indices[mid_index:], split_level + 1)]
-                await asyncio.gather(*futures)
-                return True
-            else:  
-                self.logger.error('Maximum split attempts reached.')  
-                return False
-
-        success = await translate_batch(queries, list(range(len(queries))))
-        if not success:
-            self.logger.error("Gemini translation failed after all retries and split attempts")
-            raise RuntimeError("Gemini translation failed after all retries and split attempts")
+        """主翻译方法"""
+        if not self.client:
+            from .. import manga_translator
+            if hasattr(manga_translator, 'config') and hasattr(manga_translator.config, 'translator'):
+                self.parse_args(manga_translator.config.translator)
+        
+        if not queries:
+            return []
+        
+        self.logger.info(f"使用Gemini纯文本翻译模式处理{len(queries)}个文本")
+        custom_prompt_json = getattr(ctx, 'custom_prompt_json', None) if ctx else None
+        line_break_prompt_json = getattr(ctx, 'line_break_prompt_json', None) if ctx else None
+        translations = await self._translate_batch(queries, from_lang, to_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json, ctx=ctx)
+        # 应用文本后处理
+        translations = [self._clean_translation_output(q, r, to_lang) for q, r in zip(queries, translations)]
         return translations
 
-    def formatLog(self, vals: dict) -> str:
-        return '\n---\n'.join(f"\n{BOLD}{aKey}{NRML}:\n{aVal}" for aKey, aVal in vals.items())
-
-    async def _request_translation(self, to_lang: str, prompt: str) -> str:
-        # 从ctx获取line_break_prompt（如果有）
-        line_break_prompt_str = ""
-        if hasattr(self, 'ctx') and self.ctx and hasattr(self.ctx, 'line_break_prompt_json'):
-            line_break_prompt_json = self.ctx.line_break_prompt_json
-            if line_break_prompt_json and line_break_prompt_json.get('line_break_prompt'):
-                line_break_prompt_str = line_break_prompt_json['line_break_prompt']
-
-        system_instruction = self.chat_system_template.format(to_lang=to_lang)
-
-        # 如果有line_break_prompt，添加到system instruction前面
-        if line_break_prompt_str:
-            system_instruction = f"{line_break_prompt_str}\n\n---\n\n{system_instruction}"
-
-        lang_chat_samples = self.get_chat_sample(to_lang)
-
-        messages = []
-
-        # Add chat samples if available
-        if lang_chat_samples:
-            messages.extend([
-                {"role": "user", "parts": [{"text": lang_chat_samples[0]}]},
-                {"role": "model", "parts": [{"text": lang_chat_samples[1]}]}
-            ])
-
-        # Add the actual prompt
-        if hasattr(prompt, 'parts'):
-            prompt_text = "".join(p.text for p in prompt.parts)
-        else:
-            prompt_text = str(prompt)
-
-        messages.append({"role": "user", "parts": [{"text": prompt_text}]})
-
-        # Configure the model with system instruction
-        generation_config = {
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-        }
-
-        if system_instruction:
-            model = genai.GenerativeModel(
-                self.model,
-                generation_config=generation_config,
-                safety_settings=self.safety_settings,
-                system_instruction=system_instruction
-            )
-        else:
-            model = self.client
-
-        response = await asyncio.to_thread(
-            model.generate_content,
-            messages
-        )
-
-        if hasattr(response, 'usage_metadata') and response.usage_metadata:
-            self.token_count += response.usage_metadata.prompt_token_count
-            self.token_count_last = response.usage_metadata.total_token_count
-
-        # 安全的响应处理
-        if not response.candidates or len(response.candidates) == 0:
-            raise ValueError("API返回了空的候选回应，可能是内容被安全过滤器阻止")
-
-        return response.text
-
-class _GeminiTranslator_json (_CommonGPTTranslator_JSON):
-    from .config_gpt import TranslationList
-    import json
-
-    def __init__(self, translator: GeminiTranslator):
-        super().__init__(translator)
-        self.translator = translator
-        self.logger = self.translator.logger 
-
-    def _createContext(self, to_lang: str):
-        pass
-
-    async def _request_translation(self, to_lang: str, prompt: str) -> str:
-        # 从ctx获取line_break_prompt（如果有）
-        line_break_prompt_str = ""
-        if hasattr(self.translator, 'ctx') and self.translator.ctx and hasattr(self.translator.ctx, 'line_break_prompt_json'):
-            line_break_prompt_json = self.translator.ctx.line_break_prompt_json
-            if line_break_prompt_json and line_break_prompt_json.get('line_break_prompt'):
-                line_break_prompt_str = line_break_prompt_json['line_break_prompt']
-
-        system_instruction = self.translator.chat_system_template.format(to_lang=to_lang)
-
-        # 如果有line_break_prompt，添加到system instruction前面
-        if line_break_prompt_str:
-            system_instruction = f"{line_break_prompt_str}\n\n---\n\n{system_instruction}"
-
-        lang_JSON_samples = self.translator.get_json_sample(to_lang)
-
-        messages = []
-
-        # Add JSON samples if available
-        if lang_JSON_samples:
-            messages.extend([
-                {"role": "user", "parts": [{"text": lang_JSON_samples[0].model_dump_json()}]},
-                {"role": "model", "parts": [{"text": lang_JSON_samples[1].model_dump_json()}]}
-            ])
-
-        # Add the actual prompt
-        prompt_text = str(prompt)
-        messages.append({"role": "user", "parts": [{"text": prompt_text}]})
-
-        json_config = {
-            "temperature": self.translator.temperature,
-            "top_p": self.translator.top_p,
-            "response_mime_type": "application/json",
-            "response_schema": self.TranslationList
-        }
-
-        # Configure the model with system instruction and JSON config
-        if system_instruction:
-            model = genai.GenerativeModel(
-                self.translator.model,
-                generation_config=json_config,
-                safety_settings=self.translator.safety_settings,
-                system_instruction=system_instruction
-            )
-        else:
-            model = genai.GenerativeModel(
-                self.translator.model,
-                generation_config=json_config,
-                safety_settings=self.translator.safety_settings
-            )
-
-        response = await asyncio.to_thread(
-            model.generate_content,
-            messages
-        )
-
-        if hasattr(response, 'usage_metadata') and response.usage_metadata:
-            self.translator.token_count += response.usage_metadata.prompt_token_count
-            self.translator.token_count_last = response.usage_metadata.total_token_count
-
-        # 安全的响应处理
-        if not response.candidates or len(response.candidates) == 0:
-            raise ValueError("API返回了空的候选回应，可能是内容被安全过滤器阻止")
-
-        return response.text

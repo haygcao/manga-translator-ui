@@ -452,7 +452,7 @@ if %ERRORLEVEL% neq 0 (
     echo [ERROR] 依赖安装失败
     echo.
     echo 你可以稍后手动运行:
-    echo   步骤3-更新维护.bat
+    echo   步骤4-更新维护.bat
     echo.
     pause
     exit /b 1
@@ -472,9 +472,10 @@ echo 安装位置: %CD%
 echo.
 echo 下一步操作:
 echo   双击 步骤2-启动Qt界面.bat (Qt版本)
+echo   或 步骤3-检查更新并启动.bat (自动检查更新)
 echo.
 echo 定期更新:
-echo   双击 步骤3-更新维护.bat
+echo   双击 步骤4-更新维护.bat
 echo.
 pause
 

@@ -367,7 +367,7 @@ class MainAppLogic(QObject):
                     "disable_auto_wrap": "AI断句", "font_size_offset": "字体大小偏移量", "font_size_minimum": "最小字体大小",
                     "max_font_size": "最大字体大小", "font_scale_ratio": "字体缩放比例",
                     "center_text_in_bubble": "AI断句时文本居中",
-                    "optimize_line_breaks": "AI断句自动扩大文字",
+                    "optimize_line_breaks": "AI断句自动扩大文字", "check_br_and_retry": "AI断句检查",
                     "strict_smart_scaling": "AI断句自动扩大文字下不扩大文本框",
                     "direction": "文本方向", "uppercase": "大写", "lowercase": "小写", "gimp_font": "GIMP字体",
                     "font_path": "字体路径", "no_hyphenation": "禁用连字符", "font_color": "字体颜色",
@@ -663,6 +663,17 @@ class MainAppLogic(QObject):
         self.logger.error(f"翻译任务发生错误: {error_message}")
         self.state_manager.set_translating(False)
         self.state_manager.set_status_message(f"任务失败: {error_message}")
+        
+        # 正确停止线程
+        if self.thread and self.thread.isRunning():
+            self.logger.info("Waiting for error cleanup thread to finish...")
+            self.thread.quit()
+            self.thread.wait(5000)  # 等待最多5秒
+            if self.thread.isRunning():
+                self.logger.warning("Thread did not finish within timeout, terminating...")
+                self.thread.terminate()
+                self.thread.wait()
+        
         self.thread = None
         self.worker = None
         print("--- MainAppLogic: Slot on_task_error finished.")
@@ -819,6 +830,237 @@ class TranslationWorker(QObject):
                 self.log_received.emit("--- [CLEANUP] GPU not available, skipped GPU cleanup")
         except Exception as e:
             self.log_received.emit(f"--- [CLEANUP] Warning: Failed to cleanup GPU: {e}")
+
+    def _build_friendly_error_message(self, error_message: str, error_traceback: str) -> str:
+        """
+        根据错误信息构建友好的中文错误提示
+        """
+        friendly_msg = "\n" + "="*80 + "\n"
+        friendly_msg += "❌ 翻译任务失败\n"
+        friendly_msg += "="*80 + "\n\n"
+        
+        # 检查是否是AI断句检查失败
+        if ("BR markers missing" in error_message or 
+            "AI断句检查" in error_message or 
+            "BRMarkersValidationException" in error_traceback or
+            "_validate_br_markers" in error_traceback):
+            friendly_msg += "🔍 错误原因：AI断句检查失败\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   AI翻译时未能正确添加断句标记 [BR]，导致多次重试后仍然失败。\n\n"
+            friendly_msg += "💡 解决方案（选择其一）：\n"
+            friendly_msg += "   1. ⭐ 关闭「AI断句检查」选项（推荐）\n"
+            friendly_msg += "      - 位置：高级设置 → 渲染设置 → AI断句检查\n"
+            friendly_msg += "      - 说明：允许AI在少数情况下不添加断句标记\n\n"
+            friendly_msg += "   2. 增加「重试次数」\n"
+            friendly_msg += "      - 位置：通用设置 → 重试次数\n"
+            friendly_msg += "      - 建议：设置为 10 或更高（-1 表示无限重试）\n\n"
+            friendly_msg += "   3. 更换翻译模型\n"
+            friendly_msg += "      - 某些模型对断句标记的理解更好\n"
+            friendly_msg += "      - 建议：尝试 gpt-4o 或 gemini-2.0-flash-exp\n\n"
+            friendly_msg += "   4. 关闭「AI断句」功能\n"
+            friendly_msg += "      - 位置：高级设置 → 渲染设置 → AI断句\n"
+            friendly_msg += "      - 说明：使用传统的自动换行（可能导致排版不够精确）\n\n"
+        
+        # 检查是否是模型不支持多模态
+        elif "不支持多模态" in error_message or "multimodal" in error_message.lower() or "vision" in error_message.lower():
+            friendly_msg += "🔍 错误原因：模型不支持多模态输入\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   当前使用的是「高质量翻译器」（openai_hq 或 gemini_hq），\n"
+            friendly_msg += "   这些翻译器需要发送图片给AI进行分析，但当前模型不支持图片输入。\n\n"
+            friendly_msg += "💡 解决方案（选择其一）：\n"
+            friendly_msg += "   1. ⭐ 更换为支持多模态的模型（推荐）\n"
+            friendly_msg += "      - OpenAI: gpt-4o, gpt-4-turbo, gpt-4-vision-preview\n"
+            friendly_msg += "      - Gemini: gemini-2.0-flash-exp, gemini-1.5-pro, gemini-1.5-flash\n"
+            friendly_msg += "      - 注意：DeepSeek模型不支持多模态\n\n"
+            friendly_msg += "   2. 切换到普通翻译器\n"
+            friendly_msg += "      - 位置：翻译设置 → 翻译器\n"
+            friendly_msg += "      - 将 openai_hq 改为 openai\n"
+            friendly_msg += "      - 将 gemini_hq 改为 gemini\n"
+            friendly_msg += "      - 说明：普通翻译器不需要发送图片，只翻译文本\n\n"
+        
+        # 检查是否是API密钥错误
+        elif "api key" in error_message.lower() or "authentication" in error_message.lower() or "unauthorized" in error_message.lower() or "401" in error_message:
+            friendly_msg += "🔍 错误原因：API密钥验证失败\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   API密钥无效、过期或未正确配置。\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. 检查API密钥是否正确\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量配置区域\n"
+            friendly_msg += "      - 确认密钥没有多余的空格或换行\n\n"
+            friendly_msg += "   2. 验证API密钥是否有效\n"
+            friendly_msg += "      - OpenAI: https://platform.openai.com/api-keys\n"
+            friendly_msg += "      - Gemini: https://aistudio.google.com/app/apikey\n\n"
+            friendly_msg += "   3. 检查API额度是否用完\n"
+            friendly_msg += "      - 登录对应平台查看余额和使用情况\n\n"
+        
+        # 检查是否是网络连接错误
+        elif "connection" in error_message.lower() or "timeout" in error_message.lower() or "network" in error_message.lower():
+            friendly_msg += "🔍 错误原因：网络连接失败\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   无法连接到API服务器，可能是网络问题或需要代理。\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. 检查网络连接\n"
+            friendly_msg += "      - 确认电脑可以正常访问互联网\n\n"
+            friendly_msg += "   2. 配置代理（如果需要）\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量 → OPENAI_HTTP_PROXY\n"
+            friendly_msg += "      - 格式：http://127.0.0.1:7890 或 socks5://127.0.0.1:7890\n\n"
+            friendly_msg += "   3. 检查API地址是否正确\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量 → API_BASE\n"
+            friendly_msg += "      - 默认值：https://api.openai.com/v1\n\n"
+        
+        # 检查是否是速率限制错误
+        elif "rate limit" in error_message.lower() or "429" in error_message or "too many requests" in error_message.lower():
+            friendly_msg += "🔍 错误原因：API请求速率限制 (HTTP 429)\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   请求过于频繁，超过了API的速率限制。\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. ⭐ 设置每分钟最大请求数（推荐）\n"
+            friendly_msg += "      - 位置：通用设置 → 每分钟最大请求数\n"
+            friendly_msg += "      - 建议：设置为 3-10（取决于API套餐）\n\n"
+            friendly_msg += "   2. 稍后重试\n"
+            friendly_msg += "      - 等待几分钟后再次尝试翻译\n\n"
+            friendly_msg += "   3. 升级API套餐\n"
+            friendly_msg += "      - 联系API提供商升级到更高的速率限制\n\n"
+        
+        # 检查是否是403禁止访问错误
+        elif "403" in error_message or "forbidden" in error_message.lower():
+            friendly_msg += "🔍 错误原因：访问被拒绝 (HTTP 403)\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   服务器拒绝访问，可能是权限不足或地区限制。\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. 检查API密钥权限\n"
+            friendly_msg += "      - 确认API密钥有访问该服务的权限\n\n"
+            friendly_msg += "   2. 检查账户状态\n"
+            friendly_msg += "      - 确认账户未被封禁或限制\n\n"
+            friendly_msg += "   3. 配置代理\n"
+            friendly_msg += "      - 某些API在特定地区被限制，需要使用代理\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量 → OPENAI_HTTP_PROXY\n\n"
+        
+        # 检查是否是404未找到错误
+        elif "404" in error_message or "not found" in error_message.lower():
+            friendly_msg += "🔍 错误原因：资源未找到 (HTTP 404)\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   请求的API端点不存在或模型名称错误。\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. ⭐ 检查API地址是否正确（推荐）\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量 → API_BASE\n"
+            friendly_msg += "      - OpenAI默认：https://api.openai.com/v1\n"
+            friendly_msg += "      - Gemini默认：https://generativelanguage.googleapis.com\n\n"
+            friendly_msg += "   2. 检查模型名称\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量 → MODEL\n"
+            friendly_msg += "      - 确认模型名称拼写正确（如 gpt-4o 不是 gpt4o）\n\n"
+            friendly_msg += "   3. 验证模型可用性\n"
+            friendly_msg += "      - 某些模型可能已下线或更名\n"
+            friendly_msg += "      - 访问官方文档查看可用模型列表\n\n"
+        
+        # 检查是否是500服务器错误
+        elif "500" in error_message or "internal server error" in error_message.lower():
+            friendly_msg += "🔍 错误原因：服务器内部错误 (HTTP 500)\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   API服务器遇到内部错误，这通常是临时问题。\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. ⭐ 增加重试次数（推荐）\n"
+            friendly_msg += "      - 位置：通用设置 → 重试次数\n"
+            friendly_msg += "      - 建议：设置为 10 或更高\n"
+            friendly_msg += "      - 服务器错误通常是临时的，重试可能成功\n\n"
+            friendly_msg += "   2. 稍后重试\n"
+            friendly_msg += "      - 等待几分钟，让服务器恢复正常\n\n"
+            friendly_msg += "   3. 检查API服务状态\n"
+            friendly_msg += "      - OpenAI: https://status.openai.com/\n"
+            friendly_msg += "      - 查看是否有大规模服务中断\n\n"
+        
+        # 检查是否是502/503/504网关错误
+        elif any(code in error_message for code in ["502", "503", "504"]) or "bad gateway" in error_message.lower() or "service unavailable" in error_message.lower() or "gateway timeout" in error_message.lower():
+            error_code = "502/503/504"
+            if "502" in error_message:
+                error_code = "502"
+            elif "503" in error_message:
+                error_code = "503"
+            elif "504" in error_message:
+                error_code = "504"
+            
+            friendly_msg += f"🔍 错误原因：网关/服务不可用 (HTTP {error_code})\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   - 502: 网关接收到无效响应\n"
+            friendly_msg += "   - 503: 服务暂时不可用（通常是维护或过载）\n"
+            friendly_msg += "   - 504: 网关超时\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. ⭐ 等待后重试（推荐）\n"
+            friendly_msg += "      - 这些错误通常是临时的\n"
+            friendly_msg += "      - 等待5-10分钟后重新翻译\n\n"
+            friendly_msg += "   2. 增加重试次数\n"
+            friendly_msg += "      - 位置：通用设置 → 重试次数\n"
+            friendly_msg += "      - 建议：设置为 10 或更高\n\n"
+            friendly_msg += "   3. 检查API服务状态\n"
+            friendly_msg += "      - 访问API提供商的状态页面\n"
+            friendly_msg += "      - OpenAI: https://status.openai.com/\n\n"
+            friendly_msg += "   4. 更换API地址\n"
+            friendly_msg += "      - 如果使用第三方API中转，尝试更换地址\n\n"
+        
+        # 检查是否是内容过滤错误
+        elif "content filter" in error_message.lower() or "content_filter" in error_message:
+            friendly_msg += "🔍 错误原因：内容被安全策略拦截\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   AI检测到内容可能违反使用政策。\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. 检查图片内容\n"
+            friendly_msg += "      - 某些敏感内容可能被API拒绝处理\n\n"
+            friendly_msg += "   2. 更换翻译器\n"
+            friendly_msg += "      - 尝试使用其他翻译器（如 Gemini、DeepL）\n\n"
+            friendly_msg += "   3. 增加重试次数\n"
+            friendly_msg += "      - 位置：通用设置 → 重试次数\n"
+            friendly_msg += "      - 有时重试可以解决临时的过滤问题\n\n"
+        
+        # 检查是否是语言不支持错误
+        elif "language not supported" in error_message.lower() or "LanguageUnsupportedException" in error_traceback:
+            friendly_msg += "🔍 错误原因：翻译器不支持当前语言\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. 更换翻译器\n"
+            friendly_msg += "      - 位置：翻译设置 → 翻译器\n"
+            friendly_msg += "      - 建议：使用支持更多语言的翻译器（如 OpenAI、Gemini）\n\n"
+            friendly_msg += "   2. 检查目标语言设置\n"
+            friendly_msg += "      - 位置：翻译设置 → 目标语言\n"
+            friendly_msg += "      - 确认选择的语言被当前翻译器支持\n\n"
+        
+        # 通用错误
+        else:
+            friendly_msg += "🔍 错误原因：\n"
+            friendly_msg += f"   {error_message}\n\n"
+            friendly_msg += "💡 通用解决方案：\n"
+            friendly_msg += "   1. 检查配置是否正确\n"
+            friendly_msg += "      - 翻译器、API密钥、模型名称等\n\n"
+            friendly_msg += "   2. 增加重试次数\n"
+            friendly_msg += "      - 位置：通用设置 → 重试次数\n"
+            friendly_msg += "      - 建议：设置为 10 或更高\n\n"
+            friendly_msg += "   3. 查看详细日志\n"
+            friendly_msg += "      - 在日志框中查找更多错误信息\n\n"
+        
+        friendly_msg += "="*80 + "\n"
+        friendly_msg += "📋 原始错误信息：\n"
+        friendly_msg += "-"*80 + "\n"
+        friendly_msg += f"{error_message}\n"
+        if error_traceback and "Traceback" in error_traceback:
+            friendly_msg += "\n" + "-"*80 + "\n"
+            friendly_msg += "详细错误：\n"
+            friendly_msg += "-"*80 + "\n"
+            
+            # 只保留API详细错误信息（不保留代码路径）
+            lines = error_traceback.split('\n')
+            api_error_lines = []
+            
+            for line in lines:
+                # 只保留API错误信息行（包含详细的错误内容）
+                if line.strip() and any(keyword in line for keyword in ['BadRequest', 'Error code:', "'error':", "'message':", "{'error':"]):
+                    # 如果这是详细的错误信息行，保留它
+                    if 'Error code:' in line or "'error':" in line or "{'error':" in line:
+                        api_error_lines.append(line.strip())
+            
+            if api_error_lines:
+                friendly_msg += '\n'.join(api_error_lines) + "\n"
+                
+        friendly_msg += "="*80 + "\n"
+        
+        return friendly_msg
 
     async def _do_processing(self):
         log_handler = QtLogHandler(self.log_received)
@@ -1034,6 +1276,8 @@ class TranslationWorker(QObject):
                     except Exception as e:
                         self.log_received.emit(f"❌ [{current_num}/{total_files}] 错误：{os.path.basename(file_path)} - {e}")
                         self.file_processed.emit({'success': False, 'original_path': file_path, 'error': str(e)})
+                        # 抛出异常，终止整个翻译流程
+                        raise
 
                 self.log_received.emit(f"✅ 顺序翻译完成：成功 {success_count}/{total_files} 张")
                 self.log_received.emit(f"💾 文件已保存到：{self.output_folder}")
@@ -1059,7 +1303,14 @@ class TranslationWorker(QObject):
             self.error.emit(str(e))
         except Exception as e:
             import traceback
-            self.error.emit(f"{str(e)}\n{traceback.format_exc()}")
+            error_message = str(e)
+            error_traceback = traceback.format_exc()
+            
+            # 构建友好的中文错误提示
+            friendly_error = self._build_friendly_error_message(error_message, error_traceback)
+            
+            self.log_received.emit(friendly_error)
+            self.error.emit(friendly_error)
         finally:
             manga_logger.removeHandler(log_handler)
 

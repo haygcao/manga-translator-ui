@@ -93,6 +93,7 @@ class OpenAIHighQualityTranslator(CommonTranslator):
     def __init__(self):
         super().__init__()
         self.client = None
+        self.prev_context = ""  # 用于存储多页上下文
         # 重新加载 .env 文件以获取最新配置
         from dotenv import load_dotenv
         load_dotenv(override=True)
@@ -108,6 +109,10 @@ class OpenAIHighQualityTranslator(CommonTranslator):
         self._last_request_ts_key = self.model
         self._setup_client()
     
+    def set_prev_context(self, context: str):
+        """设置多页上下文（用于context_size > 0时）"""
+        self.prev_context = context if context else ""
+    
     def parse_args(self, args):
         """解析配置参数"""
         # 从配置中读取RPM限制
@@ -115,7 +120,7 @@ class OpenAIHighQualityTranslator(CommonTranslator):
         if max_rpm > 0:
             self._MAX_REQUESTS_PER_MINUTE = max_rpm
             self.logger.info(f"Setting OpenAI HQ max requests per minute to: {max_rpm}")
-        
+    
     def _setup_client(self):
         """设置OpenAI客户端"""
         if not self.client:
@@ -230,7 +235,17 @@ This is an incorrect response because it includes extra text and explanations.
         if ctx and hasattr(ctx, 'config') and ctx.config and hasattr(ctx.config, 'render'):
             enable_ai_break = getattr(ctx.config.render, 'disable_auto_wrap', False)
 
-        prompt = "Please translate the following manga text regions. I'm providing multiple images with their text regions in reading order:\n\n"
+        prompt = ""
+        
+        # 添加多页上下文（如果有）
+        if self.prev_context:
+            prompt += f"{self.prev_context}\n\n---\n\n"
+            self.logger.info(f"[OpenAI HQ历史上下文] 长度: {len(self.prev_context)} 字符")
+            self.logger.info(f"[OpenAI HQ历史上下文内容]\n{self.prev_context[:500]}...")
+        else:
+            self.logger.info(f"[OpenAI HQ历史上下文] 无历史上下文（可能是第一张图片或context_size=0）")
+        
+        prompt += "Please translate the following manga text regions. I'm providing multiple images with their text regions in reading order:\n\n"
         
         # 添加图片信息
         for i, data in enumerate(batch_data):
@@ -344,6 +359,26 @@ This is an incorrect response because it includes extra text and explanations.
                     for original, translated in zip(texts, translations):
                         self.logger.info(f'{original} -> {translated}')
                     self.logger.info("---------------------------")
+
+                    # BR检查：检查翻译结果是否包含必要的[BR]标记
+                    # BR check: Check if translations contain necessary [BR] markers
+                    if not self._validate_br_markers(translations, batch_data=batch_data, ctx=ctx):
+                        attempt += 1
+                        log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+                        self.logger.warning(f"[{log_attempt}] BR markers missing, retrying...")
+                        
+                        # 如果达到最大重试次数，抛出友好的异常
+                        if not is_infinite and attempt >= max_retries:
+                            from .common import BRMarkersValidationException
+                            self.logger.error("OpenAI高质量翻译在多次重试后仍然失败：AI断句检查失败。")
+                            raise BRMarkersValidationException(
+                                missing_count=0,  # 具体数字在_validate_br_markers中已记录
+                                total_count=len(texts),
+                                tolerance=max(1, len(texts) // 10)
+                            )
+                        
+                        await asyncio.sleep(2)
+                        continue
 
                     return translations[:len(texts)]
                 

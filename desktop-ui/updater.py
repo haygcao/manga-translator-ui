@@ -36,6 +36,16 @@ def resource_path(relative_path):
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    # Special handling for VERSION file in development mode
+    if relative_path == 'VERSION':
+        try:
+            # In PyInstaller, VERSION is in _MEIPASS
+            return os.path.join(base_path, 'VERSION')
+        except:
+            # In development, VERSION is in packaging/
+            return os.path.join(os.path.dirname(base_path), 'packaging', 'VERSION')
+    
     return os.path.join(base_path, relative_path)
 
 def get_app_variant():

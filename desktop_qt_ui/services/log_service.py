@@ -42,7 +42,7 @@ class LogService:
     def _setup_main_logger(self):
         """设置主日志器"""
         logger = logging.getLogger(self.app_name)
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.INFO)  # 默认INFO级别，可通过set_console_log_level调整
         
         # 清除现有处理器
         for handler in logger.handlers[:]:
@@ -140,13 +140,32 @@ class LogService:
         Args:
             verbose: 是否启用详细日志（DEBUG 级别）
         """
+        level = logging.DEBUG if verbose else logging.INFO
+        
+        # 设置控制台处理器级别
         if hasattr(self, 'console_handler'):
-            if verbose:
-                self.console_handler.setLevel(logging.DEBUG)
-                logger = logging.getLogger(self.app_name)
-                logger.info("[日志服务] 控制台日志级别已设置为 DEBUG（详细日志）")
-            else:
-                self.console_handler.setLevel(logging.INFO)
+            self.console_handler.setLevel(level)
+        
+        # 设置根日志级别以确保DEBUG日志不会被过滤
+        logging.getLogger().setLevel(level)
+        
+        # 设置主应用logger级别
+        if self.app_name in self.loggers:
+            self.loggers[self.app_name].setLevel(level)
+        
+        # 同步设置manga_translator的日志级别
+        try:
+            from manga_translator.utils.log import set_log_level as mt_set_log_level
+            mt_set_log_level(level)
+        except Exception as e:
+            logging.warning(f"无法设置manga_translator日志级别: {e}")
+        
+        # 日志提示
+        logger = logging.getLogger(self.app_name)
+        if verbose:
+            logger.info("[日志服务] 控制台日志级别已设置为 DEBUG（详细日志）")
+        else:
+            logger.info("[日志服务] 控制台日志级别已设置为 INFO（正常日志）")
     
     def get_logger(self, name: str = None) -> logging.Logger:
         """获取日志器"""

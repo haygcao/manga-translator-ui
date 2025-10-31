@@ -174,6 +174,8 @@ class RenderConfig(BaseModel):
     """Center the entire text block in the bubble when AI line breaking is enabled"""
     optimize_line_breaks: bool = False
     """Automatically optimize line breaks by testing all combinations to find the best font size"""
+    check_br_and_retry: bool = False
+    """Check if translation contains [BR] markers when AI line breaking is enabled (regions≥2). Retry if missing."""
     strict_smart_scaling: bool = False
     """In smart_scaling mode, prevent text box expansion by skipping combinations without line breaks"""
     direction: Direction = Direction.auto

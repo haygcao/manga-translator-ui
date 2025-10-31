@@ -42,6 +42,9 @@ def set_log_level(level):
     root.setLevel(level)
     # Also set the root logger level to ensure DEBUG messages pass through
     logging.getLogger().setLevel(level)
+    # 同时设置所有handler的级别
+    for handler in logging.root.handlers:
+        handler.setLevel(level)
 
 def get_logger(name: str):
     return root.getChild(name)

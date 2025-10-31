@@ -85,6 +85,7 @@ class GeminiHighQualityTranslator(CommonTranslator):
     def __init__(self):
         super().__init__()
         self.client = None
+        self.prev_context = ""  # 用于存储多页上下文
         # Initial setup from environment variables
         # 重新加载 .env 文件以获取最新配置
         from dotenv import load_dotenv
@@ -119,6 +120,10 @@ class GeminiHighQualityTranslator(CommonTranslator):
         ]
         self._setup_client()
     
+    def set_prev_context(self, context: str):
+        """设置多页上下文（用于context_size > 0时）"""
+        self.prev_context = context if context else ""
+    
     def parse_args(self, args):
         """解析配置参数"""
         # 从配置中读取RPM限制
@@ -126,7 +131,7 @@ class GeminiHighQualityTranslator(CommonTranslator):
         if max_rpm > 0:
             self._MAX_REQUESTS_PER_MINUTE = max_rpm
             self.logger.info(f"Setting Gemini HQ max requests per minute to: {max_rpm}")
-        
+    
     def _setup_client(self):
         """设置Gemini客户端"""
         if not self.client and self.api_key:
@@ -230,7 +235,17 @@ class GeminiHighQualityTranslator(CommonTranslator):
         if ctx and hasattr(ctx, 'config') and ctx.config and hasattr(ctx.config, 'render'):
             enable_ai_break = getattr(ctx.config.render, 'disable_auto_wrap', False)
 
-        prompt = "Please translate the following manga text regions. I'm providing multiple images with their text regions in reading order:\n\n"
+        prompt = ""
+        
+        # 添加多页上下文（如果有）
+        if self.prev_context:
+            prompt += f"{self.prev_context}\n\n---\n\n"
+            self.logger.info(f"[Gemini HQ历史上下文] 长度: {len(self.prev_context)} 字符")
+            self.logger.info(f"[Gemini HQ历史上下文内容]\n{self.prev_context[:500]}...")
+        else:
+            self.logger.info(f"[Gemini HQ历史上下文] 无历史上下文（可能是第一张图片或context_size=0）")
+        
+        prompt += "Please translate the following manga text regions. I'm providing multiple images with their text regions in reading order:\n\n"
         
         # 添加图片信息
         for i, data in enumerate(batch_data):
@@ -314,18 +329,18 @@ class GeminiHighQualityTranslator(CommonTranslator):
             request_args["safety_settings"] = self.safety_settings
 
         def generate_content_with_logging(**kwargs):
-            # Create a serializable copy of the arguments for logging
-            log_kwargs = kwargs.copy()
-            if 'contents' in log_kwargs and isinstance(log_kwargs['contents'], list):
-                serializable_contents = []
-                for item in log_kwargs['contents']:
-                    if isinstance(item, Image.Image):
-                        serializable_contents.append(f"<PIL.Image.Image size={item.size} mode={item.mode}>")
-                    else:
-                        serializable_contents.append(item)
-                log_kwargs['contents'] = serializable_contents
-
-            self.logger.info(f"--- Gemini Request Body ---\n{json.dumps(log_kwargs, indent=2, ensure_ascii=False)}\n---------------------------")
+            # 打印请求体（去除图片数据）- 已注释以减少日志输出
+            # log_kwargs = kwargs.copy()
+            # if 'contents' in log_kwargs and isinstance(log_kwargs['contents'], list):
+            #     serializable_contents = []
+            #     for item in log_kwargs['contents']:
+            #         if isinstance(item, Image.Image):
+            #             serializable_contents.append(f"<PIL.Image.Image size={item.size} mode={item.mode}>")
+            #         else:
+            #             serializable_contents.append(item)
+            #     log_kwargs['contents'] = serializable_contents
+            # 
+            # self.logger.info(f"--- Gemini Request Body ---\n{json.dumps(log_kwargs, indent=2, ensure_ascii=False)}\n---------------------------")
             return self.client.generate_content(**kwargs)
 
         while is_infinite or attempt < max_retries:
@@ -405,6 +420,26 @@ class GeminiHighQualityTranslator(CommonTranslator):
                     self.logger.info(f'{original} -> {translated}')
                 self.logger.info("---------------------------")
 
+                # BR检查：检查翻译结果是否包含必要的[BR]标记
+                # BR check: Check if translations contain necessary [BR] markers
+                if not self._validate_br_markers(translations, batch_data=batch_data, ctx=ctx):
+                    attempt += 1
+                    log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+                    self.logger.warning(f"[{log_attempt}] BR markers missing, retrying...")
+                    
+                    # 如果达到最大重试次数，抛出友好的异常
+                    if not is_infinite and attempt >= max_retries:
+                        from .common import BRMarkersValidationException
+                        self.logger.error("Gemini高质量翻译在多次重试后仍然失败：AI断句检查失败。")
+                        raise BRMarkersValidationException(
+                            missing_count=0,  # 具体数字在_validate_br_markers中已记录
+                            total_count=len(texts),
+                            tolerance=max(1, len(texts) // 10)
+                        )
+                    
+                    await asyncio.sleep(2)
+                    continue
+
                 return translations[:len(texts)]
 
             except Exception as e:
@@ -430,6 +465,7 @@ class GeminiHighQualityTranslator(CommonTranslator):
                 if "finish_reason: 2" in error_message or "finish_reason is 2" in error_message:
                     self.logger.warning("检测到Gemini安全设置拦截。正在重试...")
                 
+                # 检查是否达到最大重试次数（注意：attempt已经+1了）
                 if not is_infinite and attempt >= max_retries:
                     self.logger.error("Gemini翻译在多次重试后仍然失败。即将终止程序。")
                     raise e

@@ -1501,6 +1501,11 @@ GPU 服务器开销较大，请考虑支持我们，非常感谢！
 - 爱发电: <https://afdian.net/@voilelabs>
 
   ### 感谢所有贡献者
+  
+  感谢以下项目提供模型支持：
+  - [lhj5426/YSG](https://github.com/lhj5426/YSG) - 提供模型支持
+  - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 提供 OCR 模型支持
+  
   <a href="https://github.com/zyddnys/manga-image-translator/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=zyddnys/manga-image-translator" />
 

@@ -107,9 +107,9 @@ def complete_mask(img: np.ndarray, mask: np.ndarray, textlines: List[Quadrilater
     # --- NEW DIAGNOSTIC LINES ---
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(f"--- MASK_REFINEMENT_DEBUG: Entering complete_mask ---")
-    logger.info(f"--- MASK_REFINEMENT_DEBUG: Number of textlines (M) = {M} ---")
-    logger.info(f"--- MASK_REFINEMENT_DEBUG: Number of connected components (num_labels) = {num_labels} ---")
+    logger.debug(f"--- MASK_REFINEMENT_DEBUG: Entering complete_mask ---")
+    logger.debug(f"--- MASK_REFINEMENT_DEBUG: Number of textlines (M) = {M} ---")
+    logger.debug(f"--- MASK_REFINEMENT_DEBUG: Number of connected components (num_labels) = {num_labels} ---")
     # --- END DIAGNOSTIC ---
 
     textline_ccs = [np.zeros_like(mask) for _ in range(M)]

@@ -2470,7 +2470,8 @@ class MangaTranslator:
                     translated_contexts = await self._batch_translate_contexts(preprocessed_contexts, batch_size)
                 except Exception as e:
                     logger.error(f"Error during batch translation stage: {e}")
-                    translated_contexts = preprocessed_contexts
+                    # 重新抛出异常，终止翻译流程
+                    raise
 
             # --- NEW: Handle Generate and Export for Standard Batch Mode ---
             if self.generate_and_export:
@@ -2784,7 +2785,30 @@ class MangaTranslator:
                     
                     # 支持批量翻译 - 传递合并后的上下文（仅用于AI断句）
                     batch_contexts = [ctx for ctx, config in batch]
-                    translated_texts = await self._batch_translate_texts(all_texts, sample_config, merged_ctx, batch_contexts)
+                    
+                    # 计算当前批次在所有页面中的索引（用于上下文）
+                    # i 是当前批次的起始索引（相对于本次translate_batch调用的所有图片）
+                    # self.all_page_translations 包含之前所有已翻译的页面
+                    page_index = len(self.all_page_translations) + i
+                    
+                    # 准备batch_original_texts（用于并发模式的上下文）
+                    batch_original_texts = []
+                    for ctx, _ in batch:
+                        if ctx.text_regions:
+                            image_data = {
+                                'original_texts': [region.text for region in ctx.text_regions]
+                            }
+                            batch_original_texts.append(image_data)
+                    
+                    translated_texts = await self._batch_translate_texts(
+                        all_texts, 
+                        sample_config, 
+                        merged_ctx, 
+                        batch_contexts,
+                        page_index=page_index,
+                        batch_index=0,  # 批量处理时第一张图的批次索引为0
+                        batch_original_texts=batch_original_texts
+                    )
                 else:
                     translated_texts = all_texts  # 无法翻译时保持原文
                     
@@ -2805,6 +2829,16 @@ class MangaTranslator:
                 for ctx, config in batch:
                     if ctx.text_regions:
                         ctx.text_regions = await self._apply_post_translation_processing(ctx, config)
+                
+                # ✅ 立即保存当前批次的翻译结果到all_page_translations，供下一个批次使用上下文
+                for ctx, config in batch:
+                    if ctx.text_regions:
+                        page_trans = {}
+                        for region in ctx.text_regions:
+                            if region.translation:
+                                page_trans[region.text] = region.translation
+                        self.all_page_translations.append(page_trans)
+                        logger.debug(f"[Batch Context] Saved {len(page_trans)} translations for next batch context")
                         
                 # 批次级别的目标语言检查
                 if batch and batch[0][1].translator.enable_post_translation_check:
@@ -3166,11 +3200,14 @@ class MangaTranslator:
 
 
 
-        # 如果是OpenAI翻译器或高质量翻译器，需要处理上下文
-        if config.translator.translator in [Translator.openai, Translator.openai_hq, Translator.gemini_hq]:
+        # 如果是OpenAI翻译器、Gemini翻译器或高质量翻译器，需要处理上下文
+        if config.translator.translator in [Translator.openai, Translator.gemini, Translator.openai_hq, Translator.gemini_hq]:
             if config.translator.translator == Translator.openai:
                 from .translators.openai import OpenAITranslator
                 translator = OpenAITranslator()
+            elif config.translator.translator == Translator.gemini:
+                from .translators.gemini import GeminiTranslator
+                translator = GeminiTranslator()
             elif config.translator.translator == Translator.openai_hq:
                 from .translators.openai_hq import OpenAIHighQualityTranslator
                 translator = OpenAIHighQualityTranslator()
@@ -3181,41 +3218,41 @@ class MangaTranslator:
             translator.parse_args(config.translator)
             translator.attempts = self.attempts
 
-            # 仅为非高质量翻译器构建和设置文本上下文
-            if config.translator.translator not in [Translator.openai_hq, Translator.gemini_hq]:
-                # 确定是否使用并发模式和原文上下文
-                use_original_text = self.batch_concurrent and self.batch_size > 1
+            # 为所有翻译器构建和设置文本上下文（包括HQ翻译器）
+            # 确定是否使用并发模式和原文上下文
+            use_original_text = self.batch_concurrent and self.batch_size > 1
 
-                done_pages = self.all_page_translations
-                if self.context_size > 0 and done_pages:
-                    pages_expected = min(self.context_size, len(done_pages))
-                    non_empty_pages = [
-                        page for page in done_pages
-                        if any(sent.strip() for sent in page.values())
-                    ]
-                    pages_used = min(self.context_size, len(non_empty_pages))
-                    skipped = pages_expected - pages_used
-                else:
-                    pages_used = skipped = 0
+            done_pages = self.all_page_translations
+            if self.context_size > 0 and done_pages:
+                pages_expected = min(self.context_size, len(done_pages))
+                non_empty_pages = [
+                    page for page in done_pages
+                    if any(sent.strip() for sent in page.values())
+                ]
+                pages_used = min(self.context_size, len(non_empty_pages))
+                skipped = pages_expected - pages_used
+            else:
+                pages_used = skipped = 0
 
-                if self.context_size > 0:
-                    context_type = "original text" if use_original_text else "translation results"
-                    logger.info(f"Context-aware translation enabled with {self.context_size} pages of history using {context_type}")
+            if self.context_size > 0:
+                context_type = "original text" if use_original_text else "translation results"
+                logger.info(f"Context-aware translation enabled with {self.context_size} pages of history using {context_type}")
 
-                # 构建上下文
-                prev_ctx = self._build_prev_context(
-                    use_original_text=use_original_text,
-                    current_page_index=page_index,
-                    batch_index=batch_index,
-                    batch_original_texts=batch_original_texts
-                )
-                translator.set_prev_context(prev_ctx)
+            # 构建上下文
+            prev_ctx = self._build_prev_context(
+                use_original_text=use_original_text,
+                current_page_index=page_index,
+                batch_index=batch_index,
+                batch_original_texts=batch_original_texts
+            )
+            translator.set_prev_context(prev_ctx)
 
-                if pages_used > 0:
-                    context_count = prev_ctx.count("<|")
-                    logger.info(f"Carrying {pages_used} pages of context, {context_count} sentences as translation reference")
-                if skipped > 0:
-                    logger.warning(f"Skipped {skipped} pages with no sentences")
+            if pages_used > 0:
+                context_count = prev_ctx.count("<|")
+                logger.info(f"Carrying {pages_used} pages of context, {context_count} sentences as translation reference")
+            if skipped > 0:
+                logger.warning(f"Skipped {skipped} pages with no sentences")
+
 
             # 将config附加到ctx，供翻译器使用（例如AI断句功能）
             ctx.config = config
@@ -3230,7 +3267,7 @@ class MangaTranslator:
                     ctx
                 )
             else:
-                # 普通OpenAI需要ctx参数（用于AI断句）
+                # 普通OpenAI和Gemini需要ctx参数（用于AI断句）
                 return await translator._translate(
                     ctx.from_lang,
                     config.translator.target_lang,
@@ -3859,7 +3896,22 @@ class MangaTranslator:
                         text_mapping = [(img_idx, region_idx) for img_idx, data in enumerate(batch_data) for region_idx, _ in enumerate(data['original_texts'])]
                         
                         logger.info(f"Sending batch data with {len(preprocessed_contexts)} images, {len(all_texts)} text regions to high quality translator")
-                        translated_texts = await self._batch_translate_texts(all_texts, sample_config, enhanced_ctx)
+                        
+                        # 计算当前批次在所有页面中的索引（用于上下文）
+                        # batch_start 是当前批次的起始索引（相对于本次translate_batch调用的所有图片）
+                        # self.all_page_translations 包含之前所有已翻译的页面
+                        page_index = len(self.all_page_translations) + batch_start
+                        
+                        # 高质量翻译批量模式：不使用batch_index和batch_original_texts
+                        # 只使用page_index来获取之前已完成页面的上下文
+                        translated_texts = await self._batch_translate_texts(
+                            all_texts, 
+                            sample_config, 
+                            enhanced_ctx,
+                            page_index=page_index,
+                            batch_index=None,  # 高质量批量模式不使用批次内上下文
+                            batch_original_texts=None  # 高质量批量模式不使用批次内上下文
+                        )
                         
                         for text_idx, (img_idx, region_idx) in enumerate(text_mapping):
                             if text_idx < len(translated_texts):
@@ -3874,20 +3926,28 @@ class MangaTranslator:
                         for ctx, config in preprocessed_contexts:
                             if ctx.text_regions:
                                 ctx.text_regions = await self._apply_post_translation_processing(ctx, config)
+                        
+                        # ✅ 立即保存当前批次的翻译结果到all_page_translations，供下一个批次使用上下文
+                        for ctx, config in preprocessed_contexts:
+                            if ctx.text_regions:
+                                # 保存译文
+                                page_trans = {}
+                                for region in ctx.text_regions:
+                                    if region.translation:
+                                        page_trans[region.text] = region.translation
+                                self.all_page_translations.append(page_trans)
+                                logger.debug(f"[HQ Batch Context] Saved {len(page_trans)} translations for next batch context")
+                                
+                                # 保存原文（用于并发模式的上下文）
+                                page_original_texts = {i: (r.text_raw if hasattr(r, "text_raw") else r.text)
+                                                      for i, r in enumerate(ctx.text_regions)}
+                                self._original_page_texts.append(page_original_texts)
+                                logger.debug(f"[HQ Batch Context] Saved {len(page_original_texts)} original texts for next batch context")
+                                
                 except Exception as e:
                     logger.error(f"Error in high quality batch translation: {e}")
-                    # 保存原始错误信息和中文提示
-                    original_error = str(e)
-                    error_msg_cn = self._translate_error_message(original_error)
-                    # 组合原始错误和中文提示
-                    full_error_msg = f"{error_msg_cn}\n\n📋 原始错误信息：\n{original_error}"
-                    # 将错误信息添加到每个 context
-                    for ctx, config in preprocessed_contexts:
-                        ctx.translation_error = full_error_msg
-                        ctx.original_error = original_error  # 保存原始错误便于调试
-                        if ctx.text_regions:
-                            for region in ctx.text_regions:
-                                region.translation = region.text
+                    # 重新抛出异常，终止翻译流程
+                    raise
             # --- NEW: Handle Generate and Export for High-Quality Mode ---
             if self.generate_and_export:
                 logger.info("'Generate and Export' mode enabled for high-quality translation. Skipping rendering.")
@@ -4009,7 +4069,7 @@ class MangaTranslator:
                     # 渲染失败时抛出异常，而不是继续处理
                     raise RuntimeError(f"Rendering failed for {os.path.basename(ctx.image_name) if hasattr(ctx, 'image_name') else 'Unknown'}: {e}") from e
             
-            # ✅ 批次完成后立即清理内存
+            # ✅ 批次完成后立即清理内存（但保留翻译历史供下一批次使用）
             import gc
             # 1. 清理batch_data中的图像引用
             for data in batch_data:
@@ -4036,13 +4096,7 @@ class MangaTranslator:
                 except Exception:
                     pass
             
-            # 5. 清理累积的翻译历史（高质量翻译不需要保留）
-            if hasattr(self, 'all_page_translations'):
-                self.all_page_translations.clear()
-            if hasattr(self, '_original_page_texts'):
-                self._original_page_texts.clear()
-            
-            logger.debug(f'[MEMORY] Batch {batch_start//batch_size + 1} cleanup completed')
+            logger.debug(f'[MEMORY] Batch {batch_start//batch_size + 1} cleanup completed (kept translation history for context)')
 
         logger.info(f"High quality translation completed: processed {len(results)} images")
         return results

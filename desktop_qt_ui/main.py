@@ -44,8 +44,9 @@ def main():
     应用主入口
     """
     # --- 日志配置 ---
+    # 初始设置为INFO级别，稍后根据配置文件调整
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
         stream=sys.stdout,
     )
