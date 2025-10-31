@@ -1,3 +1,4 @@
+# LFS 大文件管理
 models/* filter=lfs diff=lfs merge=lfs -text
 *.ckpt filter=lfs diff=lfs merge=lfs -text
 *.pth filter=lfs diff=lfs merge=lfs -text
@@ -6,3 +7,8 @@ models/* filter=lfs diff=lfs merge=lfs -text
 *.safetensors filter=lfs diff=lfs merge=lfs -text
 
 "models/inpainting/inpainting_lama_mpe.ckpt" filter=lfs diff=lfs merge=lfs -text
+
+# Windows 批处理文件编码保护
+# 将 .bat 文件标记为二进制，防止 Git 自动转换编码
+# 这样可以确保仓库中存储 GBK 编码，GitHub "Download raw file" 也能正常工作
+*.bat -text -diff

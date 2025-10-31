@@ -147,7 +147,8 @@ class LamaLargeInpainter(LamaMPEInpainter):
 
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://huggingface.co/dreMaz/AnimeMangaInpainting/resolve/main/lama_large_512px.ckpt',
+            # 使用 Hugging Face 镜像站（自动遵循 HF_ENDPOINT 环境变量）
+            'url': 'https://hf-mirror.com/dreMaz/AnimeMangaInpainting/resolve/main/lama_large_512px.ckpt',
             'hash': '11d30fbb3000fb2eceae318b75d9ced9229d99ae990a7f8b3ac35c8d31f2c935',
             'file': '.',
         },

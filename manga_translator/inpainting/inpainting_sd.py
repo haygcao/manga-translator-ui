@@ -51,12 +51,12 @@ class StableDiffusionInpainter(OfflineInpainter):
             'file': 'abyssorangemix2_Hard-inpainting.safetensors',
         },
         'model_wd_swinv2': {
-            'url': 'https://huggingface.co/SmilingWolf/wd-v1-4-swinv2-tagger-v2/resolve/main/model.onnx',
+            'url': 'https://hf-mirror.com/SmilingWolf/wd-v1-4-swinv2-tagger-v2/resolve/main/model.onnx',
             'hash': '67740df7ede9a53e50d6e29c6a5c0d6c862f1876c22545d810515bad3ae17bb1',
             'file': 'wd_swinv2.onnx',
         },
         'model_wd_swinv2_csv': {
-            'url': 'https://huggingface.co/SmilingWolf/wd-v1-4-swinv2-tagger-v2/raw/main/selected_tags.csv',
+            'url': 'https://hf-mirror.com/SmilingWolf/wd-v1-4-swinv2-tagger-v2/raw/main/selected_tags.csv',
             'hash': '8c8750600db36233a1b274ac88bd46289e588b338218c2e4c62bbc9f2b516368',
             'file': 'selected_tags.csv',
         }
