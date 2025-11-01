@@ -87,7 +87,7 @@ class Detector(str, Enum):
     dbconvnext = "dbconvnext"
     ctd = "ctd"
     craft = "craft"
-    paddle = "paddle"
+    # paddle = "paddle"  # 已移除（需要 rusty_manga_image_translator）
     none = "none"
 
 class Inpainter(str, Enum):

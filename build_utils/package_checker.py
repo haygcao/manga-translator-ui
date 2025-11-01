@@ -46,7 +46,22 @@ def package_version(name: str) -> Optional[Version]:
 
 
 def _nonblank(text):
+    """过滤空行和注释行"""
     return text and not text.startswith('#')
+
+
+def _is_requirement(line):
+    """判断是否是依赖包行（过滤 pip 选项）"""
+    line = line.strip()
+    # 过滤空行和注释
+    if not line or line.startswith('#'):
+        return False
+    # 过滤 pip 选项 (--xxx 或 -x)
+    if line.startswith('-'):
+        return False
+    # 过滤 URL 形式的依赖（以 http:// 或 https:// 开头的需要保留）
+    # 这些是 wheel 文件的直接链接
+    return True
 
 
 @functools.singledispatch
@@ -80,10 +95,10 @@ def join_continuation(lines):
 def load_req_file(requirements_file: str) -> List[str]:
     """加载requirements文件"""
     with pathlib.Path(requirements_file).open(encoding='utf-8') as reqfile:
-        return list(map(
-            lambda x: str(Requirement(x)),
-            join_continuation(map(drop_comment, yield_lines(reqfile)))
-        ))
+        lines = join_continuation(map(drop_comment, yield_lines(reqfile)))
+        # 过滤掉 pip 选项（如 --extra-index-url）
+        valid_reqs = [line for line in lines if _is_requirement(line)]
+        return list(map(lambda x: str(Requirement(x)), valid_reqs))
 
 
 def _yield_reqs_to_install(req: Requirement, current_extra: str = ''):

@@ -268,10 +268,33 @@ def prepare_environment(args):
     # 注意: 不再单独安装 PyTorch，而是通过 requirements 文件统一安装
     # 这样可以避免版本冲突和 DLL 损坏问题
     
-    # 如果用户明确要求重装 PyTorch，先卸载
-    if args.reinstall_torch:
+    # 检查是否需要卸载不匹配的 PyTorch 版本
+    need_reinstall = args.reinstall_torch
+    
+    if not need_reinstall:
+        # 检测当前安装的 PyTorch 类型
+        installed_pytorch_type, installed_detail = detect_installed_pytorch_version()
+        target_type = "GPU" if "gpu" in requirements_file.lower() else "CPU"
+        
+        if installed_pytorch_type is not None and installed_pytorch_type != target_type:
+            print('\n' + '=' * 50)
+            print('⚠️  警告: 检测到 PyTorch 版本不匹配')
+            print('=' * 50)
+            print(f'当前安装: {installed_pytorch_type} 版本 ({installed_detail})')
+            print(f'目标版本: {target_type} 版本')
+            print('')
+            print('不同版本的 PyTorch 会导致 DLL 冲突和加载失败')
+            print('建议卸载旧版本后重新安装')
+            print('')
+            need_reinstall = True
+    
+    # 如果需要重装 PyTorch，先卸载
+    if need_reinstall:
         print('正在卸载现有的 PyTorch...')
         run(f'"{python}" -m pip uninstall torch torchvision torchaudio -y', "卸载 PyTorch", "无法卸载 PyTorch", live=True)
+        # 强制清理 pip 缓存，避免使用缓存的错误版本
+        print('正在清理 pip 缓存...')
+        run(f'"{python}" -m pip cache purge', "清理缓存", "无法清理缓存")
 
     # 检查并安装其他依赖
     if not os.path.exists(requirements_file):
@@ -279,8 +302,8 @@ def prepare_environment(args):
         return
 
     print(f'正在检查依赖: {requirements_file}')
-    if not check_req_file(requirements_file) or args.reinstall_torch:
-        if args.reinstall_torch:
+    if not check_req_file(requirements_file) or need_reinstall:
+        if need_reinstall:
             print(f'强制重新安装所有依赖...')
         else:
             print(f'发现缺失依赖,正在安装...')

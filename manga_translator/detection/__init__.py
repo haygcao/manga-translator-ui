@@ -6,7 +6,7 @@ from .default import DefaultDetector
 from .dbnet_convnext import DBConvNextDetector
 from .ctd import ComicTextDetector
 from .craft import CRAFTDetector
-from .paddle_rust import PaddleDetector
+# from .paddle_rust import PaddleDetector  # 已移除
 from .none import NoneDetector
 from .yolo_obb import YOLOOBBDetector
 from .common import CommonDetector, OfflineDetector
@@ -18,7 +18,7 @@ DETECTORS = {
     Detector.dbconvnext: DBConvNextDetector,
     Detector.ctd: ComicTextDetector,
     Detector.craft: CRAFTDetector,
-    Detector.paddle: PaddleDetector,
+    # Detector.paddle: PaddleDetector,  # 已移除
     Detector.none: NoneDetector,
 }
 detector_cache = {}
