@@ -8,6 +8,9 @@ from typing import Any, Dict, Optional
 
 from .async_service import AsyncService
 
+# 导入编辑器核心模块
+from ..editor.core import ResourceManager
+
 # 导入所有服务
 from .config_service import ConfigService
 from .file_service import FileService
@@ -87,6 +90,7 @@ class ServiceContainer:
             self.services['async'] = AsyncService()
             self.services['history'] = HistoryService()
             self.services['render_parameter'] = RenderParameterService()
+            self.services['resource_manager'] = ResourceManager()  # 新的资源管理器
 
             self.logger.info("后台重量级服务初始化完成")
             
@@ -217,6 +221,11 @@ class ServiceManager:
         return cls.get_service('history')
     
     @classmethod
+    def get_resource_manager(cls) -> Optional[ResourceManager]:
+        """获取资源管理器"""
+        return cls.get_service('resource_manager')
+    
+    @classmethod
     def shutdown(cls):
         """关闭服务管理器"""
         if cls._container:
@@ -266,6 +275,10 @@ def get_async_service() -> Optional[AsyncService]:
 def get_history_service() -> Optional[HistoryService]:
     """获取历史记录服务的便捷函数"""
     return ServiceManager.get_history_service()
+
+def get_resource_manager() -> Optional[ResourceManager]:
+    """获取资源管理器的便捷函数"""
+    return ServiceManager.get_resource_manager()
 
 def shutdown_services():
     """关闭服务的便捷函数"""
