@@ -139,6 +139,35 @@ class EditorController(QObject):
             self.resource_manager.add_region(region_data)
         # 同步到Model（向后兼容）
         self.model.set_regions(regions)
+    
+    def _get_region_by_index(self, index: int):
+        """根据索引获取区域
+        
+        Args:
+            index: 区域索引
+        
+        Returns:
+            Dict: 区域数据，如果不存在返回None
+        """
+        regions = self._get_regions()
+        if 0 <= index < len(regions):
+            return regions[index]
+        return None
+    
+    def _update_region(self, index: int, updates: dict):
+        """更新区域数据
+        
+        Args:
+            index: 区域索引
+            updates: 要更新的数据
+        """
+        regions = self._get_regions()
+        if 0 <= index < len(regions):
+            regions[index].update(updates)
+            # 重新设置所有区域以同步
+            self._set_regions(regions)
+        # 同步到Model
+        self.model.update_region_silent(index, updates)
 
     def set_view(self, view):
         """设置view引用，用于更新UI状态"""
@@ -844,7 +873,7 @@ class EditorController(QObject):
 
     @pyqtSlot(int, str)
     def update_translated_text(self, region_index: int, text: str):
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data or old_region_data.get('translation') == text:
             return
 
@@ -861,7 +890,7 @@ class EditorController(QObject):
 
     @pyqtSlot(int, str)
     def update_original_text(self, region_index: int, text: str):
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data or old_region_data.get('text') == text:
             return
 
@@ -879,7 +908,7 @@ class EditorController(QObject):
 
     @pyqtSlot(int, int)
     def update_font_size(self, region_index: int, size: int):
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data or old_region_data.get('font_size') == size:
             return
 
@@ -896,7 +925,7 @@ class EditorController(QObject):
 
     @pyqtSlot(int, str)
     def update_font_color(self, region_index: int, color: str):
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data or old_region_data.get('font_color') == color:
             return
 
@@ -922,7 +951,7 @@ class EditorController(QObject):
         import os
         from manga_translator.utils import BASE_PATH
         
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data:
             return
         
@@ -953,7 +982,7 @@ class EditorController(QObject):
         alignment_map = {"自动": "auto", "左对齐": "left", "居中": "center", "右对齐": "right"}
         alignment_value = alignment_map.get(alignment_text, "auto")
 
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data or old_region_data.get('alignment') == alignment_value:
             return
 
@@ -973,7 +1002,7 @@ class EditorController(QObject):
         """处理来自视图的区域几���变化。"""
         # 现在RegionTextItem在调用callback之前不会修改self.region_data
         # 所以我们可以从模型中获取正确的旧数据
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data:
             return
             
@@ -1003,7 +1032,7 @@ class EditorController(QObject):
         direction_map = {"自动": "auto", "横排": "horizontal", "竖排": "vertical"}
         direction_value = direction_map.get(direction_text, "auto")
 
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data or old_region_data.get('direction') == direction_value:
             return
 
@@ -1046,7 +1075,7 @@ class EditorController(QObject):
         """Adds a new polygon (in image coordinates) to an existing region."""
         self.logger.info(f"Controller: Adding new geometry to region {region_index}")
         
-        old_region_data = self.model.get_region_by_index(region_index)
+        old_region_data = self._get_region_by_index(region_index)
         if not old_region_data:
             self.logger.error(f"Invalid region index {region_index} for adding geometry.")
             return
