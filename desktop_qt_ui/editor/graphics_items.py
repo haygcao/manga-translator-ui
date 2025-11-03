@@ -238,6 +238,35 @@ class RegionTextItem(QGraphicsItemGroup):
             if value:
                 # 变换原点始终是局部坐标的(0,0)
                 self.setTransformOriginPoint(QPointF(0, 0))
+        elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            # 位置改变后，更新模型数据
+            if hasattr(self, '_on_geometry_change_callback') and self._on_geometry_change_callback:
+                # 获取新的场景坐标中心
+                scene_center = self.scenePos()
+                # 转换为图像坐标
+                img_x, img_y = self._scene_to_image_coords(scene_center)
+                # 更新visual_center（这是模型坐标中的中心）
+                self.visual_center = QPointF(img_x, img_y)
+                
+                # 更新region_data
+                new_region_data = self.region_data.copy()
+                
+                # 重新计算模型坐标的polygons
+                model_polygons = []
+                for poly_local in self.polygons:
+                    model_line = []
+                    for p in poly_local:
+                        # local坐标 + center = model坐标
+                        model_x = p.x() + self.visual_center.x()
+                        model_y = p.y() + self.visual_center.y()
+                        model_line.append([model_x, model_y])
+                    model_polygons.append(model_line)
+                
+                new_region_data['polygons'] = model_polygons
+                
+                # 调用回调更新controller
+                self._on_geometry_change_callback(self.region_index, new_region_data)
+        
         return super().itemChange(change, value)
 
     def _setup_pens_and_brushes(self):
