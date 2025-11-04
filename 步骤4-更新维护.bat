@@ -28,18 +28,7 @@ if not exist "%CONDA_ENV_PATH%\python.exe" (
 )
 
 REM 激活conda环境
-REM 检测Miniconda位置
-set MINICONDA_ROOT=%CD%\Miniconda3
-echo %CD%| findstr /R /C:"[^\x00-\x7F]" >nul
-if %ERRORLEVEL% == 0 (
-    set MINICONDA_ROOT=%~d0\Miniconda3
-)
-
-if exist "%MINICONDA_ROOT%\Scripts\activate.bat" (
-    call "%MINICONDA_ROOT%\Scripts\activate.bat" "%CONDA_ENV_PATH%" 2>nul
-) else (
-    call conda activate "%CONDA_ENV_PATH%" 2>nul
-)
+call conda activate "%CONDA_ENV_PATH%"
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] 无法激活环境
     pause

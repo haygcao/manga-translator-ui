@@ -42,7 +42,7 @@
     "yolo_obb_overlap_threshold": 0.1
   },
   "inpainter": {
-    "inpainter": "lama_mpe",
+    "inpainter": "lama_large",
     "inpainting_size": 2048,
     "inpainting_precision": "fp32"
   },
