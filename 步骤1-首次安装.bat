@@ -26,11 +26,16 @@ REM 检查是否已有本地Miniconda安装
 set MINICONDA_ROOT=%CD%\Miniconda3
 set CONDA_INSTALLED=0
 set PATH_HAS_CHINESE=0
+set ALT_INSTALL_PATH=
 
 REM 检测路径是否包含非ASCII字符（中文等）
-echo %CD%| findstr /R "[^\x00-\x7F]" >nul
-if %ERRORLEVEL% == 0 (
-    set PATH_HAS_CHINESE=1
+for /f "delims=" %%i in ('echo %CD%^| findstr /R "[^\x00-\x7F]"') do set PATH_HAS_CHINESE=1
+
+REM 如果检测到非ASCII字符，准备备用路径
+if %PATH_HAS_CHINESE% == 1 (
+    REM 使用当前磁盘根目录的Miniconda3作为备用
+    set ALT_INSTALL_PATH=%~d0\Miniconda3_MangaTranslator
+    set MINICONDA_ROOT=%~d0\Miniconda3_MangaTranslator
 )
 
 if exist "%MINICONDA_ROOT%\Scripts\conda.exe" (
@@ -45,50 +50,33 @@ REM 提示：需要安装本地Miniconda
 echo [INFO] 未检测到本地 Miniconda
 echo.
 echo 本项目需要 Python 3.12 环境
-echo 将安装 Miniconda 到项目目录
 echo.
 
-REM 如果路径包含中文，给出警告
+REM 如果路径包含中文，给出说明并使用备用路径
 if %PATH_HAS_CHINESE% == 1 (
     echo.
     echo ========================================
-    echo [!] 警告: 检测到路径包含非英文字符
+    echo [!] 检测到路径包含非英文字符
     echo ========================================
     echo 当前路径: %CD%
     echo.
-    echo Miniconda 对非英文路径的支持不完善，可能导致:
-    echo   - 安装失败或激活失败
-    echo   - 某些功能异常
-    echo   - 包安装错误
+    echo Miniconda 对非英文路径的兼容性有限
+    echo 将自动使用备用安装路径: %MINICONDA_ROOT%
+    echo (同一磁盘，不同位置)
     echo.
-    echo 强烈建议:
-    echo   1. 将项目移动到纯英文路径 (例如: D:\manga-translator\)
-    echo   2. 避免路径中包含中文、空格等特殊字符
+    echo 建议: 为避免其他潜在问题，可以将项目移动到纯英文路径
+    echo       例如: D:\manga-translator\
     echo.
-    echo 是否继续当前路径的安装?
-    echo [1] 是 - 尝试安装 (不保证成功)
-    echo [2] 否 - 中止安装，移动项目后重试
-    echo.
-    set /p continue_install="请选择 (1/2, 默认2): "
-    
-    if not "!continue_install!"=="1" (
-        echo.
-        echo 安装已取消
-        echo 请将项目移动到纯英文路径后重新运行此脚本
-        pause
-        exit /b 1
-    )
-    echo.
-    echo 继续安装...
-    echo.
+    pause
 )
 
+echo 将安装 Miniconda 到: %MINICONDA_ROOT%
+echo.
         echo Miniconda 特点:
         echo   - 体积小 (约50MB)
         echo   - 可管理多个Python版本
         echo   - 环境隔离,互不干扰
         echo   - 自带pip包管理
-        echo   - 安装位置: %CD%\Miniconda3
         echo.
 echo 是否安装 Miniconda?
 echo [1] 是 (推荐) - 自动下载安装
@@ -158,7 +146,7 @@ echo.
 echo 正在安装 Miniconda...
 echo.
 echo 安装选项:
-echo   - 安装位置: %CD%\Miniconda3
+echo   - 安装位置: %MINICONDA_ROOT%
 echo   - Python版本: 3.12
 echo   - 仅为当前项目使用
 echo.
@@ -166,7 +154,7 @@ echo 正在静默安装...
 timeout /t 2 >nul
 
         REM 静默安装Miniconda
-        start /wait Miniconda3-latest.exe /InstallationType=JustMe /AddToPath=1 /RegisterPython=0 /S /D=%CD%\Miniconda3
+        start /wait Miniconda3-latest.exe /InstallationType=JustMe /AddToPath=1 /RegisterPython=0 /S /D=%MINICONDA_ROOT%
 
         if %ERRORLEVEL% neq 0 (
             echo.
@@ -192,12 +180,12 @@ timeout /t 2 >nul
 
         REM 初始化conda环境
         echo 正在初始化 conda 环境...
-        call "%CD%\Miniconda3\Scripts\activate.bat"
+        call "%MINICONDA_ROOT%\Scripts\activate.bat"
         call conda init cmd.exe >nul 2>&1
 
         echo.
         echo [OK] Miniconda 已安装并配置完成
-        echo 安装位置: %CD%\Miniconda3
+        echo 安装位置: %MINICONDA_ROOT%
         echo.
         echo 请关闭当前命令窗口,重新运行此脚本
         echo (需要重新加载环境变量)
@@ -647,8 +635,8 @@ if %CONDA_ENV_EXISTS% == 0 (
 echo.
 echo 正在激活环境...
 REM 使用直接路径激活，避免conda activate的路径问题
-if exist "%CD%\Miniconda3\Scripts\activate.bat" (
-    call "%CD%\Miniconda3\Scripts\activate.bat" "%CONDA_ENV_PATH%" 2>nul
+if exist "%MINICONDA_ROOT%\Scripts\activate.bat" (
+    call "%MINICONDA_ROOT%\Scripts\activate.bat" "%CONDA_ENV_PATH%" 2>nul
     if !ERRORLEVEL! neq 0 (
         REM 尝试使用conda activate作为备用
         call conda activate "%CONDA_ENV_PATH%" 2>nul
