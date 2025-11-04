@@ -74,7 +74,7 @@ loguru==0.7.3
 manga-ocr==0.1.14
 matplotlib==3.10.5
 networkx==3.5
-numpy>=2.0,<2.4
+# numpy 由 PyTorch 自动管理，不要在此显式指定以避免版本冲突
 omegaconf==2.3.0
 onnxruntime>=1.23.0
 openai==1.63.0
