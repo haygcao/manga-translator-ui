@@ -69,20 +69,11 @@ echo.
 echo 本项目需要 Python 3.12 环境
 echo.
 
-REM [DEBUG] 检查路径变量
-echo [DEBUG] PATH_HAS_CHINESE = !PATH_HAS_CHINESE!
-echo [DEBUG] MINICONDA_ROOT = !MINICONDA_ROOT!
-echo.
-
 REM 如果路径包含中文，给出说明并使用备用路径
-echo [DEBUG] 准备执行中文路径检查, PATH_HAS_CHINESE=!PATH_HAS_CHINESE!
 if !PATH_HAS_CHINESE!==1 goto :__PATH_WARNING
-
-echo [DEBUG] 路径不包含中文，跳过备用路径提示
 goto :__PATH_WARNING_END
 
 :__PATH_WARNING
-echo [DEBUG] 进入中文路径提示分支
 echo ========================================
 echo [警告] 检测到路径包含非英文字符
 echo ========================================
@@ -100,7 +91,6 @@ echo.
 goto :__PATH_WARNING_END
 
 :__PATH_WARNING_END
-echo [DEBUG] 中文路径检查完成
 echo.
 
 echo 将安装 Miniconda 到: %MINICONDA_ROOT%
