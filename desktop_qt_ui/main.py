@@ -6,6 +6,13 @@ import warnings
 # 设置 Hugging Face 镜像站（国内用户加速下载）
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
+# 修复便携版Python的路径问题：将脚本所在目录添加到sys.path开头
+# 便携版Python使用._pth文件会禁用自动添加脚本目录的默认行为
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# 将项目根目录添加到 sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 # 修复PyInstaller打包后onnxruntime的DLL加载问题
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     # 运行在PyInstaller打包环境中
@@ -20,9 +27,6 @@ if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
 # 抑制 xformers/triton 警告
 warnings.filterwarnings('ignore', message='.*Triton.*')
 warnings.filterwarnings('ignore', module='xformers')
-
-# 将项目根目录添加到 sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from PyQt6.QtWidgets import QApplication
 from main_window import MainWindow

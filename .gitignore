@@ -6,6 +6,8 @@ __pycache__/
 venv/
 .venv_cpu/
 .venv_gpu/
+conda_env/
+Miniconda3/
 
 # Environment files (contain sensitive information)
 .env

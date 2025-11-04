@@ -9,24 +9,31 @@ echo Manga Translator UI - Update Tool
 echo ========================================
 echo.
 
-REM 检测虚拟环境有效性
-set VENV_VALID=0
-if exist "venv\Scripts\python.exe" (
-    venv\Scripts\python.exe -c "import sys; sys.exit(0)" >nul 2>&1
-    if !ERRORLEVEL! == 0 (
-        set VENV_VALID=1
-    )
-)
+REM 检查conda环境（项目本地环境）
+set CONDA_ENV_PATH=%CD%\conda_env
 
-if !VENV_VALID! == 0 (
-    echo [ERROR] 虚拟环境不存在或已损坏
-    echo 请先运行 步骤1-首次安装.bat 创建虚拟环境
+where conda >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] 未检测到 Conda
+    echo 请先运行 步骤1-首次安装.bat 安装 Miniconda
     pause
     exit /b 1
 )
 
-REM 激活虚拟环境
-call venv\Scripts\activate.bat
+if not exist "%CONDA_ENV_PATH%\python.exe" (
+    echo [ERROR] Conda环境不存在
+    echo 请先运行 步骤1-首次安装.bat 创建环境
+    pause
+    exit /b 1
+)
+
+REM 激活conda环境
+call conda activate "%CONDA_ENV_PATH%"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] 无法激活环境
+    pause
+    exit /b 1
+)
 
 REM 检查是否有便携版 Git
 if exist "PortableGit\cmd\git.exe" (

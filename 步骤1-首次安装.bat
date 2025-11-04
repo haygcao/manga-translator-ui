@@ -9,159 +9,166 @@ echo Manga Translator UI - Installer
 echo ========================================
 echo.
 echo 本脚本将自动完成以下步骤:
-echo [1] 下载/解压便携版 Python 3.12 (如需要)
+echo [1] 安装 Miniconda (Python环境管理, 如需要)
 echo [2] 下载便携版 Git (如需要)
 echo [3] 从 GitHub 克隆代码
-echo [4] 安装 Python 依赖
+echo [4] 创建Python环境并安装依赖
 echo [5] 完成安装
 echo.
 pause
 
-REM ===== 步骤1: 检查/下载/解压便携版Python =====
+REM ===== 步骤1: 检查/安装Miniconda =====
 echo.
-echo [1/5] 检查便携版 Python 3.12...
+echo [1/5] 检查 Miniconda (Python环境管理)...
 echo ========================================
 
-REM 检查是否已经解压好
-if exist "Python-3.12.12\python.exe" (
-    set PYTHON=Python-3.12.12\python.exe
-    set PYTHON_VERSION=3.12
-    echo [OK] 找到便携版 Python 3.12
-    Python-3.12.12\python.exe --version
+REM 检查系统是否已安装Python/conda
+set PYTHON=
+set CONDA_INSTALLED=0
+
+REM 检查conda
+where conda >nul 2>&1
+if %ERRORLEVEL% == 0 (
+    set CONDA_INSTALLED=1
+    echo [OK] 检测到 Conda 已安装
+    conda --version
+    
+    REM 检查Python
+    where python >nul 2>&1
+    if %ERRORLEVEL% == 0 (
+        for /f "tokens=*" %%i in ('python --version 2^>^&1') do set PY_VER=%%i
+        echo [OK] Python: !PY_VER!
+        set PYTHON=python
+        goto :check_git
+    )
+)
+
+REM 检查系统Python
+where python >nul 2>&1
+if %ERRORLEVEL% == 0 (
+    for /f "tokens=*" %%i in ('python --version 2^>^&1') do set PY_VER=%%i
+    echo [OK] 检测到系统 Python: !PY_VER!
+    set PYTHON=python
     goto :check_git
 )
 
-echo [INFO] 未找到便携版 Python
+echo [INFO] 未检测到 Python 或 Conda
 echo.
+echo 推荐安装 Miniconda (轻量级Python环境管理)
+echo.
+        echo Miniconda 特点:
+        echo   - 体积小 (约50MB)
+        echo   - 可管理多个Python版本
+        echo   - 环境隔离,互不干扰
+        echo   - 自带pip包管理
+        echo   - 安装位置: %CD%\Miniconda3
+        echo.
+echo 是否安装 Miniconda?
+echo [1] 是 (推荐) - 自动下载安装
+echo [2] 否 - 手动安装后重新运行脚本
+echo [3] 取消安装
+echo.
+set /p install_conda="请选择 (1/2/3, 默认1): "
 
-REM 检查是否已下载压缩包
-if exist "python-3.12.12-win64.7z" (
-    echo [INFO] 找到已下载的压缩包
-    goto :extract_python
+if "%install_conda%"=="2" (
+    echo.
+    echo 请访问以下网址下载安装 Miniconda:
+    echo   官方: https://docs.conda.io/en/latest/miniconda.html
+    echo   国内: https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/
+    echo.
+    echo 安装时请勾选 "Add to PATH" 选项
+    echo 安装完成后重新运行本脚本
+    pause
+    exit /b 1
 )
 
-echo 需要下载便携版 Python 3.12 (约25MB)
+if "%install_conda%"=="3" (
+    echo 安装已取消
+    pause
+    exit /b 1
+)
+
+REM 下载并安装Miniconda
 echo.
+echo 正在下载 Miniconda...
+echo.
+
+REM Miniconda下载链接
+set MINICONDA_OFFICIAL=https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe
+set MINICONDA_TUNA=https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Windows-x86_64.exe
+
 echo 请选择下载源:
-echo [1] GitHub 官方
-echo [2] gh-proxy.com 镜像 (国内推荐)
+echo [1] 清华大学镜像 (国内推荐, 更快)
+echo [2] Anaconda 官方
 echo.
-set /p python_source="请选择 (1/2, 默认2): "
+set /p conda_source="请选择 (1/2, 默认1): "
 
-set PYTHON_VERSION_FULL=3.12.12
-set PYTHON_URL_PATH=https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.8.2/python-3.12.12-win64.7z
-
-if "%python_source%"=="1" (
-    set PYTHON_URL=%PYTHON_URL_PATH%
-    echo 使用: GitHub 官方源
+if "%conda_source%"=="2" (
+    set MINICONDA_URL=%MINICONDA_OFFICIAL%
+    echo 使用: Anaconda 官方源
 ) else (
-    set PYTHON_URL=https://gh-proxy.com/%PYTHON_URL_PATH%
-    echo 使用: gh-proxy.com 镜像
+    set MINICONDA_URL=%MINICONDA_TUNA%
+    echo 使用: 清华大学镜像
 )
 
 echo.
-echo 下载中... (约25MB, 可能需要几分钟)
-powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Write-Host '正在下载...'; try { Invoke-WebRequest -Uri '%PYTHON_URL%' -OutFile 'python-3.12.12-win64.7z' -UseBasicParsing; Write-Host '[OK] 下载完成'; exit 0 } catch { Write-Host '[ERROR] 下载失败: $_'; exit 1 }}"
+echo 下载中... (约50MB, 可能需要几分钟)
+powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Write-Host '正在下载 Miniconda...'; try { Invoke-WebRequest -Uri '%MINICONDA_URL%' -OutFile 'Miniconda3-latest.exe' -UseBasicParsing; Write-Host '[OK] 下载完成'; exit 0 } catch { Write-Host '[ERROR] 下载失败: $_'; exit 1 }}"
 
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo 下载失败,请检查网络连接后重试
+    echo [ERROR] 下载失败,请检查网络连接
+    echo.
+    echo 你可以:
+    echo 1. 手动下载: %MINICONDA_URL%
+    echo 2. 保存为: Miniconda3-latest.exe
+    echo 3. 放到当前目录后重新运行脚本
     pause
     exit /b 1
 )
 
-:extract_python
 echo.
-echo 正在解压 Python 3.12...
-echo 需要使用 7-Zip 解压, 正在检查...
-
-REM 检查系统是否已安装7z
-where 7z >nul 2>&1
-if %ERRORLEVEL% == 0 (
-    echo [OK] 找到 7-Zip
-    7z x python-3.12.12-win64.7z -y
-    move python-3.12.12-portable Python-3.12.12 >nul 2>&1
-    goto :check_python_extracted
-)
-
-REM 检查常见安装路径
-if exist "C:\Program Files\7-Zip\7z.exe" (
-    echo [OK] 找到 7-Zip
-    "C:\Program Files\7-Zip\7z.exe" x python-3.12.12-win64.7z -y
-    move python-3.12.12-portable Python-3.12.12 >nul 2>&1
-    goto :check_python_extracted
-)
-
-REM 检查是否已有便携版7z
-if exist "Portable7z\7zr.exe" (
-    echo [OK] 找到便携版 7-Zip
-    Portable7z\7zr.exe x python-3.12.12-win64.7z -y
-    move python-3.12.12-portable Python-3.12.12 >nul 2>&1
-    goto :check_python_extracted
-)
-
-REM 下载便携版7-Zip
-echo [INFO] 未找到 7-Zip
-echo 正在下载便携版 7-Zip (约1MB)...
+echo 正在安装 Miniconda...
 echo.
+echo 安装选项:
+echo   - 安装位置: %USERPROFILE%\miniconda3
+echo   - 添加到PATH: 是
+echo   - 仅为当前用户安装
+echo.
+echo 请在安装程序中点击"Next"完成安装
+echo 安装窗口将自动打开...
+timeout /t 3 >nul
 
-if not exist "tmp" mkdir tmp
+        REM 静默安装Miniconda
+        start /wait Miniconda3-latest.exe /InstallationType=JustMe /AddToPath=1 /RegisterPython=0 /S /D=%CD%\Miniconda3
 
-REM 下载7-Zip Extra便携版（包含7zr.exe）
-set SEVENZIP_URL=https://www.7-zip.org/a/7zr.exe
-powershell -Command "& {[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Write-Host '正在下载 7-Zip...'; try { Invoke-WebRequest -Uri '%SEVENZIP_URL%' -OutFile 'tmp\7zr.exe' -UseBasicParsing; Write-Host '[OK] 下载完成'; exit 0 } catch { Write-Host '[ERROR] 下载失败: $_'; exit 1 }}"
+        if %ERRORLEVEL% neq 0 (
+            echo [ERROR] Miniconda 安装失败
+            pause
+            exit /b 1
+        )
 
-if %ERRORLEVEL% neq 0 (
-    echo.
-    echo [ERROR] 7-Zip 下载失败
-    echo.
-    echo 请选择:
-    echo [1] 安装 7-Zip 后重试
-    echo [2] 手动解压 python-3.12.12-win64.7z 到 Python-3.12.12 文件夹
-    echo [3] 退出
-    echo.
-    set /p extract_choice="请选择 (1/2/3): "
-    
-    if "!extract_choice!"=="1" (
-        start https://www.7-zip.org/download.html
+        echo [OK] Miniconda 安装完成
+        echo.
+
+        REM 清理安装包
+        if exist "Miniconda3-latest.exe" (
+            echo 正在清理安装包...
+            del /f /q "Miniconda3-latest.exe" >nul 2>&1
+        )
+
+        REM 初始化conda环境
+        echo 正在初始化 conda 环境...
+        call "%CD%\Miniconda3\Scripts\activate.bat"
+        call conda init cmd.exe >nul 2>&1
+
+        echo.
+        echo [OK] Miniconda 已安装并配置完成
+        echo.
+        echo 请关闭当前命令窗口,重新运行此脚本
+        echo (需要重新加载环境变量)
         pause
-        exit /b 1
-    ) else if "!extract_choice!"=="2" (
-        echo 请手动解压后重新运行本脚本
-        pause
-        exit /b 1
-    )
-    exit /b 1
-)
-
-REM 创建便携版7z目录
-if not exist "Portable7z" mkdir Portable7z
-move /y tmp\7zr.exe Portable7z\7zr.exe >nul
-
-echo [OK] 7-Zip 准备完成
-echo 正在解压 Python...
-Portable7z\7zr.exe x python-3.12.12-win64.7z -y
-move python-3.12.12-portable Python-3.12.12 >nul 2>&1
-
-:check_python_extracted
-if not exist "Python-3.12.12\python.exe" (
-    echo [ERROR] 解压后未找到 python.exe
-    pause
-    exit /b 1
-)
-
-echo [OK] Python 3.12 解压完成
-
-REM 清理压缩包
-if exist "python-3.12.12-win64.7z" (
-    echo 正在清理安装包...
-    del /f /q "python-3.12.12-win64.7z" >nul 2>&1
-    echo [OK] 已删除 python-3.12.12-win64.7z
-)
-
-set PYTHON=Python-3.12.12\python.exe
-set PYTHON_VERSION=3.12
-Python-3.12.12\python.exe --version
+        exit /b 0
 
 REM ===== 步骤2: 检查/下载Git =====
 :check_git
@@ -549,51 +556,63 @@ echo [OK] 代码克隆完成
 
 :create_venv
 
-REM ===== 步骤4: 创建虚拟环境并安装依赖 =====
+REM ===== 步骤4: 创建Conda环境并安装依赖 =====
 echo.
-echo [4/5] 创建虚拟环境并安装依赖...
+echo [4/5] 创建Python环境并安装依赖...
 echo ========================================
 echo.
 
-REM 检测虚拟环境有效性
-set VENV_VALID=0
-if exist "venv\Scripts\python.exe" (
-    echo 检测到现有虚拟环境,正在验证...
-    venv\Scripts\python.exe -c "import sys; sys.exit(0)" >nul 2>&1
-    if !ERRORLEVEL! == 0 (
-        set VENV_VALID=1
-        echo [OK] 虚拟环境有效
+REM 使用项目本地环境（不占用C盘空间）
+set CONDA_ENV_PATH=%CD%\conda_env
+set CONDA_ENV_EXISTS=0
+
+if exist "%CONDA_ENV_PATH%\python.exe" (
+    set CONDA_ENV_EXISTS=1
+    echo [OK] 检测到现有环境: conda_env
+)
+
+if %CONDA_ENV_EXISTS% == 1 (
+    echo.
+    echo 检测到现有Conda环境,是否重新创建?
+    echo [1] 使用现有环境 (快速)
+    echo [2] 重新创建环境 (全新安装)
+    echo.
+    set /p recreate_env="请选择 (1/2, 默认1): "
+    
+    if "!recreate_env!"=="2" (
+        echo 正在删除现有环境...
+        call conda deactivate >nul 2>&1
+        rmdir /s /q "%CONDA_ENV_PATH%"
+        set CONDA_ENV_EXISTS=0
+        echo [OK] 环境已删除
     ) else (
-        echo [警告] 虚拟环境已损坏或失效
+        echo [OK] 使用现有环境
     )
 )
 
-REM 创建或重建虚拟环境
-if !VENV_VALID! == 0 (
-    if exist "venv" (
-        echo 正在删除无效的虚拟环境...
-        rmdir /s /q "venv" 2>nul
-        if exist "venv" (
-            echo [ERROR] 无法删除旧的虚拟环境
-            echo 请手动删除 venv 文件夹后重试
-            pause
-            exit /b 1
-        )
-    )
-    
-    echo 正在创建虚拟环境...
-    Python-3.12.12\python.exe -m venv venv
-    if %ERRORLEVEL% neq 0 (
-        echo [ERROR] 虚拟环境创建失败
+if %CONDA_ENV_EXISTS% == 0 (
+    echo.
+    echo 正在创建Conda环境...
+    echo 位置: %CONDA_ENV_PATH%
+    echo Python版本: 3.12
+    echo.
+    call conda create --prefix "%CONDA_ENV_PATH%" python=3.12 -y
+    if !ERRORLEVEL! neq 0 (
+        echo [ERROR] Conda环境创建失败
         pause
         exit /b 1
     )
-    echo [OK] 虚拟环境创建完成
+    echo [OK] Conda环境创建完成
 )
 
 echo.
-echo 正在激活虚拟环境...
-call venv\Scripts\activate.bat
+echo 正在激活环境...
+call conda activate "%CONDA_ENV_PATH%"
+if !ERRORLEVEL! neq 0 (
+    echo [ERROR] 环境激活失败
+    pause
+    exit /b 1
+)
 
 echo 正在升级 pip...
 python -m pip install --upgrade pip >nul 2>&1
