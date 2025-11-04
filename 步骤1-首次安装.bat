@@ -29,10 +29,10 @@ set PATH_HAS_CHINESE=0
 set ALT_INSTALL_PATH=
 
 REM 检测路径是否包含非ASCII字符（中文等）
-REM 使用临时变量避免脚本名干扰
+REM 使用chcp命令配合PowerShell进行更可靠的检测
 set "TEMP_CHECK_PATH=%CD%"
-echo !TEMP_CHECK_PATH!| findstr /R /C:"[^\x00-\x7F]" >nul
-if %ERRORLEVEL% == 0 (
+powershell -Command "if ('%TEMP_CHECK_PATH%' -match '[^\x00-\x7F]') { exit 1 } else { exit 0 }" >nul 2>&1
+if %ERRORLEVEL% neq 0 (
     REM 路径包含中文，使用磁盘根目录
     set MINICONDA_ROOT=%~d0\Miniconda3
     set PATH_HAS_CHINESE=1
