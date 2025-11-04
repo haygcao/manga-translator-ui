@@ -26,9 +26,19 @@ REM 检查是否已有本地Miniconda安装
 set MINICONDA_ROOT=%CD%\Miniconda3
 set CONDA_INSTALLED=0
 
+REM 检测路径中是否包含中文字符
+echo %CD%| findstr /R /C:"[^\x00-\x7F]" >nul
+if %ERRORLEVEL% == 0 (
+    REM 路径包含中文，使用磁盘根目录
+    set MINICONDA_ROOT=%~d0\Miniconda3
+    echo [WARNING] 检测到路径包含中文字符
+    echo Miniconda 不支持中文路径，将安装到: !MINICONDA_ROOT!
+    echo.
+)
+
 if exist "%MINICONDA_ROOT%\Scripts\conda.exe" (
     set CONDA_INSTALLED=1
-    echo [OK] 检测到本地 Miniconda 已安装
+    echo [OK] 检测到 Miniconda 已安装
     echo 位置: %MINICONDA_ROOT%
     call "%MINICONDA_ROOT%\Scripts\conda.exe" --version
     goto :check_git
@@ -115,15 +125,20 @@ echo.
 echo 正在安装 Miniconda...
 echo.
 echo 安装选项:
-echo   - 安装位置: %CD%\Miniconda3
+echo   - 安装位置: %MINICONDA_ROOT%
 echo   - Python版本: 3.12
 echo   - 仅为当前项目使用
 echo.
+if not "%MINICONDA_ROOT%"=="%CD%\Miniconda3" (
+    echo [提示] 由于当前路径包含中文字符,
+    echo        Miniconda 将安装到磁盘根目录以避免兼容性问题
+    echo.
+)
 echo 正在静默安装...
 timeout /t 2 >nul
 
         REM 静默安装Miniconda
-        start /wait Miniconda3-latest.exe /InstallationType=JustMe /AddToPath=1 /RegisterPython=0 /S /D=%CD%\Miniconda3
+        start /wait Miniconda3-latest.exe /InstallationType=JustMe /AddToPath=1 /RegisterPython=0 /S /D=%MINICONDA_ROOT%
 
         if %ERRORLEVEL% neq 0 (
             echo.
@@ -149,12 +164,12 @@ timeout /t 2 >nul
 
         REM 初始化conda环境
         echo 正在初始化 conda 环境...
-        call "%CD%\Miniconda3\Scripts\activate.bat"
+        call "%MINICONDA_ROOT%\Scripts\activate.bat"
         call conda init cmd.exe >nul 2>&1
 
         echo.
         echo [OK] Miniconda 已安装并配置完成
-        echo 安装位置: %CD%\Miniconda3
+        echo 安装位置: %MINICONDA_ROOT%
         echo.
         echo 请关闭当前命令窗口,重新运行此脚本
         echo (需要重新加载环境变量)
