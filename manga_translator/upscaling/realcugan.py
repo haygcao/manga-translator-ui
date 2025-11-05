@@ -153,6 +153,15 @@ class RealCUGANUpscaler(OfflineUpscaler):
             
             # Load weights
             state_dict = torch.load(model_path, map_location='cpu')
+            
+            # Handle pro models that might have wrapper structure
+            if 'pro' in state_dict and isinstance(state_dict['pro'], dict):
+                # Extract the actual model weights from the 'pro' wrapper
+                state_dict = state_dict['pro']
+            elif 'pro' in state_dict:
+                # If 'pro' exists but is not a dict, remove it
+                state_dict = {k: v for k, v in state_dict.items() if k != 'pro'}
+            
             self.model.load_state_dict(state_dict, strict=True)
             
             # Move to device
