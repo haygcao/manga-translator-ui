@@ -9,13 +9,19 @@ echo Manga Translator UI - Update Tool
 echo ========================================
 echo.
 
+REM 修复管理员模式下%CD%变成system32的问题
+REM 使用脚本所在目录作为工作目录
+cd /d "%~dp0"
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+
 REM 检查conda环境（项目本地环境）
-set CONDA_ENV_PATH=%CD%\conda_env
-set MINICONDA_ROOT=%CD%\Miniconda3
+set CONDA_ENV_PATH=%SCRIPT_DIR%\conda_env
+set MINICONDA_ROOT=%SCRIPT_DIR%\Miniconda3
 
 REM 检测路径是否包含非ASCII字符（中文等）
 REM 使用PowerShell进行更可靠的检测
-set "TEMP_CHECK_PATH=%CD%"
+set "TEMP_CHECK_PATH=%SCRIPT_DIR%"
 powershell -Command "$path = '%TEMP_CHECK_PATH%'; if ($path -match '[^\x00-\x7F]') { exit 1 } else { exit 0 }" >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     REM 路径包含中文，使用磁盘根目录的Miniconda
@@ -62,8 +68,8 @@ if %ERRORLEVEL% neq 0 (
 
 REM 检查是否有便携版 Git
 if exist "PortableGit\cmd\git.exe" (
-    set "GIT=%CD%\PortableGit\cmd\git.exe"
-    set "PATH=%CD%\PortableGit\cmd;%PATH%"
+    set "GIT=%SCRIPT_DIR%\PortableGit\cmd\git.exe"
+    set "PATH=%SCRIPT_DIR%\PortableGit\cmd;%PATH%"
 ) else (
     git --version >nul 2>&1
     if %ERRORLEVEL% == 0 (
@@ -140,7 +146,7 @@ if /i not "!confirm!"=="y" (
 
 echo.
 echo 正在强制同步到远程分支...
-%GIT% reset --hard origin/main
+"%GIT%" reset --hard origin/main
 
 if %ERRORLEVEL% == 0 (
     echo [OK] 代码更新完成

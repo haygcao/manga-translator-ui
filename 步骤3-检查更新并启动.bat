@@ -2,13 +2,19 @@
 chcp 936 >nul
 setlocal EnableDelayedExpansion
 
+REM 修复管理员模式下%CD%变成system32的问题
+REM 使用脚本所在目录作为工作目录
+cd /d "%~dp0"
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+
 REM 检查conda环境（项目本地环境）
-set CONDA_ENV_PATH=%CD%\conda_env
-set MINICONDA_ROOT=%CD%\Miniconda3
+set CONDA_ENV_PATH=%SCRIPT_DIR%\conda_env
+set MINICONDA_ROOT=%SCRIPT_DIR%\Miniconda3
 
 REM 检测路径是否包含非ASCII字符（中文等）
 REM 使用PowerShell进行更可靠的检测
-set "TEMP_CHECK_PATH=%CD%"
+set "TEMP_CHECK_PATH=%SCRIPT_DIR%"
 powershell -Command "$path = '%TEMP_CHECK_PATH%'; if ($path -match '[^\x00-\x7F]') { exit 1 } else { exit 0 }" >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     REM 路径包含中文，使用磁盘根目录的Miniconda
@@ -22,6 +28,9 @@ if %ERRORLEVEL% neq 0 (
     pause
     exit /b 1
 )
+
+REM 尝试获取实际的Miniconda路径（处理system32情况）
+for /f "delims=" %%i in ('conda info --base 2^>nul') do set "MINICONDA_ROOT=%%i"
 
 if not exist "%CONDA_ENV_PATH%\python.exe" (
     echo [ERROR] Conda环境不存在
@@ -54,8 +63,8 @@ if %ERRORLEVEL% neq 0 (
 
 REM 检查是否有便携版 Git
 if exist "PortableGit\cmd\git.exe" (
-    set "GIT=%CD%\PortableGit\cmd\git.exe"
-    set "PATH=%CD%\PortableGit\cmd;%PATH%"
+    set "GIT=%SCRIPT_DIR%\PortableGit\cmd\git.exe"
+    set "PATH=%SCRIPT_DIR%\PortableGit\cmd;%PATH%"
 ) else (
     git --version >nul 2>&1
     if %ERRORLEVEL% == 0 (

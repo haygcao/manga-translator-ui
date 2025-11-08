@@ -2,6 +2,12 @@
 chcp 936 >nul
 setlocal EnableDelayedExpansion
 
+REM 修复管理员模式下%CD%变成system32的问题
+REM 使用脚本所在目录作为工作目录
+cd /d "%~dp0"
+set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+
 echo.
 echo ========================================
 echo 漫画翻译器 - 一键安装程序
@@ -23,14 +29,14 @@ echo [1/5] 检查 Miniconda (Python环境管理)...
 echo ========================================
 
 REM 检查是否已有本地Miniconda安装
-set MINICONDA_ROOT=%CD%\Miniconda3
+set MINICONDA_ROOT=%SCRIPT_DIR%\Miniconda3
 set CONDA_INSTALLED=0
 set PATH_HAS_CHINESE=0
 set ALT_INSTALL_PATH=
 
 REM 检测路径是否包含非ASCII字符（中文等）
 REM 使用PowerShell进行更可靠的检测
-set "TEMP_CHECK_PATH=%CD%"
+set "TEMP_CHECK_PATH=%SCRIPT_DIR%"
 powershell -Command "$path = '%TEMP_CHECK_PATH%'; if ($path -match '[^\x00-\x7F]') { exit 1 } else { exit 0 }" >nul 2>&1
 if errorlevel 1 (
     REM 路径包含中文，使用磁盘根目录
@@ -44,8 +50,20 @@ goto :check_local_conda
 
 :found_system_conda
 echo [OK] 检测到系统已安装 Conda
-for /f "delims=" %%i in ('where conda') do echo 位置: %%i
+for /f "delims=" %%i in ('where conda') do (
+    echo 位置: %%i
+    REM 检测Miniconda根目录
+    for %%p in ("%%~dpi..") do set "MINICONDA_ROOT=%%~fp"
+)
 call conda --version
+REM 如果检测到conda在system32，需要找到真实的Miniconda路径
+if "%MINICONDA_ROOT:~-11%"=="System32\.." (
+    REM 尝试从conda路径获取真实路径
+    for /f "delims=" %%i in ('conda info --base 2^>nul') do set "MINICONDA_ROOT=%%i"
+    if not "!MINICONDA_ROOT!"=="" (
+        echo 实际安装位置: !MINICONDA_ROOT!
+    )
+)
 goto :check_git
 
 :check_local_conda
@@ -76,7 +94,7 @@ goto :__PATH_WARNING_END
 echo ========================================
 echo [警告] 检测到路径包含非英文字符
 echo ========================================
-echo 当前路径: %CD%
+echo 当前路径: %SCRIPT_DIR%
 echo.
 echo Miniconda 对非英文路径的兼容性有限
 echo 将自动使用备用安装路径: !MINICONDA_ROOT!
@@ -476,7 +494,7 @@ if exist ".git" (
 )
 
 echo 仓库地址: !REPO_URL!
-echo 安装目录: %CD%
+echo 安装目录: %SCRIPT_DIR%
 echo.
 goto :do_clone
 
@@ -512,7 +530,7 @@ echo.
 echo.
 echo [DEBUG] 检查克隆结果...
 echo [DEBUG] 临时目录: %TEMP_DIR%
-echo [DEBUG] 完整路径: %CD%\%TEMP_DIR%
+echo [DEBUG] 完整路径: %SCRIPT_DIR%\%TEMP_DIR%
 if exist "%TEMP_DIR%" (
     echo [DEBUG] 临时目录存在
     if exist "%TEMP_DIR%\.git" (
@@ -545,14 +563,14 @@ exit /b 1
 echo.
 echo [DEBUG] 开始复制文件...
 echo [DEBUG] 临时目录: %TEMP_DIR%
-echo [DEBUG] 当前目录: %CD%
+echo [DEBUG] 当前目录: %SCRIPT_DIR%
 echo.
 
 echo 正在复制目录...
 for /d %%i in ("%TEMP_DIR%\*") do (
     if /i not "%%~nxi"=="PortableGit" (
         echo [DEBUG] 复制目录: %%~nxi
-        xcopy "%%i" "%CD%\%%~nxi\" /E /H /Y /I /Q
+        xcopy "%%i" "%SCRIPT_DIR%\%%~nxi\" /E /H /Y /I /Q
         if !ERRORLEVEL! neq 0 echo [ERROR] 复制目录失败: %%~nxi (错误码: !ERRORLEVEL!)
     )
 )
@@ -562,7 +580,7 @@ echo 正在复制文件...
 for %%i in ("%TEMP_DIR%\*") do (
     if /i not "%%~nxi"=="步骤1-首次安装.bat" (
         echo [DEBUG] 复制文件: %%~nxi
-        copy /Y "%%i" "%CD%\"
+        copy /Y "%%i" "%SCRIPT_DIR%\"
         if !ERRORLEVEL! neq 0 echo [ERROR] 复制文件失败: %%~nxi (错误码: !ERRORLEVEL!)
     )
 )
@@ -607,7 +625,7 @@ echo ========================================
 echo.
 
 REM 使用项目本地环境（不占用C盘空间）
-set CONDA_ENV_PATH=%CD%\conda_env
+set CONDA_ENV_PATH=%SCRIPT_DIR%\conda_env
 set CONDA_ENV_EXISTS=0
 
 if exist "%CONDA_ENV_PATH%\python.exe" (
@@ -714,7 +732,7 @@ echo ========================================
 echo.
 echo [OK] 所有步骤已完成!
 echo.
-echo 安装位置: %CD%
+echo 安装位置: %SCRIPT_DIR%
 echo.
 echo 下一步操作:
 echo   双击 步骤2-启动Qt界面.bat (Qt版本)
