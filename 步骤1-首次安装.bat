@@ -769,36 +769,15 @@ echo 正在激活环境...
 echo [DEBUG] CONDA_ENV_NAME = %CONDA_ENV_NAME%
 echo [DEBUG] MINICONDA_ROOT = !MINICONDA_ROOT!
 
-REM 优先尝试激活命名环境
+REM 激活命名环境
 call conda activate "%CONDA_ENV_NAME%" 2>nul
 if !ERRORLEVEL! == 0 (
     echo [OK] 已激活命名环境: %CONDA_ENV_NAME%
     goto :env_activated
 )
 
-REM 如果命名环境不存在，尝试激活路径环境（兼容旧版本）
-set CONDA_ENV_PATH=%SCRIPT_DIR%\conda_env
-if exist "%CONDA_ENV_PATH%\python.exe" (
-    echo [DEBUG] 检测到旧版本路径环境，尝试激活...
-    REM 使用直接PATH方式激活路径环境
-    set "PATH=%CONDA_ENV_PATH%;%CONDA_ENV_PATH%\Library\mingw-w64\bin;%CONDA_ENV_PATH%\Library\usr\bin;%CONDA_ENV_PATH%\Library\bin;%CONDA_ENV_PATH%\Scripts;%CONDA_ENV_PATH%\bin;%PATH%"
-    set "CONDA_PREFIX=%CONDA_ENV_PATH%"
-    set "CONDA_DEFAULT_ENV=%CONDA_ENV_PATH%"
-    
-    REM 验证
-    "%CONDA_ENV_PATH%\python.exe" --version >nul 2>&1
-    if !ERRORLEVEL! == 0 (
-        echo [OK] 已激活路径环境（旧版本）
-        goto :env_activated
-    )
-)
-
-REM 两种环境都不存在或激活失败
-echo [ERROR] 无法激活环境
-echo.
-echo 尝试了以下方式:
-echo 1. 命名环境: %CONDA_ENV_NAME%
-echo 2. 路径环境: %CONDA_ENV_PATH%
+REM 激活失败
+echo [ERROR] 无法激活环境: %CONDA_ENV_NAME%
 echo.
 echo 请重新运行此脚本创建环境
 pause
