@@ -68,6 +68,21 @@ if %ERRORLEVEL% == 0 (
 REM 尝试路径环境（旧版本兼容）
 if exist "%CONDA_ENV_PATH%\python.exe" (
     echo [INFO] 激活路径环境（旧版本）...
+    REM 使用MINICONDA_ROOT兼容性更好，支持中文路径
+    if exist "%MINICONDA_ROOT%\Scripts\activate.bat" (
+        call "%MINICONDA_ROOT%\Scripts\activate.bat" "%CONDA_ENV_PATH%" 2>nul
+        if %ERRORLEVEL% == 0 (
+            goto :activated_ok
+        )
+    )
+
+    REM 如果activate.bat失败，尝试conda activate
+    call conda activate "%CONDA_ENV_PATH%" 2>nul
+    if %ERRORLEVEL% == 0 (
+        goto :activated_ok
+    )
+
+    REM 最后尝试手动设置PATH（兜底方案）
     set "PATH=%CONDA_ENV_PATH%;%CONDA_ENV_PATH%\Library\mingw-w64\bin;%CONDA_ENV_PATH%\Library\usr\bin;%CONDA_ENV_PATH%\Library\bin;%CONDA_ENV_PATH%\Scripts;%CONDA_ENV_PATH%\bin;%PATH%"
     set "CONDA_PREFIX=%CONDA_ENV_PATH%"
     set "CONDA_DEFAULT_ENV=%CONDA_ENV_PATH%"

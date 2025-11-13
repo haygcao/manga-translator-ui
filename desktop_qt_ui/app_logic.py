@@ -490,26 +490,19 @@ class MainAppLogic(QObject):
     def add_folder(self):
         """Opens a dialog to select folders (supports multiple selection) and adds their paths to the list."""
         last_dir = self.get_last_open_dir()
-        # 使用文件对话框的 Directory 模式，并启用多选
-        dialog = QFileDialog()
-        dialog.setFileMode(QFileDialog.FileMode.Directory)
-        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        dialog.setDirectory(last_dir)
-        dialog.setWindowTitle("选择文件夹（可多选）")
-        
-        # 启用多选
-        file_view = dialog.findChild(QListView, 'listView')
-        if file_view:
-            file_view.setSelectionMode(QListView.SelectionMode.ExtendedSelection)
-        tree_view = dialog.findChild(QTreeView)
-        if tree_view:
-            tree_view.setSelectionMode(QTreeView.SelectionMode.ExtendedSelection)
-        
-        if dialog.exec():
-            folders = dialog.selectedFiles()
-            if folders:
-                self.set_last_open_dir(folders[0])  # 保存第一个文件夹的路径
-                self.add_files(folders)
+
+        # 使用自定义的现代化文件夹选择器
+        from widgets.folder_dialog import select_folders
+
+        folders = select_folders(
+            parent=None,
+            start_dir=last_dir,
+            multi_select=True
+        )
+
+        if folders:
+            self.set_last_open_dir(folders[0])  # 保存第一个文件夹的路径
+            self.add_files(folders)
     
     def add_folders(self):
         """Alias for add_folder for backward compatibility."""

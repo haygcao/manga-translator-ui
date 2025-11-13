@@ -21,6 +21,45 @@ from services import get_config_service
 
 from .collapsible_frame import CollapsibleFrame
 from .syntax_highlighter import HorizontalTagHighlighter
+import logging
+
+logger = logging.getLogger('manga_translator')
+
+
+def convert_arrows_to_tags(raw_text: str) -> str:
+    """
+    将文本中的 ⇄ 符号转换为 <H> 标签
+
+    Args:
+        raw_text: 包含 ⇄ 符号的原始文本
+
+    Returns:
+        转换后的文本，⇄ 符号被替换为成对的 <H></H> 标签
+
+    Note:
+        - 如果 ⇄ 是偶数个，会正确配对为 <H></H>
+        - 如果 ⇄ 是奇数个，最后一个会被转换为 <H>，但会记录警告
+    """
+    if '⇄' not in raw_text:
+        return raw_text
+
+    parts = raw_text.split('⇄')
+    text_with_tags = ''
+
+    for i, part in enumerate(parts):
+        text_with_tags += part
+        if i < len(parts) - 1:  # 不是最后一个部分
+            if i % 2 == 0:  # 偶数索引,添加开始标签
+                text_with_tags += '<H>'
+            else:  # 奇数索引,添加结束标签
+                text_with_tags += '</H>'
+
+    # 检查是否有未闭合的标签（奇数个⇄）
+    arrow_count = len(parts) - 1
+    if arrow_count % 2 != 0:
+        logger.warning(f"检测到奇数个⇄符号({arrow_count}个)，最后一个<H>标签未闭合")
+
+    return text_with_tags
 
 
 class CustomSlider(QSlider):
@@ -621,10 +660,10 @@ class PropertyPanel(QWidget):
                 is_vertical = not region_data.get('horizontal', True)
 
             if is_vertical and self.config_service.get_config().render.auto_rotate_symbols:
-                # 使用与后端一致的正则表达式(2-4 个字符)
+                # 使用与后端一致的正则表达式(英文数字2+字符，符号2-4字符)
                 # 但是要避免重复添加:如果已经有 <H> 标签,就不添加
                 if '<H>' not in translation_text.upper():
-                    horizontal_char_pattern = r'([a-zA-Z0-9_.-]{2,4}|[!?！？]{2,4})'
+                    horizontal_char_pattern = r'([a-zA-Z0-9_.-]{2,}|[!?！？]{2,4})'
                     translation_text = re.sub(horizontal_char_pattern, r'<H>\1</H>', translation_text)
 
             # 3. 将 <H> 标签替换为符号 ⇄ 显示在文本框中
@@ -716,28 +755,19 @@ class PropertyPanel(QWidget):
         """保存译文编辑（执行与_on_translated_text_focus_out相同的逻辑）"""
         if self.current_region_index == -1:
             return
-        
+
         import re
 
         # 1. 将 ⇄ 替换回 <H> 标签
         raw_text = self.translated_text_box.toPlainText()
-        # 将成对的 ⇄ 替换为 <H> 和 </H>
-        parts = raw_text.split('⇄')
-        text_with_tags = ''
-        for i, part in enumerate(parts):
-            text_with_tags += part
-            if i < len(parts) - 1:  # 不是最后一个部分
-                if i % 2 == 0:  # 偶数索引,添加开始标签
-                    text_with_tags += '<H>'
-                else:  # 奇数索引,添加结束标签
-                    text_with_tags += '</H>'
+        text_with_tags = convert_arrows_to_tags(raw_text)
 
         # 2. 将 ↵ 替换回 \n
         text_with_newlines = text_with_tags.replace('↵', '\n')
 
         # 3. 将 \n 转换回 AI 换行符 [BR]
         text_with_br = re.sub(r'\n+', '[BR]', text_with_newlines)
-        
+
         # 检查是否有变化
         region_data = self.model.get_region_by_index(self.current_region_index)
         if region_data and region_data.get("translation", "") != text_with_br:
@@ -751,22 +781,12 @@ class PropertyPanel(QWidget):
     def _on_translated_text_focus_out(self):
         """当译文文本框失去焦点时更新model"""
         if self.current_region_index != -1:
-            # 执行与_on_translated_text_changed相同的转换逻辑
+            # 执行与_save_translated_text相同的转换逻辑
             import re
 
             # 1. 将 ⇄ 替换回 <H> 标签
             raw_text = self.translated_text_box.toPlainText()
-            # 将成对的 ⇄ 替换为 <H> 和 </H>
-            # 简单实现:奇数个 ⇄ 替换为 <H>,偶数个替换为 </H>
-            parts = raw_text.split('⇄')
-            text_with_tags = ''
-            for i, part in enumerate(parts):
-                text_with_tags += part
-                if i < len(parts) - 1:  # 不是最后一个部分
-                    if i % 2 == 0:  # 偶数索引,添加开始标签
-                        text_with_tags += '<H>'
-                    else:  # 奇数索引,添加结束标签
-                        text_with_tags += '</H>'
+            text_with_tags = convert_arrows_to_tags(raw_text)
 
             # 2. 将 ↵ 替换回 \n
             text_with_newlines = text_with_tags.replace('↵', '\n')
@@ -786,17 +806,7 @@ class PropertyPanel(QWidget):
 
             # 1. 将 ⇄ 替换回 <H> 标签
             raw_text = self.translated_text_box.toPlainText()
-            # 将成对的 ⇄ 替换为 <H> 和 </H>
-            # 简单实现:奇数个 ⇄ 替换为 <H>,偶数个替换为 </H>
-            parts = raw_text.split('⇄')
-            text_with_tags = ''
-            for i, part in enumerate(parts):
-                text_with_tags += part
-                if i < len(parts) - 1:  # 不是最后一个部分
-                    if i % 2 == 0:  # 偶数索引,添加开始标签
-                        text_with_tags += '<H>'
-                    else:  # 奇数索引,添加结束标签
-                        text_with_tags += '</H>'
+            text_with_tags = convert_arrows_to_tags(raw_text)
 
             # 2. 将 ↵ 替换回 \n
             text_with_newlines = text_with_tags.replace('↵', '\n')

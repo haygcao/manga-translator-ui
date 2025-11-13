@@ -154,7 +154,13 @@ def compact_special_symbols(text: str) -> str:
 
 def auto_add_horizontal_tags(text: str) -> str:
     """自动为竖排文本中的短英文单词或连续符号添加<H>标签，使其横向显示。
-    注意：跳过多词英文词组（如 "Tek Tok"），只处理独立的短英文单词。"""
+    注意：跳过多词英文词组（如 "Tek Tok"），只处理独立的短英文单词。
+
+    渲染规则（在渲染时根据长度决定）：
+    - 2个字符：横排显示
+    - 3个及以上字符：竖排显示但每个字符旋转90度
+    - 符号（!?）2-4个：横排显示
+    """
     # 如果文本中已有<H>标签，则不进行处理，以尊重手动设置
     if '<H>' in text:
         return text
@@ -162,37 +168,29 @@ def auto_add_horizontal_tags(text: str) -> str:
     # 步骤1：先保护多词英文词组（至少2个单词，用空格分隔）
     # 匹配：字母/数字 + 空格 + 字母/数字（可以重复多次）
     multi_word_pattern = r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-]+(?:\s+[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-]+)+'
-    
+
     # 用占位符保护多词词组
     protected_phrases = []
     def protect_phrase(match):
         placeholder = f"<<<PHRASE_{len(protected_phrases)}>>>"
         protected_phrases.append(match.group(0))
         return placeholder
-    
+
     text = re.sub(multi_word_pattern, protect_phrase, text)
-    
-    # 步骤2：对剩余的独立短英文单词添加<H>标签
-    # This regex finds sequences of 2-4 ASCII/full-width letters, numbers, or specific symbols,
-    # OR sequences of 2 or more exclamation/question marks (full or half-width).
-    # Full-width ranges: \uff21-\uff3a (A-Z), \uff41-\uff5a (a-z), \uff10-\uff19 (0-9)
-    horizontal_char_pattern = r'(?<![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-])([a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-]{2,4})(?![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-])|[!?！？]{2,4}'
-    
-    pattern = re.compile(horizontal_char_pattern)
 
-    def replacer(match):
-        # 如果group(1)存在，说明匹配的是单词模式，否则是标点模式
-        if match.group(1):
-            return f"<H>{match.group(1)}</H>"
-        else:
-            return f"<H>{match.group(0)}</H>"
+    # 步骤2：对剩余的独立英文单词添加<H>标签
+    # 匹配2个及以上字符
+    word_pattern = r'(?<![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-])([a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-]{2,})(?![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-])'
+    text = re.sub(word_pattern, r'<H>\1</H>', text)
 
-    text = pattern.sub(replacer, text)
-    
+    # 匹配符号（2-4个）
+    symbol_pattern = r'[!?！？]{2,4}'
+    text = re.sub(symbol_pattern, r'<H>\g<0></H>', text)
+
     # 步骤3：恢复被保护的多词词组
     for i, phrase in enumerate(protected_phrases):
         text = text.replace(f"<<<PHRASE_{i}>>>", phrase)
-    
+
     return text
     
 def rotate_image(image, angle):
@@ -505,92 +503,111 @@ def calc_vertical(font_size: int, text: str, max_height: int, config=None):
 
     return line_text_list, line_height_list
 
-def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_text: np.ndarray, canvas_border: np.ndarray, border_size: int, config=None, line_width: int = 0):  
+def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_text: np.ndarray, canvas_border: np.ndarray, border_size: int, config=None, line_width: int = 0, force_rotate_90: bool = False):
     if cdpt == '＿':
         # For the placeholder, just advance the pen vertically and do nothing else.
         return font_size
 
-    pen = pen_l.copy()  
-    is_pun = is_punctuation(cdpt)  
-    cdpt, rot_degree = CJK_Compatibility_Forms_translate(cdpt, 1)  
-    slot = get_char_glyph(cdpt, font_size, 1)  
+    pen = pen_l.copy()
+    is_pun = is_punctuation(cdpt)
+
+    # 如果 force_rotate_90=True，强制旋转90度（用于英文数字）
+    if force_rotate_90:
+        rot_degree = 90
+    else:
+        cdpt, rot_degree = CJK_Compatibility_Forms_translate(cdpt, 1)
+
+    slot = get_char_glyph(cdpt, font_size, 1)
     bitmap = slot.bitmap
-    char_bitmap_rows = bitmap.rows  
-    char_bitmap_width = bitmap.width  
-    if char_bitmap_rows * char_bitmap_width == 0 or len(bitmap.buffer) != char_bitmap_rows * char_bitmap_width:  
-        if hasattr(slot, 'metrics') and hasattr(slot.metrics, 'vertAdvance') and slot.metrics.vertAdvance:  
-             char_offset_y = slot.metrics.vertAdvance >> 6  
-        elif hasattr(slot, 'advance') and slot.advance.y:  
-             char_offset_y = slot.advance.y >> 6  
-        elif hasattr(slot, 'metrics') and hasattr(slot.metrics, 'vertBearingY'):  
-             char_offset_y = slot.metrics.vertBearingY >> 6  
-        else:  
-             char_offset_y = font_size  
-        return char_offset_y  
-    char_offset_y = slot.metrics.vertAdvance >> 6  
-    bitmap_char = np.array(bitmap.buffer, dtype=np.uint8).reshape((char_bitmap_rows, char_bitmap_width))  
-    
+    char_bitmap_rows = bitmap.rows
+    char_bitmap_width = bitmap.width
+    if char_bitmap_rows * char_bitmap_width == 0 or len(bitmap.buffer) != char_bitmap_rows * char_bitmap_width:
+        if hasattr(slot, 'metrics') and hasattr(slot.metrics, 'vertAdvance') and slot.metrics.vertAdvance:
+             char_offset_y = slot.metrics.vertAdvance >> 6
+        elif hasattr(slot, 'advance') and slot.advance.y:
+             char_offset_y = slot.advance.y >> 6
+        elif hasattr(slot, 'metrics') and hasattr(slot.metrics, 'vertBearingY'):
+             char_offset_y = slot.metrics.vertBearingY >> 6
+        else:
+             char_offset_y = font_size
+        return char_offset_y
+    char_offset_y = slot.metrics.vertAdvance >> 6
+    bitmap_char = np.array(bitmap.buffer, dtype=np.uint8).reshape((char_bitmap_rows, char_bitmap_width))
+
+    # 如果需要旋转90度
+    if force_rotate_90:
+        # 顺时针旋转90度 (相当于逆时针旋转270度或使用 cv2.ROTATE_90_CLOCKWISE)
+        bitmap_char = cv2.rotate(bitmap_char, cv2.ROTATE_90_CLOCKWISE)
+        # 旋转后更新尺寸
+        char_bitmap_rows, char_bitmap_width = bitmap_char.shape
+
     # --- ALIGNMENT FIX ---
     if line_width <= 0:
         line_width = font_size
     # The pen's x-coordinate is the right boundary of the line. Center the character in the column.
     char_place_x = (pen[0] - line_width) + (line_width - char_bitmap_width) // 2
     # --- END FIX ---
-    
-    char_place_y = pen[1] + (slot.metrics.vertBearingY >> 6)   
-    paste_y_start = max(0, char_place_y)  
-    paste_x_start = max(0, char_place_x)  
-    paste_y_end = min(canvas_text.shape[0], char_place_y + char_bitmap_rows)  
-    paste_x_end = min(canvas_text.shape[1], char_place_x + char_bitmap_width)  
-    if paste_y_start >= paste_y_end or paste_x_start >= paste_x_end:  
-        logger.warning(f"Char '{cdpt}' is completely outside the canvas or on the boundary, skipped. Position: x={char_place_x}, y={char_place_y}, Canvas size: {canvas_text.shape}")      
-    else:       
-        bitmap_char_slice = bitmap_char[paste_y_start-char_place_y : paste_y_end-char_place_y,   
+
+    char_place_y = pen[1] + (slot.metrics.vertBearingY >> 6)
+    paste_y_start = max(0, char_place_y)
+    paste_x_start = max(0, char_place_x)
+    paste_y_end = min(canvas_text.shape[0], char_place_y + char_bitmap_rows)
+    paste_x_end = min(canvas_text.shape[1], char_place_x + char_bitmap_width)
+    if paste_y_start >= paste_y_end or paste_x_start >= paste_x_end:
+        logger.warning(f"Char '{cdpt}' is completely outside the canvas or on the boundary, skipped. Position: x={char_place_x}, y={char_place_y}, Canvas size: {canvas_text.shape}")
+    else:
+        bitmap_char_slice = bitmap_char[paste_y_start-char_place_y : paste_y_end-char_place_y,
                                         paste_x_start-char_place_x : paste_x_end-char_place_x]
-        if bitmap_char_slice.size > 0:       
-            canvas_text[paste_y_start:paste_y_end, paste_x_start:paste_x_end] = bitmap_char_slice        
-    if border_size > 0:  
-        glyph_border = get_char_border(cdpt, font_size, 1)  
-        stroker = freetype.Stroker()  
+        if bitmap_char_slice.size > 0:
+            canvas_text[paste_y_start:paste_y_end, paste_x_start:paste_x_end] = bitmap_char_slice
+    if border_size > 0:
+        glyph_border = get_char_border(cdpt, font_size, 1)
+        stroker = freetype.Stroker()
         # Get stroke width from config, default to 0.07 if not specified
         stroke_ratio = config.render.stroke_width if (config and hasattr(config.render, 'stroke_width')) else 0.07
         stroke_radius = 64 * max(int(stroke_ratio * font_size), 1)
-        stroker.set(stroke_radius, freetype.FT_STROKER_LINEJOIN_ROUND, freetype.FT_STROKER_LINECAP_ROUND, 0)  
-        glyph_border.stroke(stroker, destroy=True)  
-        blyph = glyph_border.to_bitmap(freetype.FT_RENDER_MODE_NORMAL, freetype.Vector(0, 0), True)  
+        stroker.set(stroke_radius, freetype.FT_STROKER_LINEJOIN_ROUND, freetype.FT_STROKER_LINECAP_ROUND, 0)
+        glyph_border.stroke(stroker, destroy=True)
+        blyph = glyph_border.to_bitmap(freetype.FT_RENDER_MODE_NORMAL, freetype.Vector(0, 0), True)
         bitmap_b = blyph.bitmap
-        border_bitmap_rows = bitmap_b.rows  
-        border_bitmap_width = bitmap_b.width  
-        if border_bitmap_rows * border_bitmap_width > 0 and len(bitmap_b.buffer) == border_bitmap_rows * border_bitmap_width:  
-            bitmap_border = np.array(bitmap_b.buffer, dtype=np.uint8).reshape((border_bitmap_rows, border_bitmap_width))  
-            char_center_offset_x = char_bitmap_width / 2.0  
-            char_center_offset_y = char_bitmap_rows / 2.0  
-            border_center_offset_x = border_bitmap_width / 2.0  
-            border_center_offset_y = border_bitmap_rows / 2.0  
-            char_center_on_canvas_x = char_place_x + char_center_offset_x  
-            char_center_on_canvas_y = char_place_y + char_center_offset_y  
-            pen_border_x_float = char_center_on_canvas_x - border_center_offset_x  
-            pen_border_y_float = char_center_on_canvas_y - border_center_offset_y  
-            pen_border_x = int(round(pen_border_x_float))  
-            pen_border_y = int(round(pen_border_y_float))  
-            pen_border = (max(0, pen_border_x), max(0, pen_border_y))  
-            paste_border_y_start = pen_border[1]  
-            paste_border_x_start = pen_border[0]  
-            paste_border_y_end = min(canvas_border.shape[0], pen_border[1] + border_bitmap_rows)  
-            paste_border_x_end = min(canvas_border.shape[1], pen_border[0] + border_bitmap_width)  
-            if paste_border_y_start >= paste_border_y_end or paste_border_x_start >= paste_border_x_end:  
-                logger.warning(f"The border of char '{cdpt}' is completely outside the canvas or on the boundary, skipped. Position: x={pen_border[0]}, y={pen_border[1]}, Canvas size: {canvas_border.shape}")  
-            else:        
-                bitmap_border_slice = bitmap_border[0 : paste_border_y_end-paste_border_y_start,   
+        border_bitmap_rows = bitmap_b.rows
+        border_bitmap_width = bitmap_b.width
+        if border_bitmap_rows * border_bitmap_width > 0 and len(bitmap_b.buffer) == border_bitmap_rows * border_bitmap_width:
+            bitmap_border = np.array(bitmap_b.buffer, dtype=np.uint8).reshape((border_bitmap_rows, border_bitmap_width))
+
+            # 如果需要旋转90度，边框也要旋转
+            if force_rotate_90:
+                bitmap_border = cv2.rotate(bitmap_border, cv2.ROTATE_90_CLOCKWISE)
+                border_bitmap_rows, border_bitmap_width = bitmap_border.shape
+
+            char_center_offset_x = char_bitmap_width / 2.0
+            char_center_offset_y = char_bitmap_rows / 2.0
+            border_center_offset_x = border_bitmap_width / 2.0
+            border_center_offset_y = border_bitmap_rows / 2.0
+            char_center_on_canvas_x = char_place_x + char_center_offset_x
+            char_center_on_canvas_y = char_place_y + char_center_offset_y
+            pen_border_x_float = char_center_on_canvas_x - border_center_offset_x
+            pen_border_y_float = char_center_on_canvas_y - border_center_offset_y
+            pen_border_x = int(round(pen_border_x_float))
+            pen_border_y = int(round(pen_border_y_float))
+            pen_border = (max(0, pen_border_x), max(0, pen_border_y))
+            paste_border_y_start = pen_border[1]
+            paste_border_x_start = pen_border[0]
+            paste_border_y_end = min(canvas_border.shape[0], pen_border[1] + border_bitmap_rows)
+            paste_border_x_end = min(canvas_border.shape[1], pen_border[0] + border_bitmap_width)
+            if paste_border_y_start >= paste_border_y_end or paste_border_x_start >= paste_border_x_end:
+                logger.warning(f"The border of char '{cdpt}' is completely outside the canvas or on the boundary, skipped. Position: x={pen_border[0]}, y={pen_border[1]}, Canvas size: {canvas_border.shape}")
+            else:
+                bitmap_border_slice = bitmap_border[0 : paste_border_y_end-paste_border_y_start,
                                                     0 : paste_border_x_end-paste_border_x_start]
                 if bitmap_border_slice.size > 0:
-                    target_slice = canvas_border[paste_border_y_start:paste_border_y_end,   
-                                                 paste_border_x_start:paste_border_x_end]  
-                    if target_slice.shape == bitmap_border_slice.shape:  
-                        canvas_border[paste_border_y_start:paste_border_y_end,   
-                                      paste_border_x_start:paste_border_x_end] = cv2.add(target_slice, bitmap_border_slice)  
-                    else:  
-                        logger.warning(f"Shape mismatch: target={{target_slice.shape}}, source={{bitmap_border_slice.shape}}")  
+                    target_slice = canvas_border[paste_border_y_start:paste_border_y_end,
+                                                 paste_border_x_start:paste_border_x_end]
+                    if target_slice.shape == bitmap_border_slice.shape:
+                        canvas_border[paste_border_y_start:paste_border_y_end,
+                                      paste_border_x_start:paste_border_x_end] = cv2.add(target_slice, bitmap_border_slice)
+                    else:
+                        logger.warning(f"Shape mismatch: target={{target_slice.shape}}, source={{bitmap_border_slice.shape}}")
     return char_offset_y  
 
 def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tuple[int, int, int], bg: Optional[Tuple[int, int, int]], line_spacing: int, config=None, region_count: int = 1):
@@ -657,85 +674,103 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
                 content = part[3:-4]
                 if not content:
                     continue
-                
-                # --- RENDER HORIZONTAL BLOCK ---
-                h_font_size = font_size
-                # Apply specific scaling for 4-character horizontal text
-                if len(content) == 4:
-                    # Scale to ~75% to fit like 3 characters
-                    h_font_size = int(h_font_size * 0.75)
 
-                h_width = get_string_width(h_font_size, content) + h_font_size
-                h_height = h_font_size * 2
+                # 判断：2个字符横排，3个及以上字符竖排但旋转90度
+                if len(content) >= 3:
+                    # --- RENDER ROTATED BLOCK (竖排但每个字符旋转90度) ---
+                    for char_r in content:
+                        # 每个字符旋转90度后竖排显示
+                        if char_r == '！': char_r = '!'
+                        elif char_r == '？': char_r = '?'
 
-                temp_canvas_text = np.zeros((h_height, h_width), dtype=np.uint8)
-                temp_canvas_border = np.zeros((h_height, h_width), dtype=np.uint8)
-                pen_h = [h_font_size // 2, h_font_size]
+                        # 使用 put_char_vertical，但强制旋转90度
+                        offset_y = put_char_vertical(font_size, char_r, pen_line, canvas_text, canvas_border, border_size=bg_size, config=config, line_width=font_size, force_rotate_90=True)
 
-                for char_h in content:
-                    if char_h == '！': char_h = '!'
-                    elif char_h == '？': char_h = '?'
-                    offset_x = put_char_horizontal(h_font_size, char_h, pen_h, temp_canvas_text, temp_canvas_border, border_size=bg_size, config=config)
-                    pen_h[0] += offset_x
+                        # 获取横排间距（horiAdvance），用于竖排时的字符间距
+                        slot = get_char_glyph(char_r, font_size, 0)
+                        if hasattr(slot, 'metrics') and hasattr(slot.metrics, 'horiAdvance') and slot.metrics.horiAdvance:
+                            horizontal_advance = slot.metrics.horiAdvance >> 6
+                        else:
+                            horizontal_advance = font_size // 2  # 备用值
 
-                combined_temp = cv2.add(temp_canvas_text, temp_canvas_border)
-                x, y, w, h_crop = cv2.boundingRect(combined_temp)
-                if w == 0 or h_crop == 0:
-                    logger.warning(f"[RENDER SKIPPED] Horizontal block in vertical text has zero dimensions. Width: {w}, Height: {h_crop}")
-                    continue
+                        # 使用横排的间距作为竖排旋转后的间距
+                        pen_line[1] += horizontal_advance
+                    # --- END ROTATED BLOCK RENDER ---
+                else:
+                    # --- RENDER HORIZONTAL BLOCK (2个字符横排) ---
+                    h_font_size = font_size
 
-                horizontal_block_text = temp_canvas_text[y:y+h_crop, x:x+w]
-                horizontal_block_border = temp_canvas_border[y:y+h_crop, x:x+w]
+                    h_width = get_string_width(h_font_size, content) + h_font_size
+                    h_height = h_font_size * 2
 
-                rh, rw = horizontal_block_text.shape
+                    temp_canvas_text = np.zeros((h_height, h_width), dtype=np.uint8)
+                    temp_canvas_border = np.zeros((h_height, h_width), dtype=np.uint8)
+                    pen_h = [h_font_size // 2, h_font_size]
 
-                # 修复：在竖排行的中心正确地对齐横排块
-                # pen_line[0] 是右边界，font_size 是行宽
-                line_start_x = pen_line[0] - font_size
-                paste_x = line_start_x + (font_size - rw) // 2
-                paste_y = pen_line[1]
+                    for char_h in content:
+                        if char_h == '！': char_h = '!'
+                        elif char_h == '？': char_h = '?'
+                        offset_x = put_char_horizontal(h_font_size, char_h, pen_h, temp_canvas_text, temp_canvas_border, border_size=bg_size, config=config)
+                        pen_h[0] += offset_x
 
-                # 智能边界调整：向中心方向移动而不是跳过
-                canvas_h, canvas_w = canvas_text.shape
-                adjusted = False
-                if paste_y + rh > canvas_h or paste_x + rw > canvas_w or paste_x < 0 or paste_y < 0:
-                    adjusted = True
-                    # 向中心调整位置
-                    center_x = canvas_w // 2
-                    center_y = canvas_h // 2
-                    
-                    # X 方向调整
-                    if paste_x < 0:
-                        paste_x = 0
-                    elif paste_x + rw > canvas_w:
-                        paste_x = canvas_w - rw
-                    
-                    # Y 方向调整
-                    if paste_y < 0:
-                        paste_y = 0
-                    elif paste_y + rh > canvas_h:
-                        paste_y = canvas_h - rh
-                    
-                    # 确保调整后仍在边界内
-                    paste_x = max(0, min(paste_x, canvas_w - rw))
-                    paste_y = max(0, min(paste_y, canvas_h - rh))
-                    
-                    if paste_x < 0 or paste_y < 0 or paste_x + rw > canvas_w or paste_y + rh > canvas_h:
-                        logger.warning(f"Text block too large for canvas, skipping. Size: {rw}x{rh}, Canvas: {canvas_w}x{canvas_h}")
+                    combined_temp = cv2.add(temp_canvas_text, temp_canvas_border)
+                    x, y, w, h_crop = cv2.boundingRect(combined_temp)
+                    if w == 0 or h_crop == 0:
+                        logger.warning(f"[RENDER SKIPPED] Horizontal block in vertical text has zero dimensions. Width: {w}, Height: {h_crop}")
                         continue
-                    
-                    logger.info(f"Adjusted text position to fit canvas bounds: ({line_start_x + (font_size - rw) // 2}, {pen_line[1]}) -> ({paste_x}, {paste_y})")
 
-                target_text_roi = canvas_text[paste_y:paste_y+rh, paste_x:paste_x+rw]
-                canvas_text[paste_y:paste_y+rh, paste_x:paste_x+rw] = np.maximum(target_text_roi, horizontal_block_text)
+                    horizontal_block_text = temp_canvas_text[y:y+h_crop, x:x+w]
+                    horizontal_block_border = temp_canvas_border[y:y+h_crop, x:x+w]
 
-                target_border_roi = canvas_border[paste_y:paste_y+rh, paste_x:paste_x+rw]
-                canvas_border[paste_y:paste_y+rh, paste_x:paste_x+rw] = np.maximum(target_border_roi, horizontal_block_border)
+                    rh, rw = horizontal_block_text.shape
 
-                # 使用实际渲染高度而不是固定的 font_size
-                # 这确保了渲染输出与 calc_vertical 的高度计算一致
-                pen_line[1] += rh
-                # --- END HORIZONTAL BLOCK RENDER ---
+                    # 修复：在竖排行的中心正确地对齐横排块
+                    # pen_line[0] 是右边界，font_size 是行宽
+                    line_start_x = pen_line[0] - font_size
+                    paste_x = line_start_x + (font_size - rw) // 2
+                    paste_y = pen_line[1]
+
+                    # 智能边界调整：向中心方向移动而不是跳过
+                    canvas_h, canvas_w = canvas_text.shape
+                    adjusted = False
+                    if paste_y + rh > canvas_h or paste_x + rw > canvas_w or paste_x < 0 or paste_y < 0:
+                        adjusted = True
+                        # 向中心调整位置
+                        center_x = canvas_w // 2
+                        center_y = canvas_h // 2
+
+                        # X 方向调整
+                        if paste_x < 0:
+                            paste_x = 0
+                        elif paste_x + rw > canvas_w:
+                            paste_x = canvas_w - rw
+
+                        # Y 方向调整
+                        if paste_y < 0:
+                            paste_y = 0
+                        elif paste_y + rh > canvas_h:
+                            paste_y = canvas_h - rh
+
+                        # 确保调整后仍在边界内
+                        paste_x = max(0, min(paste_x, canvas_w - rw))
+                        paste_y = max(0, min(paste_y, canvas_h - rh))
+
+                        if paste_x < 0 or paste_y < 0 or paste_x + rw > canvas_w or paste_y + rh > canvas_h:
+                            logger.warning(f"Text block too large for canvas, skipping. Size: {rw}x{rh}, Canvas: {canvas_w}x{canvas_h}")
+                            continue
+
+                        logger.info(f"Adjusted text position to fit canvas bounds: ({line_start_x + (font_size - rw) // 2}, {pen_line[1]}) -> ({paste_x}, {paste_y})")
+
+                    target_text_roi = canvas_text[paste_y:paste_y+rh, paste_x:paste_x+rw]
+                    canvas_text[paste_y:paste_y+rh, paste_x:paste_x+rw] = np.maximum(target_text_roi, horizontal_block_text)
+
+                    target_border_roi = canvas_border[paste_y:paste_y+rh, paste_x:paste_x+rw]
+                    canvas_border[paste_y:paste_y+rh, paste_x:paste_x+rw] = np.maximum(target_border_roi, horizontal_block_border)
+
+                    # 使用实际渲染高度而不是固定的 font_size
+                    # 这确保了渲染输出与 calc_vertical 的高度计算一致
+                    pen_line[1] += rh
+                    # --- END HORIZONTAL BLOCK RENDER ---
 
             else: # It's a vertical part
                 for char_idx, c in enumerate(part):

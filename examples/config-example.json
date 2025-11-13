@@ -17,7 +17,7 @@
   "ocr": {
     "use_mocr_merge": false,
     "ocr": "48px",
-    "use_hybrid_ocr": false,
+    "use_hybrid_ocr": true,
     "secondary_ocr": "mocr",
     "min_text_length": 0,
     "ignore_bubble": 0,
@@ -62,15 +62,15 @@
     "font_color": null,
     "line_spacing": null,
     "font_size": null,
-    "auto_rotate_symbols": false,
+    "auto_rotate_symbols": true,
     "rtl": true,
     "layout_mode": "smart_scaling",
     "max_font_size": 0,
     "font_scale_ratio": 1.0,
     "center_text_in_bubble": false,
-    "optimize_line_breaks": true,
+    "optimize_line_breaks": false,
     "check_br_and_retry": false,
-    "strict_smart_scaling": true,
+    "strict_smart_scaling": false,
     "stroke_width": 0.07
   },
   "upscale": {
