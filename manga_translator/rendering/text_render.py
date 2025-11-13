@@ -154,42 +154,47 @@ def compact_special_symbols(text: str) -> str:
 
 def auto_add_horizontal_tags(text: str) -> str:
     """自动为竖排文本中的短英文单词或连续符号添加<H>标签，使其横向显示。
-    注意：跳过多词英文词组（如 "Tek Tok"），只处理独立的短英文单词。
+
+    处理规则：
+    - 多词英文词组（如 "Tek Tok"）：整体横排显示
+    - 独立的短英文单词：添加<H>标签
+    - 符号（!?）2-4个：横排显示
 
     渲染规则（在渲染时根据长度决定）：
     - 2个字符：横排显示
     - 3个及以上字符：竖排显示但每个字符旋转90度
-    - 符号（!?）2-4个：横排显示
     """
     # 如果文本中已有<H>标签，则不进行处理，以尊重手动设置
-    if '<H>' in text:
+    if '<H>' in text or '<h>' in text.lower():
         return text
 
-    # 步骤1：先保护多词英文词组（至少2个单词，用空格分隔）
+    # 步骤1：为多词英文词组添加<H>标签（至少2个单词，用空格分隔）
     # 匹配：字母/数字 + 空格 + 字母/数字（可以重复多次）
     multi_word_pattern = r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-]+(?:\s+[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-]+)+'
-
-    # 用占位符保护多词词组
-    protected_phrases = []
-    def protect_phrase(match):
-        placeholder = f"<<<PHRASE_{len(protected_phrases)}>>>"
-        protected_phrases.append(match.group(0))
-        return placeholder
-
-    text = re.sub(multi_word_pattern, protect_phrase, text)
+    text = re.sub(multi_word_pattern, r'<H>\g<0></H>', text)
 
     # 步骤2：对剩余的独立英文单词添加<H>标签
-    # 匹配2个及以上字符
+    # 匹配2个及以上字符，排除已经在<H>标签内的内容
     word_pattern = r'(?<![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-])([a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-]{2,})(?![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-])'
-    text = re.sub(word_pattern, r'<H>\1</H>', text)
 
-    # 匹配符号（2-4个）
+    # 只替换不在<H>标签内的匹配
+    def replace_word(match):
+        # 检查匹配位置是否在<H>...</H>之间
+        start_pos = match.start()
+        # 简单检查：查找前面最近的<H>和</H>
+        text_before = text[:start_pos]
+        last_open = text_before.rfind('<H>')
+        last_close = text_before.rfind('</H>')
+        if last_open > last_close:
+            # 在<H>标签内，不替换
+            return match.group(0)
+        return f'<H>{match.group(1)}</H>'
+
+    text = re.sub(word_pattern, replace_word, text)
+
+    # 步骤3：匹配符号（2-4个，同时支持半角和全角）
     symbol_pattern = r'[!?！？]{2,4}'
     text = re.sub(symbol_pattern, r'<H>\g<0></H>', text)
-
-    # 步骤3：恢复被保护的多词词组
-    for i, phrase in enumerate(protected_phrases):
-        text = text.replace(f"<<<PHRASE_{i}>>>", phrase)
 
     return text
     
@@ -365,62 +370,87 @@ def calc_horizontal_block_height(font_size: int, content: str) -> int:
     """
     预先计算横排块在竖排文本中的实际渲染高度
     用于准确计算竖排文本的总高度，特别是在智能缩放模式下
+
+    注意：需要与 put_text_vertical 中的渲染逻辑保持一致
+    - 2个字符：横排显示，返回横排块的实际高度
+    - 3个及以上字符：竖排显示但每个字符旋转90度，返回所有字符的累计高度
     """
     if not content:
         return font_size
-    
-    # 应用与 put_text_vertical 中相同的字体缩放逻辑
-    h_font_size = font_size
-    if len(content) == 4:
-        h_font_size = int(h_font_size * 0.75)
-    
-    # 创建临时画布来渲染横排内容
-    h_height = h_font_size * 2
-    h_width = get_string_width(h_font_size, content) + h_font_size
-    
-    temp_canvas = np.zeros((h_height, h_width), dtype=np.uint8)
-    pen_h = [h_font_size // 2, h_font_size]
-    
-    # 渲染每个字符
-    for char_h in content:
-        if char_h == '！': 
-            char_h = '!'
-        elif char_h == '？': 
-            char_h = '?'
-        try:
-            offset_x = get_char_offset_x(h_font_size, char_h)
-            cdpt, _ = CJK_Compatibility_Forms_translate(char_h, 0)
-            slot = get_char_glyph(cdpt, h_font_size, 0)
-            bitmap = slot.bitmap
-            
-            if bitmap.rows * bitmap.width > 0 and len(bitmap.buffer) == bitmap.rows * bitmap.width:
-                bitmap_char = np.array(bitmap.buffer, dtype=np.uint8).reshape((bitmap.rows, bitmap.width))
-                char_place_x = pen_h[0] + slot.bitmap_left
-                char_place_y = pen_h[1] - slot.bitmap_top
-                
-                paste_y_start = max(0, char_place_y)
-                paste_x_start = max(0, char_place_x)
-                paste_y_end = min(temp_canvas.shape[0], char_place_y + bitmap.rows)
-                paste_x_end = min(temp_canvas.shape[1], char_place_x + bitmap.width)
-                
-                if paste_y_start < paste_y_end and paste_x_start < paste_x_end:
-                    temp_canvas[paste_y_start:paste_y_end, paste_x_start:paste_x_end] = np.maximum(
-                        temp_canvas[paste_y_start:paste_y_end, paste_x_start:paste_x_end],
-                        bitmap_char[:(paste_y_end-paste_y_start), :(paste_x_end-paste_x_start)]
-                    )
-            
-            pen_h[0] += offset_x
-        except Exception:
-            # 如果渲染失败，返回默认值
-            pass
-    
-    # 裁剪空白并返回实际高度
-    if np.any(temp_canvas):
-        _, _, _, h_crop = cv2.boundingRect(temp_canvas)
-        return h_crop
-    
-    # 如果没有内容，返回默认高度
-    return font_size
+
+    # 判断：2个字符横排，3个及以上字符竖排但旋转90度
+    if len(content) >= 3:
+        # --- 计算竖排旋转块的高度 ---
+        total_height = 0
+        for char_r in content:
+            if char_r == '！':
+                char_r = '!'
+            elif char_r == '？':
+                char_r = '?'
+
+            try:
+                # 获取横排间距（horiAdvance），用于竖排时的字符间距
+                slot = get_char_glyph(char_r, font_size, 0)
+                if hasattr(slot, 'metrics') and hasattr(slot.metrics, 'horiAdvance') and slot.metrics.horiAdvance:
+                    horizontal_advance = slot.metrics.horiAdvance >> 6
+                else:
+                    horizontal_advance = font_size // 2
+
+                total_height += horizontal_advance
+            except Exception:
+                total_height += font_size // 2
+
+        return total_height
+    else:
+        # --- 计算横排块的高度（2个字符） ---
+        h_font_size = font_size
+
+        # 创建临时画布来渲染横排内容
+        h_height = h_font_size * 2
+        h_width = get_string_width(h_font_size, content) + h_font_size
+
+        temp_canvas = np.zeros((h_height, h_width), dtype=np.uint8)
+        pen_h = [h_font_size // 2, h_font_size]
+
+        # 渲染每个字符
+        for char_h in content:
+            if char_h == '！':
+                char_h = '!'
+            elif char_h == '？':
+                char_h = '?'
+            try:
+                offset_x = get_char_offset_x(h_font_size, char_h)
+                cdpt, _ = CJK_Compatibility_Forms_translate(char_h, 0)
+                slot = get_char_glyph(cdpt, h_font_size, 0)
+                bitmap = slot.bitmap
+
+                if bitmap.rows * bitmap.width > 0 and len(bitmap.buffer) == bitmap.rows * bitmap.width:
+                    bitmap_char = np.array(bitmap.buffer, dtype=np.uint8).reshape((bitmap.rows, bitmap.width))
+                    char_place_x = pen_h[0] + slot.bitmap_left
+                    char_place_y = pen_h[1] - slot.bitmap_top
+
+                    paste_y_start = max(0, char_place_y)
+                    paste_x_start = max(0, char_place_x)
+                    paste_y_end = min(temp_canvas.shape[0], char_place_y + bitmap.rows)
+                    paste_x_end = min(temp_canvas.shape[1], char_place_x + bitmap.width)
+
+                    if paste_y_start < paste_y_end and paste_x_start < paste_x_end:
+                        temp_canvas[paste_y_start:paste_y_end, paste_x_start:paste_x_end] = np.maximum(
+                            temp_canvas[paste_y_start:paste_y_end, paste_x_start:paste_x_end],
+                            bitmap_char[:(paste_y_end-paste_y_start), :(paste_x_end-paste_x_start)]
+                        )
+
+                pen_h[0] += offset_x
+            except Exception:
+                pass
+
+        # 裁剪空白并返回实际高度
+        if np.any(temp_canvas):
+            _, _, _, h_crop = cv2.boundingRect(temp_canvas)
+            return h_crop
+
+        # 如果没有内容，返回默认高度
+        return font_size
 
 def calc_vertical(font_size: int, text: str, max_height: int, config=None):
     """
@@ -728,7 +758,13 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
                     # pen_line[0] 是右边界，font_size 是行宽
                     line_start_x = pen_line[0] - font_size
                     paste_x = line_start_x + (font_size - rw) // 2
-                    paste_y = pen_line[1]
+
+                    # 重要修复：横排块的baseline对齐
+                    # 临时画布中pen_h[1]=h_font_size是baseline位置
+                    # 裁剪后，baseline相对于裁剪区域top的偏移是 (h_font_size - y)
+                    # 粘贴到主画布时，让baseline对齐到pen_line[1]
+                    baseline_offset_in_crop = h_font_size - y
+                    paste_y = pen_line[1] - baseline_offset_in_crop
 
                     # 智能边界调整：向中心方向移动而不是跳过
                     canvas_h, canvas_w = canvas_text.shape
