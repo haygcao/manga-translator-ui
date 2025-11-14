@@ -229,51 +229,10 @@ class GeminiHighQualityTranslator(CommonTranslator):
         return final_prompt
 
     def _build_user_prompt(self, batch_data: List[Dict], ctx: Any) -> str:
-        """构建用户提示词"""
-        # 检查是否开启AI断句
-        enable_ai_break = False
-        if ctx and hasattr(ctx, 'config') and ctx.config and hasattr(ctx.config, 'render'):
-            enable_ai_break = getattr(ctx.config.render, 'disable_auto_wrap', False)
+        """构建用户提示词（高质量版）- 使用统一方法"""
+        return self._build_user_prompt_for_hq(batch_data, ctx, self.prev_context)
 
-        prompt = ""
-        
-        # 添加多页上下文（如果有）
-        if self.prev_context:
-            prompt += f"{self.prev_context}\n\n---\n\n"
-            self.logger.info(f"[Gemini HQ历史上下文] 长度: {len(self.prev_context)} 字符")
-            self.logger.info(f"[Gemini HQ历史上下文内容]\n{self.prev_context[:500]}...")
-        else:
-            self.logger.info(f"[Gemini HQ历史上下文] 无历史上下文（可能是第一张图片或context_size=0）")
-        
-        prompt += "Please translate the following manga text regions. I'm providing multiple images with their text regions in reading order:\n\n"
-        
-        # 添加图片信息
-        for i, data in enumerate(batch_data):
-            prompt += f"=== Image {i+1} ===\n"
-            prompt += f"Text regions ({len(data['original_texts'])} regions):\n"
-            for j, text in enumerate(data['original_texts']):
-                prompt += f"  {j+1}. {text}\n"
-            prompt += "\n"
-        
-        prompt += "All texts to translate (in order):\n"
-        text_index = 1
-        for img_idx, data in enumerate(batch_data):
-            for region_idx, text in enumerate(data['original_texts']):
-                text_to_translate = text.replace('\n', ' ').replace('\ufffd', '')
-                # 只有开启AI断句时才添加区域信息
-                if enable_ai_break and data['text_regions'] and region_idx < len(data['text_regions']):
-                    region = data['text_regions'][region_idx]
-                    region_count = len(region.lines) if hasattr(region, 'lines') else 1
-                    prompt += f"{text_index}. [Original regions: {region_count}] {text_to_translate}\n"
-                else:
-                    prompt += f"{text_index}. {text_to_translate}\n"
-                text_index += 1
-        
-        prompt += "\nCRITICAL: Provide translations in the exact same order as the numbered input text regions. Your first line of output must be the translation for text region #1, your second line for #2, and so on. DO NOT CHANGE THE ORDER."
-        
-        return prompt
-
-    async def _translate_batch_high_quality(self, texts: List[str], batch_data: List[Dict], source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, ctx: Any = None) -> List[str]:
+    async def _translate_batch_high_quality(self, texts: List[str], batch_data: List[Dict], source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, ctx: Any = None, split_level: int = 0) -> List[str]:
         """高质量批量翻译方法"""
         if not texts:
             return []
@@ -317,6 +276,7 @@ class GeminiHighQualityTranslator(CommonTranslator):
         max_retries = self.attempts
         attempt = 0
         is_infinite = max_retries == -1
+        local_attempt = 0  # 本次批次的尝试次数
 
         # Dynamically construct arguments for generate_content
         request_args = {
@@ -344,6 +304,19 @@ class GeminiHighQualityTranslator(CommonTranslator):
             return self.client.generate_content(**kwargs)
 
         while is_infinite or attempt < max_retries:
+            # 检查全局尝试次数
+            if not self._increment_global_attempt():
+                self.logger.error("Reached global attempt limit. Stopping translation.")
+                raise Exception(f"Global attempt limit reached: {self._global_attempt_count}/{self._max_total_attempts}")
+
+            local_attempt += 1
+            attempt += 1
+
+            # 检查是否应该触发分割（重试2次后）
+            if local_attempt > self._SPLIT_THRESHOLD and len(texts) > 1 and split_level < self._MAX_SPLIT_ATTEMPTS:
+                self.logger.warning(f"Triggering split after {local_attempt} local attempts")
+                raise self.SplitException(local_attempt, texts)
+
             try:
                 # RPM限制
                 if self._MAX_REQUESTS_PER_MINUTE > 0:
@@ -417,13 +390,26 @@ class GeminiHighQualityTranslator(CommonTranslator):
                     self.logger.warning(f"[{log_attempt}] Translation count mismatch: expected {len(texts)}, got {len(translations)}. Retrying...")
                     self.logger.warning(f"Expected texts: {texts}")
                     self.logger.warning(f"Got translations: {translations}")
-                    
+
                     if not is_infinite and attempt >= max_retries:
                         raise Exception(f"Translation count mismatch after {max_retries} attempts: expected {len(texts)}, got {len(translations)}")
-                    
+
                     await asyncio.sleep(2)
                     continue
-                
+
+                # 质量验证：检查空翻译、合并翻译、可疑符号等
+                is_valid, error_msg = self._validate_translation_quality(texts, translations)
+                if not is_valid:
+                    attempt += 1
+                    log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+                    self.logger.warning(f"[{log_attempt}] Quality check failed: {error_msg}. Retrying...")
+
+                    if not is_infinite and attempt >= max_retries:
+                        raise Exception(f"Quality check failed after {max_retries} attempts: {error_msg}")
+
+                    await asyncio.sleep(2)
+                    continue
+
                 # 打印原文和译文的对应关系
                 self.logger.info("--- Translation Results ---")
                 for original, translated in zip(texts, translations):
@@ -490,18 +476,34 @@ class GeminiHighQualityTranslator(CommonTranslator):
             from .. import manga_translator
             if hasattr(manga_translator, 'config') and hasattr(manga_translator.config, 'translator'):
                 self.parse_args(manga_translator.config.translator)
-        
+
         if not queries:
             return []
-        
+
+        # 重置全局尝试计数器
+        self._reset_global_attempt_count()
+
         # 检查是否为高质量批量翻译模式
         if ctx and hasattr(ctx, 'high_quality_batch_data'):
             batch_data = ctx.high_quality_batch_data
             if batch_data and len(batch_data) > 0:
-                self.logger.info(f"高质量翻译模式：正在打包 {len(batch_data)} 张图片并发送...")
+                self.logger.info(f"高质量翻译模式：正在打包 {len(batch_data)} 张图片并发送，最大尝试次数: {self._max_total_attempts}...")
                 custom_prompt_json = getattr(ctx, 'custom_prompt_json', None)
                 line_break_prompt_json = getattr(ctx, 'line_break_prompt_json', None)
-                translations = await self._translate_batch_high_quality(queries, batch_data, from_lang, to_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json, ctx=ctx)
+
+                # 使用分割包装器进行翻译
+                translations = await self._translate_with_split(
+                    self._translate_batch_high_quality,
+                    queries,
+                    split_level=0,
+                    batch_data=batch_data,
+                    source_lang=from_lang,
+                    target_lang=to_lang,
+                    custom_prompt_json=custom_prompt_json,
+                    line_break_prompt_json=line_break_prompt_json,
+                    ctx=ctx
+                )
+
                 # 应用文本后处理（与普通翻译器保持一致）
                 translations = [self._clean_translation_output(q, r, to_lang) for q, r in zip(queries, translations)]
                 return translations

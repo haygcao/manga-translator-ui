@@ -143,13 +143,15 @@ def CJK_Compatibility_Forms_translate(cdpt: str, direction: int):
 
 def compact_special_symbols(text: str) -> str:
     # 替换半角省略号
-    text = text.replace('...', '…')  
+    text = text.replace('...', '…')
     text = text.replace('..', '…')
+    # 合并连续的省略号为一个
+    text = re.sub(r'…+', '…', text)
     # Remove half-width and full-width spaces after each punctuation mark
     # 只删除标点符号后的空格，不删除字母/数字后的空格
     # 匹配常见的标点符号：。，、！？；：…等
-    pattern = r'([。，、！？；：…—～「」『』【】（）《》〈〉.,!?;:\-])[ 　]+'  
-    text = re.sub(pattern, r'\1', text) 
+    pattern = r'([。，、！？；：…—～「」『』【】（）《》〈〉.,!?;:\-])[ 　]+'
+    text = re.sub(pattern, r'\1', text)
     return text
 
 def auto_add_horizontal_tags(text: str) -> str:
@@ -759,12 +761,9 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
                     line_start_x = pen_line[0] - font_size
                     paste_x = line_start_x + (font_size - rw) // 2
 
-                    # 重要修复：横排块的baseline对齐
-                    # 临时画布中pen_h[1]=h_font_size是baseline位置
-                    # 裁剪后，baseline相对于裁剪区域top的偏移是 (h_font_size - y)
-                    # 粘贴到主画布时，让baseline对齐到pen_line[1]
-                    baseline_offset_in_crop = h_font_size - y
-                    paste_y = pen_line[1] - baseline_offset_in_crop
+                    # 横排块的Y位置：直接从pen_line[1]开始，不做baseline对齐
+                    # pen_line[1]是当前渲染位置（前一个字符的底部）
+                    paste_y = pen_line[1]
 
                     # 智能边界调整：向中心方向移动而不是跳过
                     canvas_h, canvas_w = canvas_text.shape

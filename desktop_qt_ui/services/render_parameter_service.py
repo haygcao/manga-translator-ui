@@ -501,7 +501,6 @@ class RenderParameterService:
     def clear_cache(self):
         """清空所有区域的自定义参数缓存"""
         self.region_parameters.clear()
-        self.logger.info("渲染参数区域缓存已清空")
     
     def get_parameter_summary(self, region_index: int) -> Dict[str, str]:
         """获取参数摘要信息"""

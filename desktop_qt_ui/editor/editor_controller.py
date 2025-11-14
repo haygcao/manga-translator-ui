@@ -1724,8 +1724,7 @@ class EditorController(QObject):
 
     def handle_global_render_setting_change(self):
         """Forces a re-render of all regions when a global render setting has changed."""
-        self.logger.info("Global render setting changed, forcing re-render of all regions.")
-        
+
         # Clear the parameter service cache to ensure new global defaults are used
         from services import get_render_parameter_service
         render_parameter_service = get_render_parameter_service()

@@ -739,6 +739,11 @@ class MainAppLogic(QObject):
             print("--- DEBUG: on_task_finished step 5: Entering finally block.")
             if self.thread and self.thread.isRunning():
                 self.thread.quit()
+                self.thread.wait(5000)  # 等待线程结束，最多等待5秒
+                if self.thread.isRunning():
+                    self.logger.warning("Thread did not finish within timeout, terminating...")
+                    self.thread.terminate()
+                    self.thread.wait()
             self.thread = None
             self.worker = None
             print("--- MainAppLogic: Slot on_task_finished finished.")

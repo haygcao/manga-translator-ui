@@ -142,6 +142,110 @@ class CommonTranslator(InfererModule):
         self.post_check_repetition_threshold = 5
         self.post_check_max_retry_attempts = 2
         self.attempts = -1
+        self._MAX_SPLIT_ATTEMPTS = 3  # 最大分割层级
+        self._SPLIT_THRESHOLD = 2  # 重试N次后触发分割
+        self._global_attempt_count = 0  # 全局尝试计数器
+        self._max_total_attempts = -1  # 全局最大尝试次数
+
+    def _build_user_prompt_for_texts(self, texts: List[str], ctx=None, prev_context: str = "") -> str:
+        """
+        统一的用户提示词构建方法（纯文本翻译）
+        适用于 openai.py 和 gemini.py
+
+        Args:
+            texts: 要翻译的文本列表
+            ctx: 上下文对象（可选）
+            prev_context: 历史上下文（可选）
+
+        Returns:
+            构建好的用户提示词字符串
+        """
+        # 检查是否开启AI断句
+        enable_ai_break = False
+        if ctx and hasattr(ctx, 'config') and ctx.config and hasattr(ctx.config, 'render'):
+            enable_ai_break = getattr(ctx.config.render, 'disable_auto_wrap', False)
+
+        prompt = ""
+
+        # 添加多页上下文（如果有）
+        if prev_context:
+            prompt += f"{prev_context}\n\n---\n\n"
+            self.logger.info(f"[历史上下文] 长度: {len(prev_context)} 字符")
+            self.logger.info(f"[历史上下文内容]\n{prev_context[:500]}...")
+        else:
+            self.logger.info(f"[历史上下文] 无历史上下文（可能是第一张图片或context_size=0）")
+
+        prompt += "Please translate the following manga text regions:\n\n"
+
+        for i, text in enumerate(texts):
+            text_to_translate = text.replace('\n', ' ').replace('\ufffd', '')
+            # 只有开启AI断句时才添加区域信息
+            if enable_ai_break and ctx and hasattr(ctx, 'text_regions') and ctx.text_regions and i < len(ctx.text_regions):
+                region = ctx.text_regions[i]
+                region_count = len(region.lines) if hasattr(region, 'lines') else 1
+                prompt += f"{i+1}. [Original regions: {region_count}] {text_to_translate}\n"
+            else:
+                prompt += f"{i+1}. {text_to_translate}\n"
+
+        prompt += "\nCRITICAL: Provide translations in the exact same order as the numbered input text regions. Your first line of output must be the translation for text region #1, your second line for #2, and so on. DO NOT CHANGE THE ORDER."
+
+        return prompt
+
+    def _build_user_prompt_for_hq(self, batch_data: List, ctx=None, prev_context: str = "") -> str:
+        """
+        统一的用户提示词构建方法（高质量多模态翻译）
+        适用于 openai_hq.py 和 gemini_hq.py
+
+        Args:
+            batch_data: 批次数据列表，包含图片和原文
+            ctx: 上下文对象（可选）
+            prev_context: 历史上下文（可选）
+
+        Returns:
+            构建好的用户提示词字符串
+        """
+        # 检查是否开启AI断句
+        enable_ai_break = False
+        if ctx and hasattr(ctx, 'config') and ctx.config and hasattr(ctx.config, 'render'):
+            enable_ai_break = getattr(ctx.config.render, 'disable_auto_wrap', False)
+
+        prompt = ""
+
+        # 添加多页上下文（如果有）
+        if prev_context:
+            prompt += f"{prev_context}\n\n---\n\n"
+            self.logger.info(f"[HQ历史上下文] 长度: {len(prev_context)} 字符")
+            self.logger.info(f"[HQ历史上下文内容]\n{prev_context[:500]}...")
+        else:
+            self.logger.info(f"[HQ历史上下文] 无历史上下文（可能是第一张图片或context_size=0）")
+
+        prompt += "Please translate the following manga text regions. I'm providing multiple images with their text regions in reading order:\n\n"
+
+        # 添加图片信息
+        for i, data in enumerate(batch_data):
+            prompt += f"=== Image {i+1} ===\n"
+            prompt += f"Text regions ({len(data['original_texts'])} regions):\n"
+            for j, text in enumerate(data['original_texts']):
+                prompt += f"  {j+1}. {text}\n"
+            prompt += "\n"
+
+        prompt += "All texts to translate (in order):\n"
+        text_index = 1
+        for img_idx, data in enumerate(batch_data):
+            for region_idx, text in enumerate(data['original_texts']):
+                text_to_translate = text.replace('\n', ' ').replace('\ufffd', '')
+                # 只有开启AI断句时才添加区域信息
+                if enable_ai_break and data.get('text_regions') and region_idx < len(data['text_regions']):
+                    region = data['text_regions'][region_idx]
+                    region_count = len(region.lines) if hasattr(region, 'lines') else 1
+                    prompt += f"{text_index}. [Original regions: {region_count}] {text_to_translate}\n"
+                else:
+                    prompt += f"{text_index}. {text_to_translate}\n"
+                text_index += 1
+
+        prompt += "\nCRITICAL: Provide translations in the exact same order as the numbered input text regions. Your first line of output must be the translation for text region #1, your second line for #2, and so on. DO NOT CHANGE THE ORDER."
+
+        return prompt
 
     def _validate_br_markers(self, translations: List[str], queries: List[str] = None, ctx=None, batch_indices: List[int] = None, batch_data: List = None, split_level: int = 0) -> bool:
         """
@@ -251,8 +355,152 @@ class CommonTranslator(InfererModule):
                 # 全部通过
                 self.logger.info(f"[AI断句检查] ✓ 所有多行区域的翻译都包含[BR]标记 (检查了 {needs_check_count}/{len(translations)} 条)")
                 return True
-        
+
         return True  # 没有需要检查的翻译，直接通过
+
+    def _validate_translation_quality(self, queries: List[str], translations: List[str]) -> Tuple[bool, str]:
+        """
+        验证翻译质量，检测常见问题
+
+        Args:
+            queries: 原文列表
+            translations: 译文列表
+
+        Returns:
+            (is_valid, error_message)
+        """
+        import string
+
+        # 1. 检查数量匹配
+        if len(translations) != len(queries):
+            return False, f"Translation count mismatch: expected {len(queries)}, got {len(translations)}"
+
+        # 2. 检查空翻译（原文不为空但译文为空）
+        empty_translation_errors = []
+        for i, (source, translation) in enumerate(zip(queries, translations)):
+            if source.strip() and not translation.strip():
+                empty_translation_errors.append(i + 1)
+
+        if empty_translation_errors:
+            return False, f"Empty translation detected at positions: {empty_translation_errors}"
+
+        # 3. 检查合并翻译（原文是正常文本但译文只有标点）
+        for i, (source, translation) in enumerate(zip(queries, translations)):
+            is_source_simple = all(char in string.punctuation or char.isspace() for char in source)
+            is_translation_simple = all(char in string.punctuation or char.isspace() for char in translation)
+
+            if is_translation_simple and not is_source_simple:
+                return False, f"Detected potential merged translation at position {i+1}"
+
+        # 4. 检查可疑符号（模型幻觉）
+        SUSPICIOUS_SYMBOLS = ["ହ", "ି", "ഹ"]
+        for symbol in SUSPICIOUS_SYMBOLS:
+            for translation in translations:
+                if symbol in translation:
+                    return False, f"Suspicious symbol '{symbol}' detected in translation"
+
+        return True, ""
+
+    def _reset_global_attempt_count(self):
+        """重置全局尝试计数器（每次新的翻译任务开始时调用）"""
+        self._global_attempt_count = 0
+        self._max_total_attempts = self.attempts
+
+    def _increment_global_attempt(self) -> bool:
+        """
+        增加全局尝试计数，返回是否还可以继续尝试
+
+        Returns:
+            True: 还可以继续尝试
+            False: 已达到总次数上限
+        """
+        self._global_attempt_count += 1
+
+        # 无限重试模式
+        if self._max_total_attempts == -1:
+            return True
+
+        # 检查是否超过上限
+        if self._global_attempt_count >= self._max_total_attempts:
+            self.logger.warning(f"Reached max total attempts: {self._global_attempt_count}/{self._max_total_attempts}")
+            return False
+
+        return True
+
+    class SplitException(Exception):
+        """用于触发分割的特殊异常"""
+        def __init__(self, attempt_count, texts):
+            self.attempt_count = attempt_count
+            self.texts = texts
+            super().__init__(f"Split triggered after {attempt_count} attempts")
+
+    async def _translate_with_split(self, translator_func, texts: List[str], split_level: int = 0, **kwargs) -> List[str]:
+        """
+        带分割重试的翻译包装器（新逻辑）
+
+        Args:
+            translator_func: 实际的翻译函数（async callable）
+            texts: 要翻译的文本列表
+            split_level: 当前分割层级
+            **kwargs: 传递给translator_func的其他参数
+
+        Returns:
+            翻译结果列表
+        """
+        # 检查是否超过全局尝试次数
+        if self._max_total_attempts != -1 and self._global_attempt_count >= self._max_total_attempts:
+            self.logger.error(f"Global attempt limit reached before translation: {self._global_attempt_count}/{self._max_total_attempts}")
+            raise Exception(f"Translation failed: reached max total attempts ({self._max_total_attempts})")
+
+        try:
+            # 尝试翻译（内部会检查是否需要分割）
+            translations = await translator_func(texts, split_level=split_level, **kwargs)
+            return translations
+
+        except self.SplitException as split_ex:
+            # 触发分割
+            if split_level < self._MAX_SPLIT_ATTEMPTS and len(texts) > 1:
+                self.logger.warning(
+                    f"Splitting after {split_ex.attempt_count} attempts at split_level={split_level}, "
+                    f"batch size {len(texts)} → splitting into two halves"
+                )
+
+                # 分成两半（只分割texts，不分割batch_data等其他参数）
+                mid = len(texts) // 2
+                left_texts = texts[:mid]
+                right_texts = texts[mid:]
+
+                self.logger.info(f"Split: left={len(left_texts)}, right={len(right_texts)}, global_attempts={self._global_attempt_count}/{self._max_total_attempts}")
+
+                # 并发翻译左右两部分（kwargs保持完整传递）
+                try:
+                    left_translations, right_translations = await asyncio.gather(
+                        self._translate_with_split(translator_func, left_texts, split_level + 1, **kwargs),
+                        self._translate_with_split(translator_func, right_texts, split_level + 1, **kwargs),
+                        return_exceptions=False
+                    )
+                except Exception as split_error:
+                    # 如果并发失败，回退到串行处理
+                    self.logger.warning(f"Concurrent split failed, falling back to sequential: {split_error}")
+                    left_translations = await self._translate_with_split(translator_func, left_texts, split_level + 1, **kwargs)
+                    right_translations = await self._translate_with_split(translator_func, right_texts, split_level + 1, **kwargs)
+
+                # 合并结果
+                return left_translations + right_translations
+
+            else:
+                # 不能再分割了，终止翻译进程
+                if len(texts) == 1:
+                    self.logger.error(f"Single text translation failed at split_level={split_level}: {texts[0][:50]}...")
+                    raise Exception(f"Translation failed for single text after {split_ex.attempt_count} attempts")
+                else:
+                    self.logger.error(f"Max split level ({self._MAX_SPLIT_ATTEMPTS}) reached, batch size={len(texts)}")
+                    raise Exception(f"Translation failed: max split level reached with batch size {len(texts)}")
+
+        except Exception as e:
+            # 其他异常（非分割触发的），直接终止
+            self.logger.error(f"Translation failed with exception at split_level={split_level}: {e}")
+            raise e
 
     def parse_args(self, config):
         self.enable_post_translation_check = getattr(config, 'enable_post_translation_check', self.enable_post_translation_check)
