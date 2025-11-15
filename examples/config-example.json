@@ -11,13 +11,13 @@
     "target_lang": "CHS",
     "no_text_lang_skip": false,
     "gpt_config": "examples/gpt_config-example.yaml",
-    "high_quality_prompt_path": "dict/zbjdbxjs.json",
+    "high_quality_prompt_path": "dict/prompt_example.json",
     "max_requests_per_minute": 0
   },
   "ocr": {
     "use_mocr_merge": false,
     "ocr": "48px",
-    "use_hybrid_ocr": true,
+    "use_hybrid_ocr": false,
     "secondary_ocr": "mocr",
     "min_text_length": 0,
     "ignore_bubble": 0,
