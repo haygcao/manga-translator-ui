@@ -1434,23 +1434,51 @@ class TranslationWorker(QObject):
             import sys
             self.log_received.emit("--- [1] THREAD: process() method entered, starting asyncio task.")
 
-            # 在Windows上的工作线程中，需要手动初始化socket并使用ProactorEventLoop
+            # 在Windows上的工作线程中，需要手动初始化Windows Socket
             if sys.platform == 'win32':
-                # 手动初始化Windows Socket
-                import socket
+                self.log_received.emit("--- [DEBUG] Running on Windows, initializing WSA...")
+                # 使用ctypes直接调用WSAStartup
+                import ctypes
+                import threading
+                self.log_received.emit(f"--- [DEBUG] Current thread: {threading.current_thread().name} (ID: {threading.get_ident()})")
+                
                 try:
-                    # 创建一个临时socket来触发WSAStartup
-                    temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    temp_sock.close()
-                except:
-                    pass
+                    # WSADATA结构体大小
+                    WSADATA_SIZE = 400
+                    wsa_data = ctypes.create_string_buffer(WSADATA_SIZE)
+                    # 调用WSAStartup，版本2.2
+                    self.log_received.emit("--- [DEBUG] Loading ws2_32.dll...")
+                    ws2_32 = ctypes.WinDLL('ws2_32')
+                    self.log_received.emit("--- [DEBUG] Calling WSAStartup(0x0202)...")
+                    result = ws2_32.WSAStartup(0x0202, wsa_data)
+                    if result == 0:
+                        self.log_received.emit("--- [DEBUG] WSAStartup succeeded!")
+                    else:
+                        self.log_received.emit(f"--- [ERROR] WSAStartup failed with code {result}")
+                except Exception as e:
+                    self.log_received.emit(f"--- [ERROR] Failed to initialize WSA: {e}")
+                    import traceback
+                    self.log_received.emit(f"--- [ERROR] Traceback: {traceback.format_exc()}")
                 
                 # 使用ProactorEventLoop（Windows默认）
+                self.log_received.emit("--- [DEBUG] Setting WindowsProactorEventLoopPolicy...")
                 asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+                self.log_received.emit("--- [DEBUG] Event loop policy set.")
 
             # 创建事件循环并保存任务引用
-            loop = asyncio.new_event_loop()
+            self.log_received.emit("--- [DEBUG] Creating new event loop...")
+            try:
+                loop = asyncio.new_event_loop()
+                self.log_received.emit(f"--- [DEBUG] Event loop created: {type(loop).__name__}")
+            except Exception as e:
+                self.log_received.emit(f"--- [ERROR] Failed to create event loop: {e}")
+                import traceback
+                self.log_received.emit(f"--- [ERROR] Traceback: {traceback.format_exc()}")
+                raise
+            
+            self.log_received.emit("--- [DEBUG] Setting event loop...")
             asyncio.set_event_loop(loop)
+            self.log_received.emit("--- [DEBUG] Event loop set successfully.")
             
             self._current_task = loop.create_task(self._do_processing())
             loop.run_until_complete(self._current_task)
