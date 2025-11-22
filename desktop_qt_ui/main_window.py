@@ -102,7 +102,6 @@ class MainWindow(QMainWindow):
         
         # 获取主题设置，Pydantic会自动使用默认值'light'
         theme = config.app.theme
-        print(f"[DEBUG] 加载主题: {theme}")
         self._apply_theme(theme)
     
     def _apply_theme(self, theme: str):
