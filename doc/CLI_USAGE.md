@@ -290,6 +290,9 @@ python -m manga_translator web --host 127.0.0.1 --port 8000
 
 # 使用 GPU
 python -m manga_translator web --host 0.0.0.0 --port 8000 --use-gpu
+
+# 设置模型 TTL（模型在最后一次使用后 300 秒后卸载）
+python -m manga_translator web --models-ttl 300
 ```
 
 **架构说明**：
@@ -303,6 +306,7 @@ python -m manga_translator web --host 0.0.0.0 --port 8000 --use-gpu
 - `--host` - 服务器主机（默认：127.0.0.1）
 - `--port` - 服务器端口（默认：8000）
 - `--use-gpu` - 使用 GPU 加速
+- `--models-ttl` - 模型在内存中的保留时间（秒，0 表示永远，默认：0）
 - `-v, --verbose` - 显示详细日志
 
 **API 端点**：
@@ -783,6 +787,44 @@ with open('manga.jpg', 'rb') as f:
 - 远程翻译服务
 - 需要任务队列管理
 - 需要负载均衡
+
+### 模型内存管理
+
+`--models-ttl` 参数控制模型在内存中的保留时间，用于优化内存使用：
+
+```bash
+# 模型永远保留在内存中（默认，适合高频使用）
+python -m manga_translator web --models-ttl 0
+
+# 模型在最后一次使用后 5 分钟后卸载（适合低频使用）
+python -m manga_translator web --models-ttl 300
+
+# 模型在最后一次使用后 30 分钟后卸载
+python -m manga_translator web --models-ttl 1800
+```
+
+**使用建议**：
+- **高频使用**（如生产环境）：设置为 `0`（永远保留），避免重复加载模型
+- **低频使用**（如个人服务器）：设置为 `300-1800` 秒，节省内存
+- **内存受限**：设置较短的时间（如 `300` 秒），及时释放内存
+
+**注意**：
+- 模型卸载后，下次请求会重新加载，可能需要几秒到几十秒
+- 该参数同样适用于 `ws` 和 `shared` 模式
+
+### WebSocket 模式和 Shared 模式
+
+这两种模式也支持 `--models-ttl` 参数：
+
+```bash
+# WebSocket 模式
+python -m manga_translator ws --models-ttl 300
+
+# Shared 模式（API 实例）
+python -m manga_translator shared --models-ttl 300
+```
+
+**参数说明**：
 - `--nonce` - 用于保护内部通信的 Nonce
 - `--models-ttl` - 模型在内存中的保留时间（秒，0 表示永远）
 

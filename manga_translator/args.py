@@ -19,6 +19,8 @@ def create_parser():
                            help='服务器端口（默认：8000）')
     web_parser.add_argument('--use-gpu', action='store_true',
                            help='使用 GPU')
+    web_parser.add_argument('--models-ttl', default=0, type=int,
+                           help='上次使用后将模型保留在内存中的时间（秒）（0 表示永远）')
     web_parser.add_argument('-v', '--verbose', action='store_true',
                            help='显示详细日志')
     

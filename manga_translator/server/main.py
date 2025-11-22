@@ -30,6 +30,7 @@ server_config = {
     'use_gpu': False,
     'use_gpu_limited': False,
     'verbose': False,
+    'models_ttl': 0,
 }
 
 app.add_middleware(
@@ -980,7 +981,8 @@ def main(args):
     server_config['use_gpu'] = getattr(args, 'use_gpu', False)
     server_config['use_gpu_limited'] = getattr(args, 'use_gpu_limited', False)
     server_config['verbose'] = getattr(args, 'verbose', False)
-    print(f"[SERVER CONFIG] use_gpu={server_config['use_gpu']}, use_gpu_limited={server_config['use_gpu_limited']}, verbose={server_config['verbose']}")
+    server_config['models_ttl'] = getattr(args, 'models_ttl', 0)
+    print(f"[SERVER CONFIG] use_gpu={server_config['use_gpu']}, use_gpu_limited={server_config['use_gpu_limited']}, verbose={server_config['verbose']}, models_ttl={server_config['models_ttl']}")
     
     args.start_instance = True
     proc = prepare(args)

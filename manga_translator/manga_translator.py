@@ -1099,6 +1099,14 @@ class MangaTranslator:
                 await unload_upscaling(model, **kwargs)
             case 'translation':
                 await unload_translation(model)
+            case 'textline_merge':
+                # textline_merge 不需要卸载（无模型）
+                logger.debug(f"textline_merge does not require unloading")
+            case 'rendering':
+                # rendering 不需要卸载（无模型）
+                logger.debug(f"rendering does not require unloading")
+            case _:
+                logger.warning(f"Unknown tool type for unloading: {tool}")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()  # empty CUDA cache
 
