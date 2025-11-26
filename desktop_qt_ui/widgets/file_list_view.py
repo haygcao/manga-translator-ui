@@ -1,9 +1,10 @@
 import os
 import re
 from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, pyqtSlot
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -15,6 +16,15 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QWidget,
 )
+
+
+# 全局线程池，用于异步加载缩略图
+_thumbnail_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="thumbnail_loader")
+
+
+class ThumbnailSignals(QObject):
+    """用于从工作线程发送信号到主线程"""
+    thumbnail_loaded = pyqtSignal(str, QPixmap)  # file_path, pixmap
 
 
 def natural_sort_key(path: str):
@@ -32,17 +42,53 @@ def natural_sort_key(path: str):
     return parts
 
 
+def _load_thumbnail_worker(file_path: str) -> tuple[str, Optional[QPixmap]]:
+    """
+    在工作线程中加载缩略图
+    返回 (file_path, pixmap) 或 (file_path, None) 如果失败
+    """
+    try:
+        img = Image.open(file_path)
+        img.thumbnail((40, 40))
+        
+        # Convert PIL image to QPixmap
+        if img.mode == 'RGB':
+            q_img = QImage(img.tobytes(), img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
+        elif img.mode == 'RGBA':
+            q_img = QImage(img.tobytes(), img.width, img.height, img.width * 4, QImage.Format.Format_RGBA8888)
+        else:  # Fallback for other modes like L, P, etc.
+            img = img.convert('RGBA')
+            q_img = QImage(img.tobytes(), img.width, img.height, img.width * 4, QImage.Format.Format_RGBA8888)
+
+        pixmap = QPixmap.fromImage(q_img)
+        return (file_path, pixmap)
+    except Exception as e:
+        print(f"Error loading thumbnail for {file_path}: {e}")
+        return (file_path, None)
+
+
 class FileItemWidget(QWidget):
     """自定义列表项，用于显示缩略图、文件名和移除按钮"""
     remove_requested = pyqtSignal(str)
     
     # 类级别的缩略图缓存
     _thumbnail_cache: Dict[str, QPixmap] = {}
+    # 类级别的信号对象（所有实例共享）
+    _signals = ThumbnailSignals()
+    # 存储所有活动的实例，用于分发信号
+    _active_instances: Dict[str, List['FileItemWidget']] = {}
 
     def __init__(self, file_path, is_folder=False, parent=None):
         super().__init__(parent)
         self.file_path = file_path
         self.is_folder = is_folder
+        self._thumbnail_loading = False
+
+        # 注册实例
+        if not is_folder and not os.path.isdir(file_path):
+            if file_path not in FileItemWidget._active_instances:
+                FileItemWidget._active_instances[file_path] = []
+            FileItemWidget._active_instances[file_path].append(self)
 
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(5, 5, 5, 5)
@@ -59,7 +105,28 @@ class FileItemWidget(QWidget):
             icon = style.standardIcon(QStyle.StandardPixmap.SP_DirIcon)
             self.thumbnail_label.setPixmap(icon.pixmap(QSize(40,40)))
         else:
+            # 连接全局信号（只连接一次）
+            if not hasattr(FileItemWidget, '_signals_connected'):
+                FileItemWidget._signals.thumbnail_loaded.connect(FileItemWidget._dispatch_thumbnail)
+                FileItemWidget._signals_connected = True
             self._load_thumbnail()
+    
+    def __del__(self):
+        """析构时从活动实例列表中移除"""
+        if self.file_path in FileItemWidget._active_instances:
+            try:
+                FileItemWidget._active_instances[self.file_path].remove(self)
+                if not FileItemWidget._active_instances[self.file_path]:
+                    del FileItemWidget._active_instances[self.file_path]
+            except (ValueError, KeyError):
+                pass
+    
+    @classmethod
+    def _dispatch_thumbnail(cls, file_path: str, pixmap: Optional[QPixmap]):
+        """分发缩略图到所有相关实例"""
+        if file_path in cls._active_instances:
+            for instance in cls._active_instances[file_path]:
+                instance._on_thumbnail_loaded(file_path, pixmap)
 
         # File Name
         display_name = os.path.basename(file_path)
@@ -91,33 +158,40 @@ class FileItemWidget(QWidget):
             return 0
 
     def _load_thumbnail(self):
-        """加载缩略图，使用缓存机制"""
+        """异步加载缩略图，使用缓存机制"""
         # 检查缓存
         if self.file_path in FileItemWidget._thumbnail_cache:
             self.thumbnail_label.setPixmap(FileItemWidget._thumbnail_cache[self.file_path])
             return
         
+        # 显示加载中提示
+        self.thumbnail_label.setText("...")
+        self._thumbnail_loading = True
+        
+        # 提交到线程池异步加载
+        future = _thumbnail_executor.submit(_load_thumbnail_worker, self.file_path)
+        future.add_done_callback(self._on_thumbnail_future_done)
+    
+    def _on_thumbnail_future_done(self, future):
+        """线程池任务完成回调"""
         try:
-            img = Image.open(self.file_path)
-            img.thumbnail((40, 40))
-            
-            # Convert PIL image to QPixmap
-            if img.mode == 'RGB':
-                q_img = QImage(img.tobytes(), img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
-            elif img.mode == 'RGBA':
-                q_img = QImage(img.tobytes(), img.width, img.height, img.width * 4, QImage.Format.Format_RGBA8888)
-            else: # Fallback for other modes like L, P, etc.
-                img = img.convert('RGBA')
-                q_img = QImage(img.tobytes(), img.width, img.height, img.width * 4, QImage.Format.Format_RGBA8888)
-
-            pixmap = QPixmap.fromImage(q_img)
-            self.thumbnail_label.setPixmap(pixmap)
-            
-            # 缓存缩略图
-            FileItemWidget._thumbnail_cache[self.file_path] = pixmap
+            file_path, pixmap = future.result()
+            # 通过信号发送到主线程
+            FileItemWidget._signals.thumbnail_loaded.emit(file_path, pixmap)
         except Exception as e:
+            print(f"Error in thumbnail future callback: {e}")
+    
+    def _on_thumbnail_loaded(self, file_path: str, pixmap: Optional[QPixmap]):
+        """在主线程中接收缩略图加载完成的信号"""
+        self._thumbnail_loading = False
+        
+        if pixmap:
+            self.thumbnail_label.setPixmap(pixmap)
+            # 缓存缩略图（只缓存一次）
+            if file_path not in FileItemWidget._thumbnail_cache:
+                FileItemWidget._thumbnail_cache[file_path] = pixmap
+        else:
             self.thumbnail_label.setText("ERR")
-            print(f"Error loading thumbnail for {self.file_path}: {e}")
 
     def _emit_remove_request(self):
         self.remove_requested.emit(self.file_path)
