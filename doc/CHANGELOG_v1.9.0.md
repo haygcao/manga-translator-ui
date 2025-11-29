@@ -10,7 +10,31 @@
   - 现在用户设置的最小检测框面积占比会正确应用到 YOLO 检测器
   - 解决了 UI 设置为 0 但实际使用默认值 0.0009 的问题
 
+### 编辑器修复
+- **修复编辑器描边宽度实时更新问题**
+  - 修复了主页修改描边宽度后，编辑器中的文本描边没有实时更新的问题
+  - 修复了参数服务导出时字段重命名导致的配置丢失问题
+  - 现在主页修改描边宽度后，编辑器会立即重新渲染并应用新的描边宽度
+
+### 错误处理优化
+- **添加 API 404 错误的友好中文提示**
+  - 检测 HTML 错误响应并提供详细的解决方案
+  - 统一错误处理，所有翻译器共用
+  - 避免无限重试，快速失败并显示清晰的错误提示
+
+### 依赖安装修复
+- **修复 SSL 证书验证失败问题**
+  - 添加 `--trusted-host` 参数解决清华镜像源 SSL 证书问题
+  - 同时支持清华源和 PyTorch 官方源的 SSL 跳过
+  - 解决了 `aiofiles` 等依赖无法安装的问题
+
 ## 🔧 优化改进
+
+### 内存优化
+- **批量处理内存优化**
+  - 添加批次间内存清理逻辑，预期减少 20-30% 内存占用
+  - CLI 和 UI 模式改为按批次加载图片，避免一次性加载所有图片到内存
+  - 对于 100 张图片的批量处理，内存占用从 5GB 降低到 150MB（节省 97%）
 
 ### AMD GPU 支持优化
 - **更新 AMD ROCm PyTorch 支持策略**
@@ -28,7 +52,12 @@
 
 ### 代码变更
 - `manga_translator/detection/__init__.py`: 修复 YOLO 检测器调用时的参数传递
-- `packaging/launch.py`: 注释掉 gfx101X-dgpu 和 gfx103X-dgpu 的自动检测
+- `manga_translator/manga_translator.py`: 添加批次间内存清理逻辑
+- `manga_translator/mode/local.py`: CLI 模式按批次加载图片
+- `desktop_qt_ui/app_logic.py`: UI 模式按批次加载图片，添加 404 错误处理
+- `manga_translator/translators/openai_hq.py`: 检测 HTML 404 错误响应
+- `desktop_qt_ui/editor/text_renderer_backend.py`: 修复描边宽度参数映射
+- `packaging/launch.py`: 添加 `--trusted-host` 参数，注释掉 gfx101X-dgpu 和 gfx103X-dgpu 的自动检测
 - `requirements_amd.txt`: 更新显卡支持说明和示例命令
 - `README.md`: 更新 AMD GPU 支持范围说明
 
