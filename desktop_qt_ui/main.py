@@ -28,23 +28,9 @@ if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
 warnings.filterwarnings('ignore', message='.*Triton.*')
 warnings.filterwarnings('ignore', module='xformers')
 
-# 抑制 xformers 导入时的 Triton 警告（这些是直接打印到 stdout 的）
-import io
-import contextlib
-
-# 临时重定向 stdout 和 stderr 来抑制 xformers 的 Triton 警告
-_original_stdout = sys.stdout
-_original_stderr = sys.stderr
-sys.stdout = io.StringIO()
-sys.stderr = io.StringIO()
-
 from PyQt6.QtWidgets import QApplication
 from main_window import MainWindow
 from services import init_services
-
-# 恢复 stdout 和 stderr（xformers 已经导入完成）
-sys.stdout = _original_stdout
-sys.stderr = _original_stderr
 
 def print_memory_snapshot():
     """打印内存快照（前100行）"""
