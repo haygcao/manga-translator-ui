@@ -753,9 +753,13 @@ REM 接受Conda服务条款（避免交互式提示）
 call conda config --set channel_priority flexible >nul 2>&1
 call conda tos accept >nul 2>&1
 
+REM 清理可能损坏的包缓存
+echo 正在清理包缓存...
+call conda clean --all -y >nul 2>&1
+
 REM 创建命名环境
 echo 正在创建环境: %CONDA_ENV_NAME%
-call conda create -n "%CONDA_ENV_NAME%" python=3.12 -y
+call conda create -n "%CONDA_ENV_NAME%" python=3.12.* -y
 if !ERRORLEVEL! neq 0 (
     echo [ERROR] Conda环境创建失败
     pause
