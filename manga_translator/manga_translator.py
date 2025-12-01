@@ -1273,7 +1273,7 @@ class MangaTranslator:
                 h, w = w, h
             
             asp_ratio = h / w
-            tgt_size = config.detector.detect_size
+            tgt_size = config.detector.detection_size
             down_scale_ratio = h / tgt_size
             require_rearrange = down_scale_ratio > 2.5 and asp_ratio > 3
             
