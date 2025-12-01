@@ -32,13 +32,71 @@ if %ERRORLEVEL% neq 0 (
     set MINICONDA_ROOT=%~d0\Miniconda3
 )
 
+REM 先检查系统conda
 where conda >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] 未检测到 Conda
-    echo 请先运行 步骤1-首次安装.bat 安装 Miniconda
-    pause
-    exit /b 1
+if %ERRORLEVEL% neq 0 goto :check_local_conda_s4
+
+REM 检测到系统conda，获取实际路径
+REM 方法1: 从CONDA_EXE环境变量获取（最可靠）
+if defined CONDA_EXE (
+    for %%p in ("%CONDA_EXE%\..\..") do set "MINICONDA_ROOT=%%~fp"
 )
+
+REM 方法2: 从CONDA_PREFIX环境变量获取
+if "!MINICONDA_ROOT!"=="" (
+    if defined CONDA_PREFIX (
+        set "MINICONDA_ROOT=%CONDA_PREFIX%"
+    )
+)
+
+REM 方法3: 使用 conda info --base
+if "!MINICONDA_ROOT!"=="" (
+    for /f "delims=" %%i in ('conda info --base 2^>nul') do (
+        set "TEMP_PATH=%%i"
+        if exist "!TEMP_PATH!\Scripts\conda.exe" (
+            set "MINICONDA_ROOT=%%i"
+        )
+    )
+)
+
+REM 方法4: 从 where conda 解析路径
+if "!MINICONDA_ROOT!"=="" (
+    for /f "delims=" %%i in ('where conda 2^>nul') do (
+        if "!MINICONDA_ROOT!"=="" (
+            if "%%~xi"==".exe" (
+                for %%p in ("%%~dpi..") do set "MINICONDA_ROOT=%%~fp"
+            ) else if "%%~xi"==".bat" (
+                for %%p in ("%%~dpi..\..") do set "MINICONDA_ROOT=%%~fp"
+            )
+        )
+    )
+)
+
+goto :check_env_s4
+
+:check_local_conda_s4
+REM 检查本地Miniconda（优先脚本目录）
+if exist "%SCRIPT_DIR%\Miniconda3\Scripts\conda.exe" (
+    set MINICONDA_ROOT=%SCRIPT_DIR%\Miniconda3
+    echo [INFO] 检测到本地 Miniconda: %MINICONDA_ROOT%
+    call "%MINICONDA_ROOT%\Scripts\activate.bat"
+    goto :check_env_s4
+)
+
+REM 检查磁盘根目录
+if exist "%~d0\Miniconda3\Scripts\conda.exe" (
+    set MINICONDA_ROOT=%~d0\Miniconda3
+    echo [INFO] 检测到本地 Miniconda: %MINICONDA_ROOT%
+    call "%MINICONDA_ROOT%\Scripts\activate.bat"
+    goto :check_env_s4
+)
+
+echo [ERROR] 未检测到 Conda
+echo 请先运行 步骤1-首次安装.bat 安装 Miniconda
+pause
+exit /b 1
+
+:check_env_s4
 
 REM 检查环境是否存在（优先检查命名环境）
 set ENV_FOUND=0
