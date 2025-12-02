@@ -83,8 +83,8 @@ RUN if [ "$BUILD_TYPE" = "gpu" ]; then \
         pip install --no-cache-dir -r /tmp/requirements_cpu_no_pydensecrf.txt; \
     fi
 
-# 创建必要的目录
-RUN mkdir -p /app/fonts /app/dict /app/result /app/models /app/logs
+# 创建必要的目录（不覆盖已存在的目录）
+RUN mkdir -p /app/result /app/models /app/logs
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
