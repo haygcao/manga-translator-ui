@@ -978,10 +978,14 @@ class MangaTranslator:
             **upscaler_kwargs
         ))[0]
         
-        # Unload upscaling model immediately after use to free VRAM
-        logger.info(f"Unloading upscaling model {config.upscale.upscaler} to free VRAM")
-        await self._unload_model('upscaling', config.upscale.upscaler, **upscaler_kwargs)
-        del self._model_usage_timestamps[("upscaling", config.upscale.upscaler)]
+        # 如果 models_ttl > 0，则由清理任务自动卸载；否则立即卸载以释放显存
+        if self.models_ttl > 0:
+            logger.info(f"Upscaling model {config.upscale.upscaler} will be unloaded after {self.models_ttl}s of inactivity")
+        else:
+            # models_ttl == 0 表示永久保留，但 upscaling 模型占用显存较大，仍然立即卸载
+            logger.info(f"Unloading upscaling model {config.upscale.upscaler} immediately to free VRAM")
+            await self._unload_model('upscaling', config.upscale.upscaler, **upscaler_kwargs)
+            del self._model_usage_timestamps[("upscaling", config.upscale.upscaler)]
         
         return result
 
@@ -1092,7 +1096,7 @@ class MangaTranslator:
     async def _unload_model(self, tool: str, model: str, **kwargs):
         logger.info(f"Unloading {tool} model: {model}")
         match tool:
-            case 'colorization':
+            case 'colorizer':
                 await unload_colorization(model)
             case 'detection':
                 await unload_detection(model)
@@ -1130,13 +1134,16 @@ class MangaTranslator:
 
     # Background models cleanup job.
     async def _detector_cleanup_job(self):
+        logger.info(f"Model cleanup job started with models_ttl={self.models_ttl} seconds")
         while True:
             if self.models_ttl == 0:
                 await asyncio.sleep(1)
                 continue
             now = time.time()
             for (tool, model), last_used in list(self._model_usage_timestamps.items()):
-                if now - last_used > self.models_ttl:
+                time_since_last_use = now - last_used
+                if time_since_last_use > self.models_ttl:
+                    logger.info(f"Model {tool}/{model} has been idle for {time_since_last_use:.1f}s (TTL: {self.models_ttl}s), unloading...")
                     await self._unload_model(tool, model)
                     del self._model_usage_timestamps[(tool, model)]
             await asyncio.sleep(1)
