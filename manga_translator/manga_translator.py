@@ -500,6 +500,116 @@ class MangaTranslator:
         except Exception as e:
             logger.error(f"Failed to save inpainted image: {e}")
 
+    def _preprocess_load_text_mode(self, images_with_configs: List[tuple]):
+        """
+        load_text模式预处理：自动从TXT文件导入翻译到JSON
+        这个方法在翻译开始前统一执行，确保CLI和UI都能使用
+        """
+        try:
+            from manga_translator.utils.path_manager import find_json_path, find_txt_files, get_json_path
+            
+            # 获取默认模板路径
+            template_path = self._get_default_template_path()
+            if not template_path or not os.path.exists(template_path):
+                logger.warning("Template file not found, skipping TXT to JSON import")
+                return
+            
+            # 收集需要处理的图片路径
+            image_paths = []
+            for image, config in images_with_configs:
+                if hasattr(image, 'name') and image.name:
+                    image_paths.append(image.name)
+            
+            if not image_paths:
+                return
+            
+            # 批量处理TXT导入
+            success_count = 0
+            skip_count = 0
+            
+            for image_path in image_paths:
+                try:
+                    # 查找JSON和TXT文件
+                    json_path = find_json_path(image_path)
+                    original_txt_path, translated_txt_path = find_txt_files(image_path)
+                    
+                    # 如果没有JSON文件，跳过（稍后会报错）
+                    if not json_path:
+                        skip_count += 1
+                        continue
+                    
+                    # 优先使用原文TXT，其次使用翻译TXT
+                    txt_path = original_txt_path if original_txt_path else translated_txt_path
+                    
+                    if not txt_path:
+                        skip_count += 1
+                        continue
+                    
+                    # 执行TXT到JSON的导入
+                    from desktop_qt_ui.services.workflow_service import safe_update_large_json_from_text
+                    result = safe_update_large_json_from_text(txt_path, json_path, template_path)
+                    
+                    if not result.startswith("错误"):
+                        success_count += 1
+                        logger.debug(f"Imported TXT to JSON: {os.path.basename(image_path)}")
+                    
+                except Exception as e:
+                    logger.debug(f"Failed to import TXT for {os.path.basename(image_path)}: {e}")
+                    continue
+            
+            if success_count > 0:
+                logger.info(f"TXT to JSON import completed: {success_count} successful, {skip_count} skipped")
+            elif skip_count > 0:
+                logger.debug(f"No TXT files found for import ({skip_count} images)")
+                
+        except ImportError as e:
+            logger.warning(f"Cannot import workflow_service, skipping TXT to JSON import: {e}")
+        except Exception as e:
+            logger.warning(f"Error during TXT to JSON import: {e}")
+    
+    def _get_default_template_path(self) -> Optional[str]:
+        """获取默认模板文件路径"""
+        try:
+            import sys
+            # 尝试多个可能的路径
+            possible_paths = [
+                os.path.join(os.path.dirname(__file__), '..', 'examples', 'translation_template.json'),
+                os.path.join(os.getcwd(), 'examples', 'translation_template.json'),
+            ]
+            
+            # 如果是打包环境
+            if getattr(sys, 'frozen', False):
+                if hasattr(sys, '_MEIPASS'):
+                    possible_paths.insert(0, os.path.join(sys._MEIPASS, 'examples', 'translation_template.json'))
+                else:
+                    exe_dir = os.path.dirname(sys.executable)
+                    possible_paths.insert(0, os.path.join(exe_dir, 'examples', 'translation_template.json'))
+            
+            for path in possible_paths:
+                abs_path = os.path.abspath(path)
+                if os.path.exists(abs_path):
+                    return abs_path
+            
+            # 如果都不存在，尝试创建默认模板
+            default_path = os.path.abspath(possible_paths[0])
+            os.makedirs(os.path.dirname(default_path), exist_ok=True)
+            
+            default_content = '''翻译模板文件
+
+原文: <original>
+译文: <translated>
+
+'''
+            with open(default_path, 'w', encoding='utf-8') as f:
+                f.write(default_content)
+            
+            logger.info(f"Created default template at: {default_path}")
+            return default_path
+            
+        except Exception as e:
+            logger.warning(f"Failed to get/create default template: {e}")
+            return None
+    
     def _load_text_and_regions_from_file(self, image_path: str, config: Config) -> (Optional[List[TextBlock]], Optional[np.ndarray], bool):
         """加载翻译数据，支持新的目录结构和向后兼容"""
         if not image_path:
@@ -1131,6 +1241,92 @@ class MangaTranslator:
                     torch.cuda.synchronize()
             except Exception:
                 pass
+    
+    def _cleanup_batch_memory(self, current_batch_images=None, preprocessed_contexts=None, translated_contexts=None, keep_results=True):
+        """
+        统一的批次内存清理方法
+        
+        Args:
+            current_batch_images: List[(image, config)] - 当前批次的原始图片
+            preprocessed_contexts: List[(ctx, config)] - 预处理后的上下文
+            translated_contexts: List[(ctx, config)] - 翻译后的上下文
+            keep_results: bool - 是否保留 ctx.result（用于返回结果）
+        """
+        import gc
+        
+        # 1. 清理原始图片
+        if current_batch_images:
+            for i, (image, _) in enumerate(current_batch_images):
+                if hasattr(image, 'close'):
+                    try:
+                        image.close()
+                    except:
+                        pass
+                # 显式删除引用
+                del current_batch_images[i]
+        
+        # 2. 清理预处理上下文中的输入图像
+        if preprocessed_contexts:
+            for ctx, _ in preprocessed_contexts:
+                if hasattr(ctx, 'input') and ctx.input is not None:
+                    # 先关闭再删除
+                    if hasattr(ctx.input, 'close'):
+                        try:
+                            ctx.input.close()
+                        except:
+                            pass
+                    del ctx.input
+                    ctx.input = None
+            preprocessed_contexts.clear()
+        
+        # 3. 清理翻译上下文中的中间图像
+        if translated_contexts:
+            for ctx, _ in translated_contexts:
+                # 清理中间处理图像（使用 del 显式删除）
+                if hasattr(ctx, 'img_rgb') and ctx.img_rgb is not None:
+                    del ctx.img_rgb
+                    ctx.img_rgb = None
+                if hasattr(ctx, 'img_colorized') and ctx.img_colorized is not None:
+                    del ctx.img_colorized
+                    ctx.img_colorized = None
+                if hasattr(ctx, 'upscaled') and ctx.upscaled is not None:
+                    del ctx.upscaled
+                    ctx.upscaled = None
+                if hasattr(ctx, 'img_inpainted') and ctx.img_inpainted is not None:
+                    del ctx.img_inpainted
+                    ctx.img_inpainted = None
+                if hasattr(ctx, 'img_rendered') and ctx.img_rendered is not None:
+                    del ctx.img_rendered
+                    ctx.img_rendered = None
+                if hasattr(ctx, 'img_alpha') and ctx.img_alpha is not None:
+                    del ctx.img_alpha
+                    ctx.img_alpha = None
+                if hasattr(ctx, 'mask') and ctx.mask is not None:
+                    del ctx.mask
+                    ctx.mask = None
+                if hasattr(ctx, 'mask_raw') and ctx.mask_raw is not None:
+                    del ctx.mask_raw
+                    ctx.mask_raw = None
+                
+                # 如果不保留结果，也清理 result
+                if not keep_results and hasattr(ctx, 'result') and ctx.result is not None:
+                    del ctx.result
+                    ctx.result = None
+            
+            translated_contexts.clear()
+        
+        # 4. 强制垃圾回收和GPU显存清理
+        self._cleanup_gpu_memory()
+        
+        # 5. Windows 特定：强制释放物理内存
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
+            logger.debug('[MEMORY] Windows working set trimmed')
+        except:
+            pass  # 非 Windows 系统时忽略
+        
+        logger.debug('[MEMORY] Batch cleanup completed')
 
     # Background models cleanup job.
     async def _detector_cleanup_job(self):
@@ -2208,6 +2404,11 @@ class MangaTranslator:
         # 如果提供了全局总数，使用它来计算总批次数；否则使用当前批次的图片数
         display_total = global_total if global_total is not None else len(images_with_configs)
         
+        # === 步骤0: load_text模式预处理 - 自动从TXT导入到JSON ===
+        if self.load_text and images_with_configs:
+            logger.info("Load text mode detected: Auto-importing translations from TXT to JSON...")
+            self._preprocess_load_text_mode(images_with_configs)
+        
         # === 步骤1: 检查是否需要使用高质量翻译模式 ===
         if images_with_configs:
             first_config = images_with_configs[0][1]
@@ -2238,6 +2439,10 @@ class MangaTranslator:
         # === 步骤3: 批量处理模式 ===
         logger.info(f'Starting batch translation: {len(images_with_configs)} images, batch size: {batch_size}')
         import sys
+        
+        # Start the background cleanup job once if not already started.
+        if self._detector_cleanup_task is None:
+            self._detector_cleanup_task = asyncio.create_task(self._detector_cleanup_job())
         
         results = []
         total_images = len(images_with_configs)
@@ -2522,20 +2727,12 @@ class MangaTranslator:
                     results.append(ctx)
                 
                 # ✅ 批次完成后立即清理内存
-                import gc
-                for image, _ in current_batch_images:
-                    if hasattr(image, 'close'):
-                        try:
-                            image.close()
-                        except:
-                            pass
-                current_batch_images = None
-                for ctx, _ in preprocessed_contexts:
-                    if hasattr(ctx, 'input'):
-                        ctx.input = None
-                preprocessed_contexts.clear()
-                translated_contexts.clear()
-                gc.collect()
+                self._cleanup_batch_memory(
+                    current_batch_images=current_batch_images,
+                    preprocessed_contexts=preprocessed_contexts,
+                    translated_contexts=translated_contexts,
+                    keep_results=True
+                )
                 
                 continue  # 跳过渲染，继续下一批次
             
@@ -2565,20 +2762,12 @@ class MangaTranslator:
                     results.append(ctx)
                 
                 # ✅ 批次完成后立即清理内存
-                import gc
-                for image, _ in current_batch_images:
-                    if hasattr(image, 'close'):
-                        try:
-                            image.close()
-                        except:
-                            pass
-                current_batch_images = None
-                for ctx, _ in preprocessed_contexts:
-                    if hasattr(ctx, 'input'):
-                        ctx.input = None
-                preprocessed_contexts.clear()
-                translated_contexts.clear()
-                gc.collect()
+                self._cleanup_batch_memory(
+                    current_batch_images=current_batch_images,
+                    preprocessed_contexts=preprocessed_contexts,
+                    translated_contexts=translated_contexts,
+                    keep_results=True
+                )
                 
                 continue  # 跳过渲染，继续下一批次
 
@@ -2616,37 +2805,13 @@ class MangaTranslator:
                     logger.error(f"Error rendering image in batch: {e}")
                     results.append(ctx)
 
-            # ✅ 批次完成后立即清理内存（参考高质量翻译模式的清理逻辑）
-            import gc
-            
-            # 1. 清理current_batch_images中的图像引用
-            for image, _ in current_batch_images:
-                if hasattr(image, 'close'):
-                    try:
-                        image.close()
-                    except:
-                        pass
-            current_batch_images = None
-            
-            # 2. 清理preprocessed_contexts中的输入图像
-            for ctx, _ in preprocessed_contexts:
-                if hasattr(ctx, 'input'):
-                    ctx.input = None
-            preprocessed_contexts.clear()
-            
-            # 3. 清理translated_contexts中的中间图像（保留result用于返回）
-            for ctx, _ in translated_contexts:
-                if hasattr(ctx, 'img_rgb'):
-                    ctx.img_rgb = None
-                if hasattr(ctx, 'img_inpainted'):
-                    ctx.img_inpainted = None
-                if hasattr(ctx, 'img_rendered'):
-                    ctx.img_rendered = None
-            translated_contexts.clear()
-            
-            # 4. 强制垃圾回收和GPU显存清理
-            self._cleanup_gpu_memory()
-            
+            # ✅ 批次完成后立即清理内存
+            self._cleanup_batch_memory(
+                current_batch_images=current_batch_images,
+                preprocessed_contexts=preprocessed_contexts,
+                translated_contexts=translated_contexts,
+                keep_results=True
+            )
             logger.debug(f'[MEMORY] Batch {batch_start//batch_size + 1} cleanup completed')
 
         logger.info(f"Batch translation completed: processed {len(results)} images")
@@ -3208,6 +3373,17 @@ class MangaTranslator:
                         region._alignment = config.render.alignment
                         region._direction = config.render.direction
                 results.extend(batch)
+            
+            # ✅ 翻译批次完成后清理内存
+            # 清理merged_ctx和batch中的临时数据
+            if 'merged_ctx' in locals() and merged_ctx:
+                merged_ctx.text_regions = None
+                merged_ctx = None
+            batch = None
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         return results
 
@@ -4295,19 +4471,11 @@ class MangaTranslator:
                     results.append(ctx)
                 
                 # ✅ 批次完成后立即清理内存
-                import gc
-                for image, _ in current_batch_images:
-                    if hasattr(image, 'close'):
-                        try:
-                            image.close()
-                        except:
-                            pass
-                current_batch_images = None
-                for ctx in preprocessed_contexts:
-                    if hasattr(ctx, 'input'):
-                        ctx.input = None
-                preprocessed_contexts.clear()
-                gc.collect()
+                self._cleanup_batch_memory(
+                    current_batch_images=current_batch_images,
+                    preprocessed_contexts=preprocessed_contexts,
+                    keep_results=True
+                )
                 
                 continue # BUG FIX: Continue to the next batch instead of returning
 
@@ -4367,6 +4535,7 @@ class MangaTranslator:
                         ctx.mask = None
                     if hasattr(ctx, 'mask_raw'):
                         ctx.mask_raw = None
+                    # 注意：high_quality_batch_data 由翻译器的统一清理方法处理
                     
                     results.append(ctx)
                 except Exception as e:
@@ -4382,14 +4551,11 @@ class MangaTranslator:
                     data['image'] = None
             batch_data.clear()
             
-            # 2. 清理preprocessed_contexts中的输入图像
-            for ctx, _ in preprocessed_contexts:
-                if hasattr(ctx, 'input'):
-                    ctx.input = None
-            preprocessed_contexts.clear()
-            
-            # 3. 强制垃圾回收和GPU显存清理
-            self._cleanup_gpu_memory()
+            # 2. 使用统一清理方法
+            self._cleanup_batch_memory(
+                preprocessed_contexts=preprocessed_contexts,
+                keep_results=True
+            )
             
             logger.debug(f'[MEMORY] Batch {batch_start//batch_size + 1} cleanup completed (kept translation history for context)')
 

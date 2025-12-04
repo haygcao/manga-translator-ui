@@ -336,6 +336,11 @@ class MainAppLogic(QObject):
             if full_key == 'translator.translator':
                 self.logger.debug(self._t("log_translator_switched", value=value))
                 self.translation_service.set_translator(value)
+            
+            # 当目标语言被更改时，更新翻译服务的目标语言
+            if full_key == 'translator.target_lang':
+                self.logger.debug(f"Target language switched to: {value}")
+                self.translation_service.set_target_language(value)
 
             # 当渲染设置被更改时，通知编辑器刷新
             if full_key.startswith('render.'):
@@ -1847,15 +1852,7 @@ class TranslationWorker(QObject):
                 workflow_mode = self._t("Import Translation and Render")
                 workflow_tip = self._t("💡 Tip: Will read TXT files from manga_translator_work/originals/ or translations/ and render (prioritize _original.txt)")
                 
-                # 在load_text模式下，先自动导入txt文件的翻译到JSON
-                self.log_received.emit(self._t("📥 Importing translations from TXT files to JSON..."))
-                from desktop_qt_ui.services.workflow_service import smart_update_translations_from_images, ensure_default_template_exists
-                template_path = ensure_default_template_exists()
-                if template_path:
-                    import_result = smart_update_translations_from_images(self.files, template_path)
-                    self.log_received.emit(self._t("Import result: {result}", result=import_result))
-                else:
-                    self.log_received.emit(self._t("⚠️ Warning: Cannot find template file, skipping auto-import"))
+                # TXT导入JSON的预处理已经统一到翻译器入口（manga_translator.py），这里不再需要
 
             if is_hq or (len(self.files) > 1 and batch_size > 1):
                 self.log_received.emit(f"--- [12] THREAD: Starting batch processing ({'HQ mode' if is_hq else 'Batch mode'})...")
