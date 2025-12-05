@@ -381,6 +381,163 @@ class YOLOOBBDetector(OfflineDetector):
         
         return boxes_corners, scores, class_ids
     
+    def _detect_single_patch(
+        self,
+        patch: np.ndarray,
+        text_threshold: float,
+        offset_x: int = 0,
+        offset_y: int = 0
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        对单个patch进行检测，并将坐标偏移到原图位置
+        
+        Args:
+            patch: 图像patch
+            text_threshold: 置信度阈值
+            offset_x: X方向偏移量（patch在原图中的位置）
+            offset_y: Y方向偏移量
+        
+        Returns:
+            boxes_corners: (N, 4, 2) 角点坐标（已偏移到原图坐标）
+            scores: (N,) 置信度
+            class_ids: (N,) 类别ID
+        """
+        # 预处理
+        blob, gain, pad = self.preprocess(patch)
+        
+        # 推理
+        input_name = self.session.get_inputs()[0].name
+        output_names = [output.name for output in self.session.get_outputs()]
+        outputs = self.session.run(output_names, {input_name: blob})
+        
+        # 后处理
+        patch_shape = patch.shape[:2]
+        boxes_corners, scores, class_ids = self.postprocess(
+            outputs,
+            patch_shape,
+            gain,
+            pad,
+            text_threshold,
+            0.6
+        )
+        
+        # 将坐标偏移到原图位置
+        if len(boxes_corners) > 0:
+            boxes_corners[:, :, 0] += offset_x
+            boxes_corners[:, :, 1] += offset_y
+        
+        return boxes_corners, scores, class_ids
+
+    def _should_rearrange(self, img_shape: Tuple[int, int]) -> Tuple[bool, bool]:
+        """
+        判断是否需要分割图像（与主检测器逻辑一致）
+        
+        Returns:
+            require_rearrange: 是否需要分割
+            transpose: 是否需要转置（宽>高时）
+        """
+        h, w = img_shape
+        transpose = False
+        if h < w:
+            transpose = True
+            h, w = w, h
+        
+        asp_ratio = h / w
+        down_scale_ratio = h / self.input_size
+        
+        # 与主检测器相同的条件：缩放比>2.5 且 宽高比>3
+        require_rearrange = down_scale_ratio > 2.5 and asp_ratio > 3
+        
+        return require_rearrange, transpose
+
+    def _rearrange_detect(
+        self,
+        image: np.ndarray,
+        text_threshold: float,
+        verbose: bool = False
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        分割长图进行检测，然后合并结果（与主检测器逻辑类似）
+        
+        Args:
+            image: 输入图像
+            text_threshold: 置信度阈值
+            verbose: 是否输出调试信息
+        
+        Returns:
+            boxes_corners: (N, 4, 2) 合并后的角点坐标
+            scores: (N,) 置信度
+            class_ids: (N,) 类别ID
+        """
+        h, w = image.shape[:2]
+        transpose = False
+        if h < w:
+            transpose = True
+            image = np.transpose(image, (1, 0, 2))  # h w c -> w h c
+            h, w = w, h
+        
+        # 计算patch参数（与主检测器一致）
+        tgt_size = self.input_size
+        pw_num = max(int(np.floor(2 * tgt_size / w)), 2)
+        patch_size = ph = pw_num * w
+        
+        ph_num = int(np.ceil(h / ph))
+        ph_step = int((h - ph) / (ph_num - 1)) if ph_num > 1 else 0
+        
+        self.logger.info(f"YOLO OBB分割检测: 原图={h}x{w}, patch_size={patch_size}, ph_num={ph_num}, transpose={transpose}")
+        
+        all_boxes = []
+        all_scores = []
+        all_class_ids = []
+        
+        # 对每个patch进行检测
+        for ii in range(ph_num):
+            t = ii * ph_step
+            b = min(t + ph, h)
+            patch = image[t:b, :, :]
+            
+            # 如果patch高度不足，padding到patch_size
+            if patch.shape[0] < ph:
+                pad_h = ph - patch.shape[0]
+                patch = np.pad(patch, ((0, pad_h), (0, 0), (0, 0)), mode='constant', constant_values=114)
+            
+            # 检测单个patch
+            boxes, scores, class_ids = self._detect_single_patch(
+                patch, text_threshold, offset_x=0, offset_y=t
+            )
+            
+            if len(boxes) > 0:
+                all_boxes.append(boxes)
+                all_scores.append(scores)
+                all_class_ids.append(class_ids)
+            
+            if verbose:
+                self.logger.debug(f"YOLO OBB patch {ii}: t={t}, b={b}, 检测到 {len(boxes)} 个框")
+        
+        # 合并所有patch的结果
+        if len(all_boxes) == 0:
+            return np.array([]), np.array([]), np.array([])
+        
+        boxes_corners = np.concatenate(all_boxes, axis=0)
+        scores = np.concatenate(all_scores, axis=0)
+        class_ids = np.concatenate(all_class_ids, axis=0)
+        
+        # 如果之前转置了，需要把坐标转回来
+        if transpose:
+            # 交换x和y坐标
+            boxes_corners = boxes_corners[:, :, ::-1].copy()
+        
+        # 对合并后的结果进行去重（跨patch可能有重复检测）
+        boxes_corners, scores, class_ids = self.deduplicate_boxes(
+            boxes_corners, scores, class_ids,
+            distance_threshold=20.0,  # 跨patch去重用更大的阈值
+            iou_threshold=0.5
+        )
+        
+        self.logger.info(f"YOLO OBB分割检测完成: 合并去重后 {len(boxes_corners)} 个框")
+        
+        return boxes_corners, scores, class_ids
+
     async def _infer(
         self, 
         image: np.ndarray, 
@@ -391,55 +548,55 @@ class YOLOOBBDetector(OfflineDetector):
         verbose: bool = False
     ):
         """
-        执行检测推理
+        执行检测推理（支持长图分割检测）
         
         Returns:
             textlines: List of Quadrilateral objects
             raw_mask: None (YOLO OBB不生成mask)
             debug_img: None
         """
-        # 记录输入图像信息
         self.logger.debug(f"YOLO OBB输入图像: shape={image.shape}, dtype={image.dtype}")
         
-        # 预处理
-        try:
-            blob, gain, pad = self.preprocess(image)
-        except Exception as e:
-            self.logger.error(f"YOLO OBB预处理失败: {e}, 输入图像shape={image.shape}")
-            raise
-        
-        # 推理
-        input_name = self.session.get_inputs()[0].name
-        output_names = [output.name for output in self.session.get_outputs()]
-        
-        # 记录模型输入信息
-        model_input = self.session.get_inputs()[0]
-        self.logger.debug(f"YOLO OBB模型期望输入: name={model_input.name}, shape={model_input.shape}")
-        self.logger.debug(f"YOLO OBB实际输入: shape={blob.shape}, dtype={blob.dtype}")
-        
-        try:
-            outputs = self.session.run(output_names, {input_name: blob})
-        except Exception as e:
-            self.logger.error(f"YOLO OBB推理失败: {e}")
-            self.logger.error(f"输入blob shape: {blob.shape}, dtype: {blob.dtype}")
-            self.logger.error(f"模型期望shape: {model_input.shape}")
-            raise
-        
-        # 后处理
         img_shape = image.shape[:2]
-        boxes_corners, scores, class_ids = self.postprocess(
-            outputs,
-            img_shape,
-            gain,
-            pad,
-            text_threshold,  # 使用text_threshold作为置信度阈值
-            0.6  # IoU阈值
-        )
+        
+        # 判断是否需要分割检测
+        require_rearrange, _ = self._should_rearrange(img_shape)
+        
+        if require_rearrange:
+            # 长图：分割检测
+            self.logger.info(f"YOLO OBB: 检测到长图，启用分割检测模式")
+            boxes_corners, scores, class_ids = self._rearrange_detect(
+                image, text_threshold, verbose
+            )
+        else:
+            # 普通图：直接检测
+            try:
+                blob, gain, pad = self.preprocess(image)
+            except Exception as e:
+                self.logger.error(f"YOLO OBB预处理失败: {e}, 输入图像shape={image.shape}")
+                raise
+            
+            input_name = self.session.get_inputs()[0].name
+            output_names = [output.name for output in self.session.get_outputs()]
+            
+            try:
+                outputs = self.session.run(output_names, {input_name: blob})
+            except Exception as e:
+                self.logger.error(f"YOLO OBB推理失败: {e}")
+                raise
+            
+            boxes_corners, scores, class_ids = self.postprocess(
+                outputs,
+                img_shape,
+                gain,
+                pad,
+                text_threshold,
+                0.6
+            )
         
         # 转换为Quadrilateral对象
         textlines = []
         for corners, score, class_id in zip(boxes_corners, scores, class_ids):
-            # corners: (4, 2) array
             pts = corners.astype(np.int32)
             label = self.classes[class_id] if class_id < len(self.classes) else f'class_{class_id}'
             quad = Quadrilateral(pts, label, float(score))
@@ -447,7 +604,7 @@ class YOLOOBBDetector(OfflineDetector):
         
         self.logger.info(f"YOLO OBB检测到 {len(textlines)} 个文本框")
         
-        # ✅ Detection完成后立即清理GPU内存（ONNX Runtime使用CUDA，需要清理）
+        # 清理GPU内存
         try:
             import torch
             if torch.cuda.is_available():
