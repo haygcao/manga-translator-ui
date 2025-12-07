@@ -5,7 +5,6 @@ from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
     QSplitter,
@@ -405,8 +404,6 @@ class EditorView(QWidget):
     @pyqtSlot(str)
     def _on_file_remove_requested(self, file_path: str):
         """处理文件移除请求：只处理编辑器自己的文件列表"""
-        import os
-        
         # 先在视图中移除（避免重建列表）
         self.file_list.remove_file(file_path)
         

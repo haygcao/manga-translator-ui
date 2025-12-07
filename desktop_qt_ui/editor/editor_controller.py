@@ -690,9 +690,6 @@ class EditorController(QObject):
             x_min = max(0, x_min - padding)
             x_max = min(w, x_max + padding + 1)
 
-            bbox_w = x_max - x_min
-            bbox_h = y_max - y_min
-
             # 裁剪原图和当前蒙版的对应区域
             image_np = np.array(image.convert("RGB"))
             bbox_image = image_np[y_min:y_max, x_min:x_max]

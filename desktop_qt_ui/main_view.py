@@ -14,10 +14,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSplitter,
     QTabWidget,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )

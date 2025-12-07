@@ -23,7 +23,7 @@ from manga_translator.config import (
 )
 from manga_translator.save import OUTPUT_FORMATS
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
-from PyQt6.QtWidgets import QFileDialog, QListView, QTreeView
+from PyQt6.QtWidgets import QFileDialog
 
 from services import (
     get_config_service,

@@ -304,7 +304,6 @@ class MainWindow(QMainWindow):
         
         # 更新菜单文本
         menu_bar = self.menuBar()
-        menus = menu_bar.findChildren(QAction)
         
         # 由于菜单已经创建，我们需要重新设置文本
         # 这里简单地重新创建菜单栏

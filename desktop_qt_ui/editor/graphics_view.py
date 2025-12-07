@@ -19,7 +19,7 @@ from PyQt6.QtGui import (
     QTransform,
 )
 from PyQt6.QtCore import QRectF
-from PyQt6.QtWidgets import QGraphicsItem, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QMenu
+from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QMenu
 
 # --- 新增Imports for Refactoring ---
 from editor import text_renderer_backend

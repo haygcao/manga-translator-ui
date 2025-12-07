@@ -69,17 +69,6 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 # 设置全局异常处理器
 sys.excepthook = global_exception_handler
 
-def print_memory_snapshot():
-    """打印内存快照（前100行）"""
-    snapshot = tracemalloc.take_snapshot()
-    top_stats = snapshot.statistics('lineno')
-    print("\n" + "="*80)
-    print("📊 内存占用 TOP 100:")
-    print("="*80)
-    for i, stat in enumerate(top_stats[:100], 1):
-        print(f"{i}. {stat}")
-    print("="*80 + "\n")
-
 def main():
     """
     应用主入口
@@ -171,7 +160,7 @@ def main():
             # 设置AppUserModelID，让Windows识别这是独立应用
             myappid = 'manga.translator.ui.1.0'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        except Exception as e:
+        except Exception:
             pass
     
     # 1. 创建 QApplication 实例

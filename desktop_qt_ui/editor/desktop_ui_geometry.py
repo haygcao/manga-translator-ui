@@ -3,11 +3,7 @@
 替换 Qt 的坐标系统，使用 desktop-ui 的数据结构和算法
 """
 import math
-import time
 from typing import List, Tuple, Optional, Dict, Any
-
-# 全局变量，用于限制调试信息的刷新频率
-last_debug_print_time = 0
 import numpy as np
 import cv2
 from PyQt6.QtCore import QPointF

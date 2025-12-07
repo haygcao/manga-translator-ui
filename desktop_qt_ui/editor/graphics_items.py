@@ -1,9 +1,7 @@
 
-import math
 import time
 from typing import List
 
-import cv2
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
@@ -11,6 +9,7 @@ from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGraphicsItemGroup,
     QGraphicsPixmapItem,
+    QGraphicsScene,
     QGraphicsSceneMouseEvent,
     QStyle,
 )
@@ -20,8 +19,6 @@ from editor.desktop_ui_geometry import (
     handle_white_frame_edit,
     handle_vertex_edit,
     handle_edge_edit,
-    rotate_point,
-    get_polygon_center
 )
 
 
