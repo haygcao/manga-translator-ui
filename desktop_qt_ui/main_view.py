@@ -842,6 +842,7 @@ class MainView(QWidget):
     
     def reset_progress(self):
         """重置进度条为初始状态（灰色）"""
+        self._progress_active = False  # 重置标志，确保下次翻译能正确显示蓝色
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("0/0 (0%)")

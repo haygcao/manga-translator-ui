@@ -152,11 +152,14 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     log_file_path = os.path.join(log_dir, f'log_{timestamp}.txt')
     
-    # 添加文件日志处理器
+    # 添加文件日志处理器（使用自动刷新）
     file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(log_formatter)
     root_logger.addHandler(file_handler)
+    
+    # 确保程序退出时关闭文件处理器
+    atexit.register(file_handler.close)
     
     logging.info(f"UI日志文件: {log_file_path}")
 

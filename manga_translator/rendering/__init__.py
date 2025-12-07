@@ -1000,6 +1000,9 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                                     target_font_size = new_font_size
                                     # 跳过后面的默认缩放
                                     height_scale = None
+                                else:
+                                    # actual_max_width >= scaled_width，使用默认缩放
+                                    height_scale = box_scale_factor
                             else:
                                 height_scale = box_scale_factor
                         

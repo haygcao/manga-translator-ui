@@ -42,10 +42,13 @@ def init_logging():
         handler.setLevel(logging.DEBUG)
         logging.root.addHandler(handler)
     
+    # 只修改 StreamHandler（控制台），不修改 FileHandler（日志文件）
+    # 这样可以保留 main.py 配置的文件日志处理器的原始格式
     for h in logging.root.handlers:
-        h.setFormatter(Formatter())
-        h.addFilter(Filter())
-        h.setLevel(logging.DEBUG)
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            h.setFormatter(Formatter())
+            h.addFilter(Filter())
+            h.setLevel(logging.DEBUG)
     
     # Explicitly set the root logger level
     root.setLevel(logging.DEBUG)

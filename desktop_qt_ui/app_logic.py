@@ -89,13 +89,31 @@ class MainAppLogic(QObject):
     
     def _ui_log(self, message: str, level: str = "INFO"):
         """
-        只输出到UI日志列表，不输出到命令行
-        用于中文提示信息，避免命令行乱码或冗余输出
+        输出到UI日志列表和日志文件
+        使用 root logger 确保写入 main.py 配置的日志文件
         """
         from datetime import datetime, timezone
         timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
         formatted_msg = f"{timestamp} - {level} - {message}"
-        self.log_message.emit(formatted_msg)
+        
+        # 使用 root logger 输出到日志文件和控制台
+        try:
+            root_logger = logging.getLogger()
+            if level == "ERROR":
+                root_logger.error(message)
+            elif level == "WARNING":
+                root_logger.warning(message)
+            else:
+                root_logger.info(message)
+        except Exception:
+            # 如果logging失败，使用print作为备用
+            print(formatted_msg)
+        
+        # 输出到UI日志列表
+        try:
+            self.log_message.emit(formatted_msg)
+        except Exception:
+            pass  # UI可能已崩溃，忽略错误
 
 
     @pyqtSlot(dict)
@@ -1341,15 +1359,41 @@ class MainAppLogic(QObject):
             except Exception as sound_error:
                 self._ui_log(f"播放提示音失败: {sound_error}", "WARNING")
             
-            self.task_completed.emit(saved_files)
+            self._ui_log(f"准备发送 task_completed 信号，文件数: {len(saved_files)}")
+            # 使用列表副本发送信号，避免引用问题
+            self.task_completed.emit(list(saved_files))
+            self._ui_log("task_completed 信号已发送")
         except Exception as e:
             self._ui_log(f"完成任务状态更新或信号发射时发生致命错误: {e}", "ERROR")
-        finally:
+            import traceback
+            traceback.print_exc()
+        
+        # 注意：将清理逻辑移出 finally 块，使用 QTimer 延迟执行
+        # 这样可以确保信号有足够时间被主线程处理
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(100, self._cleanup_after_task)
+    
+    def _cleanup_after_task(self):
+        """延迟清理任务相关资源"""
+        try:
             # 清理线程引用（线程应该已经通过deleteLater自动清理）
             # 只在线程仍在运行时进行额外处理
-            if self.thread and self.thread.isRunning():
+            # 使用 sip 检查对象是否已被删除
+            thread_valid = False
+            try:
+                if self.thread is not None:
+                    # 尝试访问线程属性来检查是否有效
+                    thread_valid = self.thread.isRunning()
+            except RuntimeError:
+                # C++ 对象已被删除
+                thread_valid = False
+            
+            if thread_valid:
                 self._ui_log("任务完成但线程仍在运行，请求退出...", "WARNING")
                 self.thread.quit()
+                # 不阻塞UI太久，最多等待500ms
+                if not self.thread.wait(500):
+                    self._ui_log("线程未在500ms内停止，将由Qt事件循环自动清理", "WARNING")
             
             # 清理压缩包解压的临时文件
             if hasattr(self, 'archive_to_temp_map') and self.archive_to_temp_map:
@@ -1361,11 +1405,11 @@ class MainAppLogic(QObject):
                     self._ui_log("已清理压缩包临时文件")
                 except Exception as cleanup_error:
                     self._ui_log(f"清理临时文件时出错: {cleanup_error}", "WARNING")
-                # 不阻塞UI，让deleteLater处理清理
-                # 如果线程在2秒内没有停止，记录警告但不强制终止
-                if not self.thread.wait(2000):
-                    self._ui_log("线程未在2秒内停止，将由Qt事件循环自动清理", "WARNING")
-            
+        except Exception as e:
+            # 忽略 C++ 对象已删除的错误
+            if "has been deleted" not in str(e):
+                self._ui_log(f"清理任务资源时出错: {e}", "WARNING")
+        finally:
             # 清理引用，让Qt的deleteLater机制处理实际的对象销毁
             self.thread = None
             self.worker = None

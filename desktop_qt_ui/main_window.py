@@ -376,20 +376,30 @@ class MainWindow(QMainWindow):
         Handles the completion of a translation task.
         Asks the user if they want to open the results in the editor.
         """
-        if not saved_files:
-            return
+        try:
+            self.logger.info(f"on_task_completed called with {len(saved_files) if saved_files else 0} files")
+            
+            if not saved_files:
+                self.logger.info("No saved files, returning")
+                return
 
-        reply = QMessageBox.question(
-            self, 
-            self._t('Task Completed'), 
-            self._t("Translation completed, {count} files saved.\n\nOpen results in editor?", count=len(saved_files)),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
+            self.logger.info("About to show QMessageBox")
+            reply = QMessageBox.question(
+                self, 
+                self._t('Task Completed'), 
+                self._t("Translation completed, {count} files saved.\n\nOpen results in editor?", count=len(saved_files)),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            self.logger.info(f"QMessageBox returned: {reply}")
 
-        if reply == QMessageBox.StandardButton.Yes:
-            self.logger.info("User chose to open results in editor.")
-            self.enter_editor_mode(files_to_load=saved_files)
+            if reply == QMessageBox.StandardButton.Yes:
+                self.logger.info("User chose to open results in editor.")
+                self.enter_editor_mode(files_to_load=saved_files)
+        except Exception as e:
+            self.logger.error(f"on_task_completed 发生异常: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
 
     def switch_to_editor_view(self):
         """
@@ -406,59 +416,64 @@ class MainWindow(QMainWindow):
         """
         import os
 
-        # 获取完整的文件夹树结构
-        tree_structure = self.app_logic.get_folder_tree_structure()
-        expanded_files = tree_structure['files']
-        folder_tree = tree_structure['tree']
-        
-        self.logger.info(f"Entering editor mode with {len(expanded_files)} files")
+        try:
+            # 获取完整的文件夹树结构
+            tree_structure = self.app_logic.get_folder_tree_structure()
+            expanded_files = tree_structure['files']
+            folder_tree = tree_structure['tree']
+            
+            self.logger.info(f"Entering editor mode with {len(expanded_files)} files")
 
-        # 传递翻译后的图片列表给编辑器
-        # 从file_to_folder_map获取翻译后的图片路径
-        translated_files = []
-        translated_folder_map = {}  # 翻译后文件的文件夹映射
-        
-        for source_file in expanded_files:
-            # 根据源文件路径构造翻译后的图片路径
-            source_folder = self.app_logic.file_to_folder_map.get(source_file)
-            if source_folder:
-                # 文件来自文件夹
-                folder_name = os.path.basename(source_folder)
-                output_folder = self.app_logic.config_service.get_config().app.last_output_path
-                final_output_folder = os.path.join(output_folder, folder_name)
-                translated_file = os.path.join(final_output_folder, os.path.basename(source_file))
-                
-                if os.path.exists(translated_file):
-                    translated_files.append(translated_file)
-                    # 映射到翻译后文件的直接父文件夹（输出目录中的文件夹）
-                    translated_folder_map[translated_file] = final_output_folder
-            else:
-                # 单独添加的文件
-                output_folder = self.app_logic.config_service.get_config().app.last_output_path
-                translated_file = os.path.join(output_folder, os.path.basename(source_file))
+            # 传递翻译后的图片列表给编辑器
+            # 从file_to_folder_map获取翻译后的图片路径
+            translated_files = []
+            translated_folder_map = {}  # 翻译后文件的文件夹映射
+            
+            for source_file in expanded_files:
+                # 根据源文件路径构造翻译后的图片路径
+                source_folder = self.app_logic.file_to_folder_map.get(source_file)
+                if source_folder:
+                    # 文件来自文件夹
+                    folder_name = os.path.basename(source_folder)
+                    output_folder = self.app_logic.config_service.get_config().app.last_output_path
+                    final_output_folder = os.path.join(output_folder, folder_name)
+                    translated_file = os.path.join(final_output_folder, os.path.basename(source_file))
+                    
+                    if os.path.exists(translated_file):
+                        translated_files.append(translated_file)
+                        # 映射到翻译后文件的直接父文件夹（输出目录中的文件夹）
+                        translated_folder_map[translated_file] = final_output_folder
+                else:
+                    # 单独添加的文件
+                    output_folder = self.app_logic.config_service.get_config().app.last_output_path
+                    translated_file = os.path.join(output_folder, os.path.basename(source_file))
 
-                if os.path.exists(translated_file):
-                    translated_files.append(translated_file)
-                    translated_folder_map[translated_file] = output_folder
+                    if os.path.exists(translated_file):
+                        translated_files.append(translated_file)
+                        translated_folder_map[translated_file] = output_folder
 
-        # 传递完整的树结构给编辑器
-        self.editor_logic.load_file_lists(
-            source_files=expanded_files, 
-            translated_files=translated_files,
-            folder_tree=folder_tree
-        )
+            # 传递完整的树结构给编辑器
+            self.editor_logic.load_file_lists(
+                source_files=expanded_files, 
+                translated_files=translated_files,
+                folder_tree=folder_tree
+            )
 
-        # 如果指定了要加载的文件，加载第一个翻译后的文件
-        if file_to_load:
-            self.editor_logic.load_image_into_editor(file_to_load)
-        elif files_to_load and len(files_to_load) > 0:
-            # files_to_load是翻译后的文件列表，加载第一个
-            self.editor_logic.load_image_into_editor(files_to_load[0])
-        elif translated_files:
-            # 如果没有指定，加载第一个翻译后的文件
-            self.editor_logic.load_image_into_editor(translated_files[0])
+            # 如果指定了要加载的文件，加载第一个翻译后的文件
+            if file_to_load:
+                self.editor_logic.load_image_into_editor(file_to_load)
+            elif files_to_load and len(files_to_load) > 0:
+                # files_to_load是翻译后的文件列表，加载第一个
+                self.editor_logic.load_image_into_editor(files_to_load[0])
+            elif translated_files:
+                # 如果没有指定，加载第一个翻译后的文件
+                self.editor_logic.load_image_into_editor(translated_files[0])
 
-        self.stacked_widget.setCurrentWidget(self.editor_view)
+            self.stacked_widget.setCurrentWidget(self.editor_view)
+        except Exception as e:
+            self.logger.error(f"enter_editor_mode 发生异常: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
 
     def closeEvent(self, event):
         """处理窗口关闭事件"""
