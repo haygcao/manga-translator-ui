@@ -113,12 +113,26 @@ def run_pip(args, desc=None):
                desc=f"正在安装 {desc}", errdesc=f"无法安装 {desc}", live=True)
 
 
+def ensure_git_safe_directory():
+    """确保当前目录在 Git safe.directory 列表中，解决所有权问题"""
+    try:
+        # 将项目根目录添加到 Git safe.directory
+        subprocess.run(
+            [git, 'config', '--global', '--add', 'safe.directory', str(PATH_ROOT)],
+            capture_output=True,
+            check=False
+        )
+    except Exception:
+        pass  # 忽略错误，不影响后续操作
+
+
 def commit_hash():
     """获取当前Git commit hash"""
     global stored_commit_hash
     if stored_commit_hash is not None:
         return stored_commit_hash
 
+    ensure_git_safe_directory()  # 确保 safe.directory 已配置
     try:
         stored_commit_hash = run(f"{git} rev-parse HEAD").strip()
     except Exception:
@@ -890,6 +904,7 @@ def update_repository(args):
 
 def check_version_info():
     """检查版本信息"""
+    ensure_git_safe_directory()  # 确保 safe.directory 已配置
     print()
     print("正在检查版本...")
     print("=" * 40)
@@ -944,6 +959,7 @@ def check_version_info():
 
 def update_code_force():
     """强制更新代码（同步到远程）"""
+    ensure_git_safe_directory()  # 确保 safe.directory 已配置
     print()
     print("=" * 40)
     print("更新代码 (强制同步)")
