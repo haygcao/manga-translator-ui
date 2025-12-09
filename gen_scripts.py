@@ -293,10 +293,21 @@ echo.
 echo [2/5] 检查 Git...
 echo ========================================
 
-git --version >nul 2>&1
+REM 优先检查本地便携版 Git
+if exist "%SCRIPT_DIR%\PortableGit\cmd\git.exe" (
+    set "GIT=%SCRIPT_DIR%\PortableGit\cmd\git.exe"
+    set "PATH=%SCRIPT_DIR%\PortableGit\cmd;%PATH%"
+    echo [OK] 找到本地便携版 Git
+    "%SCRIPT_DIR%\PortableGit\cmd\git.exe" --version
+    goto :clone_repo
+)
+
+REM 检查系统 PATH 中的 git
+where git >nul 2>&1
 if %ERRORLEVEL% == 0 (
     set GIT=git
-    echo [OK] 找到系统Git
+    echo [OK] 找到系统 Git
+    git --version
     goto :clone_repo
 )
 

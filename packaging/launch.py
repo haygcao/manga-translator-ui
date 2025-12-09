@@ -35,6 +35,14 @@ else:
 skip_install = False
 index_url = os.environ.get('INDEX_URL', "")
 
+# 备用镜像源列表（按优先级排序）
+MIRROR_URLS = [
+    "https://pypi.tuna.tsinghua.edu.cn/simple/",  # 清华源
+    "https://mirrors.aliyun.com/pypi/simple/",     # 阿里云
+    "https://pypi.douban.com/simple/",             # 豆瓣
+    "https://pypi.org/simple/",                    # 官方源（作为最后备选）
+]
+
 
 def is_python_version_valid():
     """检查Python版本是否符合要求"""
@@ -89,28 +97,55 @@ stderr: {result.stderr if len(result.stderr) > 0 else '<empty>'}
 
 
 def run_pip(args, desc=None):
-    """使用pip安装包"""
+    """使用pip安装包，支持多镜像源自动回退"""
     if skip_install:
         return
     
-    index_url_line = f' --index-url {index_url}' if index_url != '' else ''
+    import urllib.parse
     
-    # ✅ 添加 --trusted-host 参数以解决SSL证书问题
-    # 需要为主索引和PyTorch官方源都添加trusted-host
-    trusted_host_line = ''
-    if index_url:
-        import urllib.parse
-        # 主索引（清华源等）
-        parsed = urllib.parse.urlparse(index_url)
-        if parsed.hostname:
-            trusted_host_line += f' --trusted-host {parsed.hostname}'
+    def build_pip_command(mirror_url=None):
+        """构建pip命令"""
+        index_url_line = f' --index-url {mirror_url}' if mirror_url else ''
+        trusted_host_line = ''
         
-        # PyTorch官方源（如果在requirements中使用了--extra-index-url）
-        # 添加常用的PyTorch源
-        trusted_host_line += ' --trusted-host download.pytorch.org'
+        if mirror_url:
+            parsed = urllib.parse.urlparse(mirror_url)
+            if parsed.hostname:
+                trusted_host_line += f' --trusted-host {parsed.hostname}'
+            trusted_host_line += ' --trusted-host download.pytorch.org'
+        
+        return f'"{python}" -m pip {args} --prefer-binary{index_url_line}{trusted_host_line} --disable-pip-version-check --no-warn-script-location'
     
-    return run(f'"{python}" -m pip {args} --prefer-binary{index_url_line}{trusted_host_line} --disable-pip-version-check --no-warn-script-location',
-               desc=f"正在安装 {desc}", errdesc=f"无法安装 {desc}", live=True)
+    # 如果用户指定了 INDEX_URL，优先使用
+    if index_url:
+        mirrors_to_try = [index_url] + [m for m in MIRROR_URLS if m != index_url]
+    else:
+        mirrors_to_try = MIRROR_URLS.copy()
+    
+    last_error = None
+    for i, mirror in enumerate(mirrors_to_try):
+        try:
+            mirror_name = urllib.parse.urlparse(mirror).hostname or mirror
+            if i == 0:
+                print(f"正在安装 {desc}...")
+            else:
+                print(f"尝试备用镜像源: {mirror_name}")
+            
+            cmd = build_pip_command(mirror)
+            result = subprocess.run(cmd, shell=True, env=os.environ)
+            
+            if result.returncode == 0:
+                return ""
+            else:
+                last_error = f"返回码: {result.returncode}"
+                print(f"镜像源 {mirror_name} 安装失败，{last_error}")
+                
+        except Exception as e:
+            last_error = str(e)
+            print(f"镜像源 {mirror_name} 出错: {last_error}")
+    
+    # 所有镜像源都失败
+    raise RuntimeError(f"无法安装 {desc}，所有镜像源均失败。最后错误: {last_error}")
 
 
 def ensure_git_safe_directory():
