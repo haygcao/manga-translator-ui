@@ -103,7 +103,7 @@ def run_pip(args, desc=None):
     
     import urllib.parse
     
-    def build_pip_command(mirror_url=None):
+    def build_pip_command(pip_args, mirror_url=None):
         """构建pip命令"""
         index_url_line = f' --index-url {mirror_url}' if mirror_url else ''
         trusted_host_line = ''
@@ -114,7 +114,7 @@ def run_pip(args, desc=None):
                 trusted_host_line += f' --trusted-host {parsed.hostname}'
             trusted_host_line += ' --trusted-host download.pytorch.org'
         
-        return f'"{python}" -m pip {args} --prefer-binary{index_url_line}{trusted_host_line} --disable-pip-version-check --no-warn-script-location'
+        return f'"{python}" -m pip {pip_args} --prefer-binary{index_url_line}{trusted_host_line} --disable-pip-version-check --no-warn-script-location'
     
     # 如果用户指定了 INDEX_URL，优先使用
     if index_url:
@@ -131,7 +131,7 @@ def run_pip(args, desc=None):
             else:
                 print(f"尝试备用镜像源: {mirror_name}")
             
-            cmd = build_pip_command(mirror)
+            cmd = build_pip_command(args, mirror)
             result = subprocess.run(cmd, shell=True, env=os.environ)
             
             if result.returncode == 0:
@@ -146,6 +146,112 @@ def run_pip(args, desc=None):
     
     # 所有镜像源都失败
     raise RuntimeError(f"无法安装 {desc}，所有镜像源均失败。最后错误: {last_error}")
+
+
+def run_pip_requirements(requirements_file, desc=None):
+    """逐个安装requirements文件中的包，失败时从失败的包开始切换镜像重试"""
+    if skip_install:
+        return
+    
+    import urllib.parse
+    from pathlib import Path
+    
+    def build_pip_command(pip_args, mirror_url=None):
+        """构建pip命令"""
+        index_url_line = f' --index-url {mirror_url}' if mirror_url else ''
+        trusted_host_line = ''
+        
+        if mirror_url:
+            parsed = urllib.parse.urlparse(mirror_url)
+            if parsed.hostname:
+                trusted_host_line += f' --trusted-host {parsed.hostname}'
+            trusted_host_line += ' --trusted-host download.pytorch.org'
+        
+        return f'"{python}" -m pip {pip_args} --prefer-binary{index_url_line}{trusted_host_line} --disable-pip-version-check --no-warn-script-location'
+    
+    # 读取 requirements 文件
+    req_path = Path(requirements_file)
+    if not req_path.exists():
+        raise RuntimeError(f"找不到依赖文件: {requirements_file}")
+    
+    # 解析 requirements 文件，提取有效的包
+    packages = []
+    with open(req_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            # 跳过空行、注释、pip选项
+            if not line or line.startswith('#') or line.startswith('-'):
+                continue
+            # 去除行内注释
+            line = line.split('#')[0].strip()
+            if line:
+                packages.append(line)
+    
+    if not packages:
+        print(f"[警告] {requirements_file} 中没有找到有效的依赖包")
+        return
+    
+    # 如果用户指定了 INDEX_URL，优先使用
+    if index_url:
+        mirrors_to_try = [index_url] + [m for m in MIRROR_URLS if m != index_url]
+    else:
+        mirrors_to_try = MIRROR_URLS.copy()
+    
+    total = len(packages)
+    print(f"正在安装 {desc or requirements_file}... (共 {total} 个包)")
+    
+    # 当前镜像索引
+    current_mirror_idx = 0
+    # 当前包索引
+    pkg_idx = 0
+    
+    while pkg_idx < total:
+        pkg = packages[pkg_idx]
+        mirror = mirrors_to_try[current_mirror_idx]
+        mirror_name = urllib.parse.urlparse(mirror).hostname or mirror
+        
+        # 获取包名用于显示（去除版本约束）
+        pkg_display = pkg.split('==')[0].split('>=')[0].split('<=')[0].split('[')[0].strip()
+        print(f"[{pkg_idx + 1}/{total}] 安装 {pkg_display}...")
+        
+        cmd = build_pip_command(f'install "{pkg}"', mirror)
+        
+        try:
+            result = subprocess.run(cmd, shell=True, env=os.environ)
+            
+            if result.returncode == 0:
+                # 安装成功，继续下一个包
+                pkg_idx += 1
+            else:
+                # 安装失败，尝试下一个镜像
+                print(f"[失败] {pkg_display} 在 {mirror_name} 安装失败")
+                
+                # 切换到下一个镜像
+                current_mirror_idx += 1
+                
+                if current_mirror_idx >= len(mirrors_to_try):
+                    # 所有镜像都失败了
+                    raise RuntimeError(f"无法安装 {pkg_display}，所有镜像源均失败")
+                
+                next_mirror = mirrors_to_try[current_mirror_idx]
+                next_mirror_name = urllib.parse.urlparse(next_mirror).hostname or next_mirror
+                print(f"[重试] 切换到镜像 {next_mirror_name}，从 {pkg_display} 重新开始...")
+                # 不增加 pkg_idx，从当前失败的包重试
+                
+        except Exception as e:
+            print(f"[错误] 安装 {pkg_display} 时出错: {e}")
+            
+            # 切换到下一个镜像
+            current_mirror_idx += 1
+            
+            if current_mirror_idx >= len(mirrors_to_try):
+                raise RuntimeError(f"无法安装 {pkg_display}，所有镜像源均失败。错误: {e}")
+            
+            next_mirror = mirrors_to_try[current_mirror_idx]
+            next_mirror_name = urllib.parse.urlparse(next_mirror).hostname or next_mirror
+            print(f"[重试] 切换到镜像 {next_mirror_name}，从 {pkg_display} 重新开始...")
+    
+    print(f"[完成] {desc or requirements_file} 安装完成")
 
 
 def ensure_git_safe_directory():
@@ -899,7 +1005,8 @@ def prepare_environment(args):
             print(f'强制重新安装所有依赖...')
         else:
             print(f'发现缺失依赖,正在安装...')
-        run_pip(f"install -r {requirements_file}", f"{requirements_file} 中的依赖")
+        # 使用逐个包安装，失败时从失败的包开始切换镜像重试
+        run_pip_requirements(requirements_file, f"{requirements_file} 中的依赖")
     else:
         print(f'依赖已满足 ✓')
     
