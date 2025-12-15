@@ -340,6 +340,20 @@ This is an incorrect response because it includes extra text and explanations.
                 if self._MAX_REQUESTS_PER_MINUTE > 0:
                     OpenAITranslator._GLOBAL_LAST_REQUEST_TS[self._last_request_ts_key] = time.time()
 
+                # 检查 response 是否为 None
+                if response is None:
+                    retry_attempt += 1
+                    retry_reason = "OpenAI API returned None response"
+                    log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+                    self.logger.warning(f"[{log_attempt}] {retry_reason}. Retrying...")
+                    last_exception = Exception("OpenAI API 返回了空响应 (None)")
+                    
+                    if not is_infinite and attempt >= max_retries:
+                        raise last_exception
+                    
+                    await asyncio.sleep(2)
+                    continue
+
                 # 检查成功条件
                 if response.choices and response.choices[0].message.content and response.choices[0].finish_reason != 'content_filter':
                     result_text = response.choices[0].message.content.strip()
@@ -430,14 +444,16 @@ This is an incorrect response because it includes extra text and explanations.
                     return translations[:len(texts)]
                 
                 # 如果不成功，则记录原因并准备重试
-                attempt += 1
+                retry_attempt += 1
                 log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
-                finish_reason = response.choices[0].finish_reason if response.choices else "N/A"
+                finish_reason = response.choices[0].finish_reason if (response and response.choices) else "N/A"
 
                 if finish_reason == 'content_filter':
+                    retry_reason = "Content filter triggered"
                     self.logger.warning(f"OpenAI内容被安全策略拦截 ({log_attempt})。正在重试...")
                     last_exception = Exception("OpenAI content filter triggered")
                 else:
+                    retry_reason = f"Empty content or unexpected finish_reason: {finish_reason}"
                     self.logger.warning(f"OpenAI返回空内容或意外的结束原因 '{finish_reason}' ({log_attempt})。正在重试...")
                     last_exception = Exception(f"OpenAI returned empty content or unexpected finish_reason: {finish_reason}")
 

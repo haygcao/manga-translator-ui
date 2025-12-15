@@ -5,6 +5,11 @@ import cv2
 import functools
 from PIL import Image
 import tqdm
+
+# 解除 PIL 图片大小限制（防止 DecompressionBombWarning）
+# 可通过环境变量 PIL_MAX_IMAGE_PIXELS 自定义，设为 0 表示无限制
+_max_pixels = os.environ.get('PIL_MAX_IMAGE_PIXELS', '0')
+Image.MAX_IMAGE_PIXELS = int(_max_pixels) if _max_pixels != '0' else None
 import requests
 import sys
 import hashlib
