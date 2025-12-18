@@ -1,6 +1,7 @@
 import re
 import time
 import asyncio
+import json
 from typing import List, Tuple, Dict, Any
 from abc import abstractmethod
 import numpy as np
@@ -419,6 +420,10 @@ class CommonTranslator(InfererModule):
 
         prompt = ""
 
+        # 添加重试提示到最前面（如果是重试）
+        if retry_attempt > 0:
+            prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
+
         # 添加多页上下文（如果有）
         if prev_context:
             prompt += f"{prev_context}\n\n---\n\n"
@@ -427,23 +432,26 @@ class CommonTranslator(InfererModule):
         else:
             self.logger.info(f"[历史上下文] 无历史上下文（可能是第一张图片或context_size=0）")
 
-        prompt += "Please translate the following manga text regions:\n\n"
+        prompt += "Please translate the following manga text regions. The input is provided as a JSON array:\n\n"
 
+        input_data = []
         for i, text in enumerate(texts):
             text_to_translate = text.replace('\n', ' ').replace('\ufffd', '')
+            item = {
+                "id": i + 1,
+                "text": text_to_translate
+            }
             # 只有开启AI断句时才添加区域信息
             if enable_ai_break and ctx and hasattr(ctx, 'text_regions') and ctx.text_regions and i < len(ctx.text_regions):
                 region = ctx.text_regions[i]
                 region_count = len(region.lines) if hasattr(region, 'lines') else 1
-                prompt += f"{i+1}. [Original regions: {region_count}] {text_to_translate}\n"
-            else:
-                prompt += f"{i+1}. {text_to_translate}\n"
+                item["original_region_count"] = region_count
+            
+            input_data.append(item)
 
-        prompt += "\nCRITICAL: Provide translations in the exact same order as the numbered input text regions. Your first line of output must be the translation for text region #1, your second line for #2, and so on. DO NOT CHANGE THE ORDER."
+        prompt += json.dumps(input_data, ensure_ascii=False, indent=2)
 
-        # 添加重试提示到结尾（如果是重试）- 放在结尾以便利用 DeepSeek 等 API 的前缀缓存
-        if retry_attempt > 0:
-            prompt += "\n\n" + self._get_retry_hint(retry_attempt, retry_reason)
+        prompt += "\n\nCRITICAL: Provide translations in the exact same order as the input array. Your output must be a JSON array of strings corresponding to the IDs."
 
         return prompt
 
@@ -469,6 +477,10 @@ class CommonTranslator(InfererModule):
 
         prompt = ""
 
+        # 添加重试提示到最前面（如果是重试）
+        if retry_attempt > 0:
+            prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
+
         # 添加多页上下文（如果有）
         if prev_context:
             prompt += f"{prev_context}\n\n---\n\n"
@@ -487,25 +499,28 @@ class CommonTranslator(InfererModule):
                 prompt += f"  {j+1}. {text}\n"
             prompt += "\n"
 
-        prompt += "All texts to translate (in order):\n"
+        prompt += "All texts to translate (JSON Array):\n"
+        input_data = []
         text_index = 1
         for img_idx, data in enumerate(batch_data):
             for region_idx, text in enumerate(data['original_texts']):
                 text_to_translate = text.replace('\n', ' ').replace('\ufffd', '')
+                item = {
+                    "id": text_index,
+                    "text": text_to_translate
+                }
                 # 只有开启AI断句时才添加区域信息
                 if enable_ai_break and data.get('text_regions') and region_idx < len(data['text_regions']):
                     region = data['text_regions'][region_idx]
                     region_count = len(region.lines) if hasattr(region, 'lines') else 1
-                    prompt += f"{text_index}. [Original regions: {region_count}] {text_to_translate}\n"
-                else:
-                    prompt += f"{text_index}. {text_to_translate}\n"
+                    item["original_region_count"] = region_count
+                
+                input_data.append(item)
                 text_index += 1
 
-        prompt += "\nCRITICAL: Provide translations in the exact same order as the numbered input text regions. Your first line of output must be the translation for text region #1, your second line for #2, and so on. DO NOT CHANGE THE ORDER."
+        prompt += json.dumps(input_data, ensure_ascii=False, indent=2)
 
-        # 添加重试提示到结尾（如果是重试）- 放在结尾以便利用 DeepSeek 等 API 的前缀缓存
-        if retry_attempt > 0:
-            prompt += "\n\n" + self._get_retry_hint(retry_attempt, retry_reason)
+        prompt += "\n\nCRITICAL: Provide translations in the exact same order as the input array. Your output must be a JSON array of strings corresponding to the IDs."
 
         return prompt
 
@@ -988,3 +1003,76 @@ class OfflineTranslator(CommonTranslator, ModelWrapper):
 
     async def unload(self, device: str):
         return await super().unload()
+
+def parse_json_or_text_response(result_text: str) -> List[str]:
+    """
+    解析LLM返回的文本，支持JSON列表格式或按行分割格式
+    Parse LLM response text, supporting both JSON list format and line-separated format
+    
+    Args:
+        result_text: LLM返回的原始文本
+        
+    Returns:
+        解析后的翻译列表
+    """
+    import json
+    
+    result_text = result_text.strip()
+    if not result_text:
+        return []
+        
+    # 清理可能的Markdown代码块
+    if result_text.startswith("```") and result_text.endswith("```"):
+        lines = result_text.split('\n')
+        # 移除第一行（如果是 ```json 或 ```）
+        if lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        # 移除最后一行（如果是 ```）
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        result_text = "\n".join(lines).strip()
+    
+    translations = []
+    try:
+        # 尝试作为JSON解析
+        parsed_json = json.loads(result_text)
+        if isinstance(parsed_json, list):
+            # 如果是列表，判断是字符串列表还是对象列表
+            if not parsed_json:
+                return []
+            
+            if isinstance(parsed_json[0], dict):
+                # 对象列表 [{"id": 1, "translation": "..."}]
+                # 尝试按 ID 排序 (假设 ID 是数字)
+                try:
+                    parsed_json.sort(key=lambda x: int(x.get('id', 0)))
+                except Exception:
+                    pass # 如果 ID 不是数字或排序失败，保持原序
+                
+                translations = []
+                for item in parsed_json:
+                    # 优先取 translation，其次 text，最后取第一个值
+                    text = item.get('translation')
+                    if text is None:
+                        text = item.get('text')
+                    if text is None and item:
+                        text = list(item.values())[0]
+                    
+                    translations.append(str(text) if text is not None else "")
+            else:
+                # 字符串列表 ["...", "..."]
+                translations = [str(item) for item in parsed_json]
+        else:
+            raise ValueError("JSON parsed but not a list")
+    except (json.JSONDecodeError, ValueError):
+        # 如果不是JSON或解析失败，回退到按行分割
+        for line in result_text.split('\n'):
+            line = line.strip()
+            if line:
+                # 移除编号（如"1. "）
+                line = re.sub(r'^\d+\.\s*', '', line)
+                # 替换换行符占位
+                line = line.replace('\\n', '\n').replace('↵', '\n')
+                translations.append(line)
+    
+    return translations

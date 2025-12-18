@@ -247,7 +247,7 @@ class MainView(QWidget):
         
         # 特殊处理：当 upscaler 变化时，更新 upscale_ratio 动态下拉框
         if full_key == "upscale.upscaler":
-            self._update_upscale_ratio_options(value)
+            self._update_upscale_ratio_options(final_value)
         
         self.setting_changed.emit(full_key, final_value)
 
@@ -281,6 +281,14 @@ class MainView(QWidget):
                 else:
                     # 无法解析倍率，只更新模型
                     self.setting_changed.emit("upscale.realcugan_model", model_value)
+        elif config.upscale.upscaler == "mangajanai":
+            # 当前是 mangajanai，直接把选项存到 upscale_ratio
+            if text == self._t("upscale_ratio_not_use"):
+                # 禁用超分
+                self.setting_changed.emit("upscale.upscale_ratio", None)
+            else:
+                # 直接存储选项字符串 (x2, x4, DAT2 x4)
+                self.setting_changed.emit("upscale.upscale_ratio", text)
         else:
             # 当前是其他超分模型，text 是倍率
             if text == self._t("upscale_ratio_not_use"):
@@ -349,6 +357,23 @@ class MainView(QWidget):
                     upscale_ratio_widget.setCurrentText(display_map.get(realcugan_models[0], realcugan_models[0]))
                 else:
                     upscale_ratio_widget.setCurrentText(realcugan_models[0])
+        elif upscaler == "mangajanai":
+            # 显示 MangaJaNai 特殊选项
+            mangajanai_options = ["x2", "x4", "DAT2 x4"]
+            all_options = [self._t("upscale_ratio_not_use")] + mangajanai_options
+            upscale_ratio_widget.addItems(all_options)
+            
+            # 设置默认值 - upscale_ratio 直接存储选项字符串
+            config = self.config_service.get_config()
+            ratio = config.upscale.upscale_ratio
+            if ratio is None:
+                upscale_ratio_widget.setCurrentText(self._t("upscale_ratio_not_use"))
+            elif isinstance(ratio, str) and ratio in mangajanai_options:
+                upscale_ratio_widget.setCurrentText(ratio)
+            elif ratio == 2:
+                upscale_ratio_widget.setCurrentText("x2")
+            else:
+                upscale_ratio_widget.setCurrentText("x4")
         else:
             # 显示普通倍率选项
             ratio_options = [self._t("upscale_ratio_not_use"), "2", "3", "4"]
@@ -508,6 +533,21 @@ class MainView(QWidget):
                         widget.setCurrentText(self._t("upscale_ratio_not_use"))
                     elif realcugan_models:
                         widget.setCurrentText(realcugan_models[0])
+                elif current_upscaler == "mangajanai":
+                    # 显示 MangaJaNai 特殊选项
+                    mangajanai_options = ["x2", "x4", "DAT2 x4"]
+                    all_options = [self._t("upscale_ratio_not_use")] + mangajanai_options
+                    widget.addItems(all_options)
+                    
+                    # 设置当前值 - upscale_ratio 直接存储选项字符串
+                    if value is None:
+                        widget.setCurrentText(self._t("upscale_ratio_not_use"))
+                    elif isinstance(value, str) and value in mangajanai_options:
+                        widget.setCurrentText(value)
+                    elif value == 2:
+                        widget.setCurrentText("x2")
+                    else:
+                        widget.setCurrentText("x4")
                 else:
                     # 显示普通倍率选项
                     ratio_options = [self._t("upscale_ratio_not_use"), "2", "3", "4"]

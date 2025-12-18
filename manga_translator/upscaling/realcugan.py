@@ -7,6 +7,7 @@ Using external tile-based processing to reduce VRAM usage
 """
 
 import os
+import shutil
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -45,6 +46,8 @@ _MODEL_HASHES = {
 
 class RealCUGANUpscaler(OfflineUpscaler):
     """Real-CUGAN upscaler using PyTorch with external tiling"""
+    
+    _MODEL_SUB_DIR = os.path.join('upscaling', 'realcugan')
     
     _VALID_UPSCALE_RATIOS = [2, 3, 4]
     
@@ -98,6 +101,8 @@ class RealCUGANUpscaler(OfflineUpscaler):
         self.model_file = self._VALID_MODELS[model_name]['file']
         self.model = None
         
+        self._migrate_old_models()
+        
         # Only add the selected model to _MODEL_MAPPING for downloading
         self._MODEL_MAPPING = {
             model_name: {
@@ -113,6 +118,31 @@ class RealCUGANUpscaler(OfflineUpscaler):
             f'Initialized RealCUGAN PyTorch: model={model_name}, '
             f'scale={self.scale}x, tile_size={tile_size}'
         )
+
+    def _migrate_old_models(self):
+        """Move models from old directory to new directory"""
+        old_dir = os.path.join(self._MODEL_DIR, 'upscaling')
+        new_dir = self.model_dir
+        
+        if not os.path.exists(old_dir):
+            return
+
+        os.makedirs(new_dir, exist_ok=True)
+        
+        # Check all known RealCUGAN models
+        for model_file in _MODEL_HASHES.keys():
+            old_path = os.path.join(old_dir, model_file)
+            new_path = os.path.join(new_dir, model_file)
+            
+            if os.path.exists(old_path):
+                if not os.path.exists(new_path):
+                    try:
+                        logger.info(f'Migrating model {model_file} to {new_dir}')
+                        shutil.move(old_path, new_path)
+                    except Exception as e:
+                        logger.warning(f'Failed to move {model_file}: {e}')
+                else:
+                    logger.debug(f'Model {model_file} exists in both old and new locations.')
     
     def _check_downloaded(self) -> bool:
         """Override parent's check - models are pre-downloaded"""

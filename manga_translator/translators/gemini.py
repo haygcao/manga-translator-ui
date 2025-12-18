@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-from .common import CommonTranslator, VALID_LANGUAGES
+from .common import CommonTranslator, VALID_LANGUAGES, parse_json_or_text_response
 from .keys import GEMINI_API_KEY
 from ..utils import Context
 
@@ -188,7 +188,7 @@ class GeminiTranslator(CommonTranslator):
 
             self.client = genai.GenerativeModel(**model_args)
     
-    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """构建系统提示词"""
         # Map language codes to full names for clarity in the prompt
         lang_map = {
@@ -279,6 +279,11 @@ This is an incorrect response because it includes extra text and explanations.
 
         # Combine prompts
         final_prompt = ""
+        
+        # 添加重试提示到最前面（如果是重试）
+        if retry_attempt > 0:
+            final_prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
+        
         if line_break_prompt_str:
             final_prompt += f"{line_break_prompt_str}\n\n---\n\n"
         if custom_prompt_str:
@@ -291,9 +296,9 @@ This is an incorrect response because it includes extra text and explanations.
         """构建用户提示词（纯文本版）- 使用统一方法，只包含上下文和待翻译文本"""
         return self._build_user_prompt_for_texts(texts, ctx, self.prev_context, retry_attempt=retry_attempt, retry_reason=retry_reason)
     
-    def _get_system_instruction(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+    def _get_system_instruction(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """获取完整的系统指令（包含断句提示词、自定义提示词和基础系统提示词）"""
-        return self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
+        return self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason)
 
     async def _translate_batch(self, texts: List[str], source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, ctx: Any = None, split_level: int = 0) -> List[str]:
         """批量翻译方法（纯文本）"""
@@ -307,20 +312,15 @@ This is an incorrect response because it includes extra text and explanations.
             self.logger.error("Gemini客户端初始化失败")
             return texts
         
-        # 获取系统指令（包含断句提示词、自定义提示词和基础系统提示词）
-        system_instruction = self._get_system_instruction(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
-        
-        # 重新初始化客户端以应用新的系统指令
-        self.client = None
-        self._setup_client(system_instruction=system_instruction)
-        
-        if not self.client:
-            self.logger.error("Gemini客户端初始化失败")
-            return texts
-        
         # 初始化重试信息
         retry_attempt = 0
         retry_reason = ""
+        
+        # 保存参数供重试时使用
+        _source_lang = source_lang
+        _target_lang = target_lang
+        _custom_prompt_json = custom_prompt_json
+        _line_break_prompt_json = line_break_prompt_json
         
         # 发送请求
         max_retries = self.attempts
@@ -353,6 +353,15 @@ This is an incorrect response because it includes extra text and explanations.
             # if local_attempt > self._SPLIT_THRESHOLD and len(texts) > 1 and split_level < self._MAX_SPLIT_ATTEMPTS:
             #     self.logger.warning(f"Triggering split after {local_attempt} local attempts")
             #     raise self.SplitException(local_attempt, texts)
+            
+            # 获取系统指令并重新初始化客户端（包含重试信息以避免缓存）
+            system_instruction = self._get_system_instruction(_source_lang, _target_lang, custom_prompt_json=_custom_prompt_json, line_break_prompt_json=_line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason)
+            self.client = None
+            self._setup_client(system_instruction=system_instruction)
+            
+            if not self.client:
+                self.logger.error("Gemini客户端初始化失败")
+                return texts
             
             # 构建用户提示词（包含重试信息以避免缓存）
             user_prompt = self._build_user_prompt(texts, ctx, retry_attempt=retry_attempt, retry_reason=retry_reason)
@@ -428,23 +437,10 @@ This is an incorrect response because it includes extra text and explanations.
 
                 # 尝试访问 .text 属性，如果API因安全原因等返回空内容，这里会触发异常
                 result_text = response.text.strip()
+                self.logger.debug(f"--- Gemini Raw Response ---\n{result_text}\n---------------------------")
 
-                # 调试日志：打印Gemini的原始返回内容
-                self.logger.info(f"--- Gemini Raw Response ---\n{result_text}\n---------------------------")
-
-                # 增加清理步骤，移除可能的Markdown代码块
-                if result_text.startswith("```") and result_text.endswith("```"):
-                    result_text = result_text[3:-3].strip()
-                
-                # 如果成功获取文本，则处理并返回
-                translations = []
-                for line in result_text.split('\n'):
-                    line = line.strip()
-                    if line:
-                        # 移除编号（如"1. "）
-                        line = re.sub(r'^\d+\.\s*', '', line)
-                        line = line.replace('\\n', '\n').replace('↵', '\n')
-                        translations.append(line)
+                # 使用通用函数解析响应
+                translations = parse_json_or_text_response(result_text)
                 
                 # Strict validation: must match input count
                 if len(translations) != len(texts):

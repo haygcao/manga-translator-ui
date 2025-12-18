@@ -161,8 +161,9 @@ def run_pip_requirements(requirements_file, desc=None):
     if not req_path.exists():
         raise RuntimeError(f"找不到依赖文件: {requirements_file}")
     
-    # 解析 requirements 文件，提取有效的包和 --extra-index-url
+    # 解析 requirements 文件，提取有效的包和索引源
     packages = []
+    primary_index_url = None  # 存储 --index-url 参数（主源）
     extra_index_urls = []  # 存储 --extra-index-url 参数
     
     with open(req_path, 'r', encoding='utf-8') as f:
@@ -170,6 +171,12 @@ def run_pip_requirements(requirements_file, desc=None):
             line = line.strip()
             # 跳过空行、注释
             if not line or line.startswith('#'):
+                continue
+            # 解析 --index-url 选项（主源）
+            if line.startswith('--index-url'):
+                parts = line.split(None, 1)
+                if len(parts) == 2:
+                    primary_index_url = parts[1].strip()
                 continue
             # 解析 --extra-index-url 选项
             if line.startswith('--extra-index-url'):
@@ -196,25 +203,39 @@ def run_pip_requirements(requirements_file, desc=None):
                 return True
         return False
     
-    def build_pip_command(pip_args, mirror_url=None, use_extra_index=False):
-        """构建pip命令"""
-        index_url_line = f' --index-url {mirror_url}' if mirror_url else ''
+    def build_pip_command(pip_args, mirror_url=None, use_primary_index=False):
+        """构建pip命令
+        
+        Args:
+            pip_args: pip 命令参数
+            mirror_url: 镜像源 URL（用于非 PyTorch 包）
+            use_primary_index: 是否使用 requirements 文件中指定的主源（用于 PyTorch 包）
+        """
+        index_url_line = ''
         extra_index_line = ''
         trusted_host_line = ''
         
-        # 如果需要使用 extra-index-url（用于 torch 等包）
-        if use_extra_index and extra_index_urls:
+        # PyTorch 包：使用 requirements 文件中的 --index-url 作为主源
+        if use_primary_index and primary_index_url:
+            index_url_line = f' --index-url {primary_index_url}'
+            parsed_primary = urllib.parse.urlparse(primary_index_url)
+            if parsed_primary.hostname:
+                trusted_host_line += f' --trusted-host {parsed_primary.hostname}'
+            # 添加 extra-index-url 作为备用源（用于其他依赖）
             for extra_url in extra_index_urls:
                 extra_index_line += f' --extra-index-url {extra_url}'
                 parsed_extra = urllib.parse.urlparse(extra_url)
                 if parsed_extra.hostname:
                     trusted_host_line += f' --trusted-host {parsed_extra.hostname}'
+        else:
+            # 非 PyTorch 包：使用镜像源
+            if mirror_url:
+                index_url_line = f' --index-url {mirror_url}'
+                parsed = urllib.parse.urlparse(mirror_url)
+                if parsed.hostname:
+                    trusted_host_line += f' --trusted-host {parsed.hostname}'
         
-        if mirror_url:
-            parsed = urllib.parse.urlparse(mirror_url)
-            if parsed.hostname:
-                trusted_host_line += f' --trusted-host {parsed.hostname}'
-            trusted_host_line += ' --trusted-host download.pytorch.org'
+        trusted_host_line += ' --trusted-host download.pytorch.org'
         
         return f'"{python}" -m pip {pip_args} --prefer-binary{index_url_line}{extra_index_line}{trusted_host_line} --disable-pip-version-check --no-warn-script-location'
     
@@ -245,12 +266,12 @@ def run_pip_requirements(requirements_file, desc=None):
         pkg_display = pkg.split('==')[0].split('>=')[0].split('<=')[0].split('[')[0].split('@')[0].strip()
         print(f"[{pkg_idx + 1}/{total}] 安装 {pkg_display}...")
         
-        # 检查是否是 PyTorch 相关包，需要使用 extra-index-url
-        use_extra = is_pytorch_package(pkg_display)
-        if use_extra and extra_index_urls:
-            print(f"    (使用 PyTorch 源: {extra_index_urls[0]})")
+        # 检查是否是 PyTorch 相关包，需要使用主源
+        use_primary = is_pytorch_package(pkg_display) and primary_index_url
+        if use_primary:
+            print(f"    (使用 PyTorch 源: {primary_index_url})")
         
-        cmd = build_pip_command(f'install "{pkg}"', mirror, use_extra_index=use_extra)
+        cmd = build_pip_command(f'install "{pkg}"', mirror, use_primary_index=use_primary)
         
         try:
             result = subprocess.run(cmd, shell=True, env=os.environ)

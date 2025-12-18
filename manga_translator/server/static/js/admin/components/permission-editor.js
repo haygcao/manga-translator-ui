@@ -194,6 +194,9 @@ class PermissionEditor {
             };
         });
         
+        // 设置超分模型联动
+        this.setupUpscalerDependency();
+        
         window._permEditor = this;
     }
     
@@ -833,6 +836,94 @@ class PermissionEditor {
         }
     }
     
+    // 设置超分模型联动
+    setupUpscalerDependency() {
+        const modal = document.getElementById(this.modalId);
+        if (!modal) return;
+        
+        const upscalerSelect = modal.querySelector('#perm-upscale-upscaler');
+        const ratioSelect = modal.querySelector('#perm-upscale-upscale_ratio');
+        
+        if (!upscalerSelect || !ratioSelect) return;
+        
+        const updateOptions = () => {
+            const upscaler = upscalerSelect.value;
+            // 获取当前保存的值
+            // 注意：PermissionEditor初始化时，getValue可能从mangajanai_model或realcugan_model取值，
+            // 但这里我们简单起见，从ratioSelect当前选中值或baseConfig中恢复
+            
+            // 我们需要判断当前应该显示什么值。
+            // 由于 HTML 已经生成，ratioSelect.value 可能是初始的数字（例如4）。
+            // 如果当前是 mangajanai 模式，我们需要把它变成 'x4'。
+            
+            let currentVal = ratioSelect.getAttribute('data-current-value') || ratioSelect.value;
+            
+            // 从配置中获取更准确的初始值
+            const baseRatio = this.getValue('upscale', 'upscale_ratio');
+            const baseRealCugan = this.getValue('upscale', 'realcugan_model');
+            const baseMangaJaNai = this.getValue('upscale', 'mangajanai_model');
+            
+            // 第一次运行时，如果 currentVal 是数字，尝试根据 upscaler 修正它
+            if (upscaler === 'mangajanai' && !isNaN(currentVal) && baseMangaJaNai) {
+                currentVal = baseMangaJaNai;
+            } else if (upscaler === 'realcugan' && !isNaN(currentVal) && baseRealCugan) {
+                currentVal = baseRealCugan;
+            }
+            
+            const realcuganModels = this.configOptions.realcugan_model || [];
+            const standardRatios = [2, 3, 4];
+            const mangajanaiOptions = ['x2', 'x4', 'DAT2 x4'];
+            
+            let newOptions = [];
+            
+            if (upscaler === 'realcugan') {
+                newOptions = ['不使用', ...realcuganModels];
+            } else if (upscaler === 'mangajanai') {
+                newOptions = ['不使用', ...mangajanaiOptions];
+            } else {
+                newOptions = ['不使用', ...standardRatios];
+            }
+            
+            // 重建 options
+            ratioSelect.innerHTML = newOptions.map(opt => {
+                let value = opt;
+                if (opt === '不使用') value = ''; 
+                
+                // 尝试匹配选中状态
+                // 1. 完全匹配
+                let selected = (String(currentVal) === String(value)) ? 'selected' : '';
+                
+                // 2. 如果没匹配上，且当前是 mangajanai，尝试默认值
+                if (!selected && upscaler === 'mangajanai' && !value) {
+                     // 如果 currentVal 是空的，且 opt 是 '不使用'，选中
+                     if (!currentVal) selected = 'selected';
+                }
+                
+                // 3. 智能回退：如果 currentVal 是 '4' (数字)，但现在选项是 'x4'，尝试匹配
+                if (!selected && value === 'x' + currentVal) selected = 'selected';
+                if (!selected && value === currentVal + 'x') selected = 'selected'; // 有些模型带x后缀
+
+                return `<option value="${value}" ${selected}>${opt}</option>`;
+            }).join('');
+            
+            // 更新 data-current-value 以便下次切换保持
+            ratioSelect.setAttribute('data-current-value', ratioSelect.value);
+        };
+        
+        upscalerSelect.addEventListener('change', () => {
+             // 切换模型时，重置 current-value 为默认值，避免跨模型残留无效值
+             ratioSelect.setAttribute('data-current-value', '');
+             updateOptions();
+        });
+        
+        ratioSelect.addEventListener('change', () => {
+             ratioSelect.setAttribute('data-current-value', ratioSelect.value);
+        });
+        
+        // 初始化调用
+        updateOptions();
+    }
+
     // 收集表单数据
     collectFormData() {
         const data = {};
@@ -874,6 +965,48 @@ class PermissionEditor {
             if (!data[section]) data[section] = {};
             data[section][key] = value;
         });
+
+        // 特殊处理：超分模型参数拆分
+        if (data.upscale && data.upscale.upscaler) {
+            const upscaler = data.upscale.upscaler;
+            const ratioValue = data.upscale.upscale_ratio; // 这里可能是数字，也可能是字符串(模型名)
+            
+            if (upscaler === 'mangajanai') {
+                if (ratioValue && typeof ratioValue === 'string') {
+                    // 如果选了具体模式（x2, x4...）
+                    data.upscale.mangajanai_model = ratioValue;
+                    
+                    // 推断倍率
+                    if (ratioValue.includes('x2')) {
+                        data.upscale.upscale_ratio = 2;
+                    } else if (ratioValue.includes('x4')) {
+                        data.upscale.upscale_ratio = 4;
+                    } else {
+                        // 默认 fallback
+                        data.upscale.upscale_ratio = 4;
+                    }
+                    // 清除冲突
+                    data.upscale.realcugan_model = null;
+                } else if (!ratioValue) {
+                    // 不使用
+                    data.upscale.upscale_ratio = null;
+                    data.upscale.mangajanai_model = null;
+                }
+            } else if (upscaler === 'realcugan') {
+                if (ratioValue && typeof ratioValue === 'string') {
+                    data.upscale.realcugan_model = ratioValue;
+                    data.upscale.upscale_ratio = null; // realcugan 不需要 ratio
+                    data.upscale.mangajanai_model = null;
+                } else {
+                    data.upscale.upscale_ratio = null;
+                    data.upscale.realcugan_model = null;
+                }
+            } else {
+                 // 其他模型，ratio 是数字
+                 data.upscale.realcugan_model = null;
+                 data.upscale.mangajanai_model = null;
+            }
+        }
         
         // 收集参数禁用配置
         modal.querySelectorAll('.param-disabled-cb').forEach(el => {

@@ -147,6 +147,8 @@ def compact_special_symbols(text: str) -> str:
     text = text.replace('..', '…')
     # 合并连续的省略号为一个
     text = re.sub(r'…+', '…', text)
+    # 将西文省略号(U+2026,贴底)替换为居中省略号(U+22EF)，解决横排省略号位置偏下的问题
+    text = text.replace('…', '⋯')
     # Remove half-width and full-width spaces after each punctuation mark
     # 只删除标点符号后的空格，不删除字母/数字后的空格
     # 匹配常见的标点符号：。，、！？；：…等

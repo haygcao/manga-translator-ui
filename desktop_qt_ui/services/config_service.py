@@ -129,7 +129,7 @@ class ConfigService(QObject):
         return bool(re.match(pattern, key))
     
     def load_config_file(self, config_path: str) -> bool:
-        """加载JSON配置文件并与默认设置合并"""
+        """加载JSON配置文件并与默认设置合并，逐个键验证，错误的键使用默认值"""
         try:
             if not os.path.exists(config_path):
                 self.logger.error(f"配置文件不存在: {config_path}")
@@ -137,23 +137,56 @@ class ConfigService(QObject):
 
             with open(config_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-                # 预处理以处理不规范的JSON，例如尾随逗号
-                # content = re.sub(r',(\s*[\]})', r'\1', content) # Temporarily disabled for debugging
                 loaded_data = json.loads(content)
 
-            # 深层合并加载的数据和现有配置
-            new_config_dict = self.current_config.dict()
+            # 获取默认配置作为基础
+            default_config = AppSettings()
+            new_config_dict = default_config.dict()
             
-            def deep_update(target, source):
+            # 逐个键安全合并，验证每个值
+            error_keys = []
+            
+            def safe_deep_update(target, source, path=""):
+                """安全的深层合并，逐个键验证"""
                 for key, value in source.items():
-                    if isinstance(value, dict) and key in target and isinstance(target[key], dict):
-                        deep_update(target[key], value)
-                    else:
-                        target[key] = value
+                    current_path = f"{path}.{key}" if path else key
+                    try:
+                        if isinstance(value, dict) and key in target and isinstance(target[key], dict):
+                            # 递归处理嵌套字典
+                            safe_deep_update(target[key], value, current_path)
+                        else:
+                            # 尝试设置值，验证是否有效
+                            old_value = target.get(key)
+                            target[key] = value
+                            
+                            # 尝试用新值创建配置对象来验证
+                            try:
+                                AppSettings.parse_obj(new_config_dict)
+                            except Exception as validate_err:
+                                # 验证失败，恢复默认值
+                                target[key] = old_value
+                                error_keys.append((current_path, value, str(validate_err)))
+                                self.logger.warning(f"配置键 '{current_path}' 值无效: {value}，使用默认值: {old_value}")
+                    except Exception as e:
+                        error_keys.append((current_path, value, str(e)))
+                        self.logger.warning(f"配置键 '{current_path}' 加载失败: {e}，保持默认值")
             
-            deep_update(new_config_dict, loaded_data)
+            safe_deep_update(new_config_dict, loaded_data)
             
-            self.current_config = AppSettings.parse_obj(new_config_dict)
+            # 最终验证并创建配置对象
+            try:
+                self.current_config = AppSettings.parse_obj(new_config_dict)
+            except Exception as final_err:
+                self.logger.error(f"配置验证失败，使用默认配置: {final_err}")
+                self.current_config = AppSettings()
+            
+            # 报告错误的键
+            if error_keys:
+                self.logger.warning(f"配置文件中有 {len(error_keys)} 个无效配置项已使用默认值替换:")
+                for key_path, bad_value, err in error_keys[:5]:  # 只显示前5个
+                    self.logger.warning(f"  - {key_path}: {bad_value}")
+                if len(error_keys) > 5:
+                    self.logger.warning(f"  ... 还有 {len(error_keys) - 5} 个")
             
             self.config_path = config_path
             self.logger.debug(f"加载配置: {os.path.basename(config_path)}")
@@ -162,8 +195,13 @@ class ConfigService(QObject):
             self.config_changed.emit(config_dict)
             return True
             
+        except json.JSONDecodeError as e:
+            self.logger.error(f"配置文件JSON格式错误: {e}，使用默认配置")
+            self.current_config = AppSettings()
+            return False
         except Exception as e:
-            self.logger.error(f"加载配置文件失败: {e}")
+            self.logger.error(f"加载配置文件失败: {e}，使用默认配置")
+            self.current_config = AppSettings()
             return False
     
     def save_config_file(self, config_path: Optional[str] = None) -> bool:

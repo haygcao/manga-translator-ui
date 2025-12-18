@@ -7,7 +7,7 @@ import httpx
 import openai
 from openai import AsyncOpenAI
 
-from .common import CommonTranslator, VALID_LANGUAGES
+from .common import CommonTranslator, VALID_LANGUAGES, parse_json_or_text_response
 from .keys import OPENAI_API_KEY, OPENAI_MODEL
 from ..utils import Context
 
@@ -157,7 +157,7 @@ class OpenAITranslator(CommonTranslator):
             except Exception:
                 pass  # 忽略所有清理错误
     
-    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """构建系统提示词"""
         # Map language codes to full names for clarity in the prompt
         lang_map = {
@@ -248,6 +248,11 @@ This is an incorrect response because it includes extra text and explanations.
 
         # Combine prompts
         final_prompt = ""
+        
+        # 添加重试提示到最前面（如果是重试）
+        if retry_attempt > 0:
+            final_prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
+        
         if line_break_prompt_str:
             final_prompt += f"{line_break_prompt_str}\n\n---\n\n"
         if custom_prompt_str:
@@ -260,9 +265,9 @@ This is an incorrect response because it includes extra text and explanations.
         """构建用户提示词（纯文本版）- 使用统一方法，只包含上下文和待翻译文本"""
         return self._build_user_prompt_for_texts(texts, ctx, self.prev_context, retry_attempt=retry_attempt, retry_reason=retry_reason)
     
-    def _get_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+    def _get_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """获取完整的系统提示词（包含断句提示词、自定义提示词和基础系统提示词）"""
-        return self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
+        return self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason)
 
     async def _translate_batch(self, texts: List[str], source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, ctx: Any = None, split_level: int = 0) -> List[str]:
         """批量翻译方法（纯文本）"""
@@ -271,9 +276,6 @@ This is an incorrect response because it includes extra text and explanations.
         
         if not self.client:
             self._setup_client()
-        
-        # 构建消息：系统提示词放在 system role，用户提示词放在 user role
-        system_prompt = self._get_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
         
         # 初始化重试信息
         retry_attempt = 0
@@ -305,7 +307,8 @@ This is an incorrect response because it includes extra text and explanations.
             #     self.logger.warning(f"Triggering split after {local_attempt} local attempts")
             #     raise self.SplitException(local_attempt, texts)
             
-            # 构建用户提示词（包含重试信息以避免缓存）
+            # 构建系统提示词和用户提示词（包含重试信息以避免缓存）
+            system_prompt = self._get_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason)
             user_prompt = self._build_user_prompt(texts, ctx, retry_attempt=retry_attempt, retry_reason=retry_reason)
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -357,6 +360,7 @@ This is an incorrect response because it includes extra text and explanations.
                 # 检查成功条件
                 if response.choices and response.choices[0].message.content and response.choices[0].finish_reason != 'content_filter':
                     result_text = response.choices[0].message.content.strip()
+                    self.logger.debug(f"--- OpenAI Raw Response ---\n{result_text}\n---------------------------")
                     
                     # 去除 <think>...</think> 标签及内容（LM Studio 等本地模型的思考过程）
                     result_text = re.sub(r'(</think>)?<think>.*?</think>', '', result_text, flags=re.DOTALL)
@@ -369,14 +373,8 @@ This is an incorrect response because it includes extra text and explanations.
                     if result_text.startswith("```") and result_text.endswith("```"):
                         result_text = result_text[3:-3].strip()
                     
-                    # 解析翻译结果
-                    translations = []
-                    for line in result_text.split('\n'):
-                        line = line.strip()
-                        if line:
-                            line = re.sub(r'^\d+\.\s*', '', line)
-                            line = line.replace('\\n', '\n').replace('↵', '\n')
-                            translations.append(line)
+                    # 使用通用函数解析响应
+                    translations = parse_json_or_text_response(result_text)
                     
                     # Strict validation: must match input count
                     if len(translations) != len(texts):

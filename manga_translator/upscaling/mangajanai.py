@@ -1,0 +1,425 @@
+import os
+import shutil
+import torch
+import numpy as np
+import einops
+from PIL import Image
+from typing import List
+
+from .common import OfflineUpscaler
+from .esrgan_pytorch import RRDBNet, infer_params
+from .tile_utils import split_image_into_tiles, merge_tiles_into_image
+from ..utils import get_logger
+
+logger = get_logger('MangaJaNaiUpscaler')
+
+# List of known MangaJaNai models with SHA256 hashes
+_KNOWN_MODELS = {
+    "2x_IllustrationJaNai_V1_ESRGAN_120k.pth": "5f49a71d3cd0000a51ed0e3adfe5c11824740f1c58f7cb520d8d2d1e924c2b88",
+    "2x_MangaJaNai_1200p_V1_ESRGAN_70k.pth": "43b784f674bdbf89886a62a64cd5f8d8df92caf4d861bdf4d47dad249ede0267",
+    "2x_MangaJaNai_1300p_V1_ESRGAN_75k.pth": "15ca3c0f75f97f7bf52065bf7c9b8d602de94ce9e3b078ac58793855eed18589",
+    "2x_MangaJaNai_1400p_V1_ESRGAN_70k.pth": "a940ad8ebcf6bea5580f2f59df67deb009f054c9b87dbbc58c2e452722f34858",
+    "2x_MangaJaNai_1500p_V1_ESRGAN_90k.pth": "d91f2d247fa61144c1634a2ba46926acd3956ae90d281a5bed6655f8364a5b2c",
+    "2x_MangaJaNai_1600p_V1_ESRGAN_90k.pth": "6f5923f812dbc5d6aeed727635a21e74cacddce595afe6135cbd95078f6eee44",
+    "2x_MangaJaNai_1920p_V1_ESRGAN_70k.pth": "1ad4aa6f64684baa430da1bb472489bff2a02473b14859015884a3852339c005",
+    "2x_MangaJaNai_2048p_V1_ESRGAN_95k.pth": "146cd009b9589203a8444fe0aa7195709bb5b9fdeaca3808b7fbbd5538f94c41",
+    "4x_IllustrationJaNai_V1_DAT2_190k.pth": "a82f3a2d8d1c676171b86a00048b7a624e3c62c87ec701012f106a171c309fbe",
+    "4x_IllustrationJaNai_V1_ESRGAN_135k.pth": "c67e76c4b5f0474d5116e5f3885202d1bee68187e1389f82bb90baace24152f8",
+    "4x_MangaJaNai_1200p_V1_ESRGAN_70k.pth": "6e3a8d21533b731eb3d8eaac1a09cf56290fa08faf8473cbe3debded9ab1ebe1",
+    "4x_MangaJaNai_1300p_V1_ESRGAN_75k.pth": "eacf8210543446f3573d4ea1625f6fc11a3b2a5e18b38978873944be146417a8",
+    "4x_MangaJaNai_1400p_V1_ESRGAN_105k.pth": "d77f977a6c6c4bf855dae55f0e9fad6ac2823fa8b2ef883b50e525369fde6a74",
+    "4x_MangaJaNai_1500p_V1_ESRGAN_105k.pth": "5e5174b60316e9abb7875e6d2db208fec4ffc34f3d09fa7f0e0f6476f9d31687",
+    "4x_MangaJaNai_1600p_V1_ESRGAN_70k.pth": "c126ec8d4b7434d8f6a43d24bec1f56d343104ab8a86b5e01d5d25be6b5244c0",
+    "4x_MangaJaNai_1920p_V1_ESRGAN_105k.pth": "d469e96e590a25a86037760b26d51405c77759a55b0966b15dc76b609f72f20b",
+    "4x_MangaJaNai_2048p_V1_ESRGAN_70k.pth": "f70e08c60da372b7207e7348486ea6b498ea8dea6246bb717530a4d45c955b9b",
+}
+
+def enhance_contrast(image: Image.Image) -> Image.Image:
+    """
+    Auto-adjust levels to enhance contrast, similar to MangaJaNaiConverterGui.
+    Finds black/white points from histogram and stretches the range.
+    """
+    if image.mode != 'L':
+        image_p = image.convert("L")
+    else:
+        image_p = image
+
+    # Calculate the histogram
+    hist = image_p.histogram()
+
+    # Find the global maximum peak in the range 0-30 for the black level
+    new_black_level = 0
+    global_max_black = hist[0]
+
+    for i in range(1, 31):
+        if hist[i] > global_max_black:
+            global_max_black = hist[i]
+            new_black_level = i
+
+    # Continue searching at 31 and later for the black level
+    continuous_count = 0
+    for i in range(31, 256):
+        if hist[i] > global_max_black:
+            continuous_count = 0
+            global_max_black = hist[i]
+            new_black_level = i
+        elif hist[i] < global_max_black:
+            continuous_count += 1
+            if continuous_count > 1:
+                break
+
+    # Find the global maximum peak in the range 255-225 for the white level
+    new_white_level = 255
+    global_max_white = hist[255]
+
+    for i in range(254, 224, -1):
+        if hist[i] > global_max_white:
+            global_max_white = hist[i]
+            new_white_level = i
+
+    # Continue searching at 224 and below for the white level
+    continuous_count = 0
+    for i in range(223, -1, -1):
+        if hist[i] > global_max_white:
+            continuous_count = 0
+            global_max_white = hist[i]
+            new_white_level = i
+        elif hist[i] < global_max_white:
+            continuous_count += 1
+            if continuous_count > 1:
+                break
+
+    # If levels are trivial, return original
+    if new_black_level == 0 and new_white_level == 255:
+        return image
+
+    logger.debug(f"Auto adjusted levels: black={new_black_level}, white={new_white_level}")
+
+    # Apply levels adjustment
+    # Formula: (x - black) / (white - black) * 255
+    # We use a LUT for speed
+    lut = []
+    div = new_white_level - new_black_level
+    if div <= 0: div = 1 # avoid division by zero
+    
+    for i in range(256):
+        val = (i - new_black_level) * 255.0 / div
+        lut.append(max(0, min(255, int(val + 0.5))))
+    
+    if image.mode == 'RGB':
+        # Apply to each channel
+        return image.point(lut * 3)
+    elif image.mode == 'L':
+        return image.point(lut)
+    else:
+        # Convert to RGB, apply, (optional: convert back)
+        return image.convert('RGB').point(lut * 3)
+
+
+class MangaJaNaiUpscaler(OfflineUpscaler):
+    """Upscaler for MangaJaNai/IllustrationJaNai models"""
+    
+    _MODEL_SUB_DIR = os.path.join('upscaling', 'mangajanai')
+    
+    # We rely on local files mostly
+    _MODEL_MAPPING = {} 
+    
+    # Allow all ratios, we will scale accordingly
+    _VALID_UPSCALE_RATIOS = [2, 3, 4]
+    
+    # Preset modes
+    MODE_X2 = 'x2'
+    MODE_X4 = 'x4'
+    MODE_DAT2 = 'DAT2 x4'
+
+    def __init__(self, *args, model_name: str = '', tile_size: int = 400, **kwargs):
+        # Default fallback if model_name is empty
+        if not model_name:
+            model_name = self.MODE_X4
+            
+        self.user_model_name = model_name  # The requested mode/model
+        self.current_loaded_model_file = None
+        self.model = None
+        self.device = None
+        self.scale = 4 # default assumption
+        self.tile_size = tile_size
+        
+        # Configure modes
+        self.is_auto_mode = False
+        self.target_auto_scale = 0
+        self.model_candidates = []
+        
+        # Determine if we are in a preset mode or using a specific file
+        if model_name == self.MODE_X2:
+            self.is_auto_mode = True
+            self.target_auto_scale = 2
+            self.model_candidates = [m for m in _KNOWN_MODELS if m.startswith('2x_MangaJaNai_')]
+            # Default fallback for init
+            self.model_file = "2x_MangaJaNai_1600p_V1_ESRGAN_90k.pth" 
+        elif model_name == self.MODE_X4:
+            self.is_auto_mode = True
+            self.target_auto_scale = 4
+            self.model_candidates = [m for m in _KNOWN_MODELS if m.startswith('4x_MangaJaNai_')]
+            # Default fallback for init
+            self.model_file = "4x_MangaJaNai_1600p_V1_ESRGAN_70k.pth"
+        elif model_name == self.MODE_DAT2:
+            self.is_auto_mode = False # DAT2 is specific
+            self.model_file = "4x_IllustrationJaNai_V1_DAT2_190k.pth"
+        else:
+            # Specific file or unknown mode
+            self.is_auto_mode = False
+            self.model_file = model_name
+            # Fuzzy match for filename if needed
+            if not self.model_file.endswith('.pth'):
+                 for f in _KNOWN_MODELS:
+                     if f.startswith(model_name) and (f == model_name or f == model_name + '.pth'):
+                         self.model_file = f
+                         break
+                 if not self.model_file.endswith('.pth'):
+                      self.model_file += '.pth'
+
+        # Populate MODEL_MAPPING for download checks
+        # We use the v1.9.5 release from hgmzhn/manga-translator-ui
+        base_url = 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.9.5/'
+        
+        self._MODEL_MAPPING = {}
+        
+        # If auto mode, we might need any of the candidates, so we map them all
+        if self.is_auto_mode:
+            for m in self.model_candidates:
+                mapping = {
+                    'file': m,
+                    'url': f'{base_url}{m}',
+                }
+                if _KNOWN_MODELS.get(m):
+                    mapping['hash'] = _KNOWN_MODELS[m]
+                self._MODEL_MAPPING[m] = mapping
+        else:
+            mapping = {
+                'file': self.model_file,
+                'url': f'{base_url}{self.model_file}',
+            }
+            if _KNOWN_MODELS.get(self.model_file):
+                mapping['hash'] = _KNOWN_MODELS[self.model_file]
+            self._MODEL_MAPPING[self.model_file] = mapping
+
+        self._migrate_old_models()
+        super().__init__(*args, **kwargs)
+
+    def _migrate_old_models(self):
+        """Move models from old directory to new directory"""
+        old_dir = os.path.join(self._MODEL_DIR, 'upscaling')
+        new_dir = self.model_dir
+        
+        if not os.path.exists(old_dir):
+            return
+
+        os.makedirs(new_dir, exist_ok=True)
+        
+        for model_file in _KNOWN_MODELS:
+            old_path = os.path.join(old_dir, model_file)
+            new_path = os.path.join(new_dir, model_file)
+            
+            if os.path.exists(old_path):
+                if not os.path.exists(new_path):
+                    try:
+                        logger.info(f'Migrating model {model_file} to {new_dir}')
+                        shutil.move(old_path, new_path)
+                    except Exception as e:
+                        logger.warning(f'Failed to move {model_file}: {e}')
+                else:
+                    # If file exists in both places, maybe clean up the old one?
+                    logger.debug(f'Model {model_file} exists in both old and new locations.')
+
+    def _check_downloaded(self) -> bool:
+        """Override check to just check file existence"""
+        # For auto mode, we ideally want all candidates, but let's at least check the default one
+        # or we could be lazy and only check what we need at runtime.
+        # But OfflineUpscaler expects this to return True/False for the 'primary' model.
+        # We will check if the *current* model_file exists.
+        model_path = os.path.join(self.model_dir, self.model_file)
+        return os.path.exists(model_path)
+    
+    def _select_best_model(self, img: Image.Image) -> str:
+        """Select best model from candidates based on image resolution"""
+        if not self.is_auto_mode or not self.model_candidates:
+            return self.model_file
+            
+        # Extract resolutions from filenames
+        # Format: 2x_MangaJaNai_{RES}p_...
+        # We look for the resolution part
+        
+        # Get image short side (usually height for manga pages, but safety first)
+        res = min(img.width, img.height)
+        
+        best_model = self.model_candidates[0]
+        min_diff = float('inf')
+        
+        for m in self.model_candidates:
+            # Parse resolution from filename
+            try:
+                parts = m.split('_')
+                for p in parts:
+                    if p.endswith('p') and p[:-1].isdigit():
+                        model_res = int(p[:-1])
+                        diff = abs(model_res - res)
+                        if diff < min_diff:
+                            min_diff = diff
+                            best_model = m
+                        break
+            except:
+                continue
+        
+        return best_model
+
+    async def _load(self, device: str):
+        # Initial load using self.model_file (which is either specific or a default for auto)
+        await self._load_specific_model(self.model_file, device)
+
+    async def _load_specific_model(self, filename: str, device: str):
+        if self.current_loaded_model_file == filename and self.model is not None:
+            return
+
+        model_path = os.path.join(self.model_dir, filename)
+        if not os.path.exists(model_path):
+            # Try to see if we can download it? 
+            # But _load is usually called after download. 
+            # For now, raise error.
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+
+        logger.info(f"Loading MangaJaNai model: {filename}")
+        
+        sd = torch.load(model_path, map_location='cpu', weights_only=False)
+        
+        # Handle cases where state_dict is inside a key like 'params' or 'params_ema'
+        if 'params_ema' in sd:
+            sd = sd['params_ema']
+        elif 'params' in sd:
+            sd = sd['params']
+
+        if 'DAT2' in filename:
+            # DAT2 模型使用 spandrel 库加载
+            try:
+                from spandrel import ModelLoader
+                loader = ModelLoader()
+                model_desc = loader.load_from_file(model_path)
+                self.model = model_desc.model
+                self.scale = model_desc.scale
+                logger.info(f"Loaded DAT2 model via spandrel: scale={self.scale}")
+            except ImportError:
+                logger.error("spandrel 库未安装，无法加载 DAT2 模型。请运行: pip install spandrel")
+                raise
+            except Exception as e:
+                logger.error(f"Failed to load DAT2 model via spandrel: {e}")
+                raise
+        else:
+            # Standard ESRGAN/RRDBNet handling
+            try:
+                in_nc, out_nc, nf, nb, plus, mscale = infer_params(sd)
+                self.model = RRDBNet(in_nc=in_nc, out_nc=out_nc, nf=nf, nb=nb, upscale=mscale, plus=plus)
+                self.model.load_state_dict(sd)
+                self.scale = mscale
+            except Exception as e:
+                logger.error(f"Failed to infer parameters for {filename}: {e}")
+                raise
+
+        self.model.eval()
+        self.model = self.model.to(device)
+        self.device = device
+        self.current_loaded_model_file = filename
+        logger.info(f"Loaded MangaJaNai model {filename} with scale {self.scale}x")
+
+    async def _unload(self):
+        if self.model:
+            del self.model
+            self.model = None
+        self.current_loaded_model_file = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    async def _infer(self, image_batch: List[Image.Image], upscale_ratio: float) -> List[Image.Image]:
+        # Note: We don't check `if not self.model` here because we might load it dynamically
+        
+        results = []
+        for img in image_batch:
+            # 1. Determine best model for this image
+            target_model_file = self.model_file
+            if self.is_auto_mode:
+                target_model_file = self._select_best_model(img)
+            
+            # 2. Switch model if needed
+            if target_model_file != self.current_loaded_model_file:
+                await self._load_specific_model(target_model_file, self.device)
+            
+            if not self.model:
+                 raise RuntimeError("Model not loaded")
+
+            # 3. Preprocessing: Enhance Contrast (Auto Levels)
+            # This is specific to MangaJaNai models to remove grey background
+            img_processed = enhance_contrast(img)
+
+            # 4. Process (with tiling if needed)
+            if self.tile_size > 0:
+                output_img = self._process_with_tiles(img_processed, self.device, self.tile_size)
+            else:
+                output_img = self._process_single(img_processed, self.device)
+                
+            # 5. Post-resize if needed
+            # Use current model scale, which might differ if we switched models
+            ratio = upscale_ratio / self.scale
+            if ratio != 1.0:
+                new_size = (int(round(output_img.size[0] * ratio)), int(round(output_img.size[1] * ratio)))
+                output_img = output_img.resize(size=new_size, resample=Image.Resampling.BILINEAR)
+            
+            results.append(output_img)
+            
+        return results
+
+    def _process_single(self, img: Image.Image, device: torch.device) -> Image.Image:
+        # Check minimum size requirement
+        min_size = 40
+        original_size = img.size
+        padded = False
+        
+        if img.size[0] < min_size or img.size[1] < min_size:
+            logger.warning(
+                f'Image size ({img.size[0]}x{img.size[1]}) is too small. '
+                f'Minimum size is {min_size}x{min_size}. Adding black padding.'
+            )
+            pad_w = max(0, min_size - img.size[0])
+            pad_h = max(0, min_size - img.size[1])
+            new_size = (img.size[0] + pad_w, img.size[1] + pad_h)
+            padded_img = Image.new('RGB', new_size, (0, 0, 0))
+            padded_img.paste(img, (0, 0))
+            img = padded_img
+            padded = True
+        
+        # Convert to tensor: B C H W
+        img_np = np.array(img.convert('RGB'))
+        tensor = einops.rearrange(torch.from_numpy(img_np).float() / 255.0, 'h w c -> 1 c h w').to(device)
+        
+        with torch.no_grad():
+            output = self.model(tensor)
+        
+        # Convert back to PIL
+        output_np = (einops.rearrange(output.squeeze(0).clamp(0, 1), 'c h w -> h w c').cpu().numpy() * 255.0).astype(np.uint8)
+        result_img = Image.fromarray(output_np)
+        
+        # If image was padded, crop back to original scaled size
+        if padded:
+            scaled_width = original_size[0] * self.scale
+            scaled_height = original_size[1] * self.scale
+            result_img = result_img.crop((0, 0, scaled_width, scaled_height))
+        
+        return result_img
+
+    def _process_with_tiles(self, img: Image.Image, device: torch.device, tile_size: int) -> Image.Image:
+        """Process image with external tiling"""
+        tiles_with_pos = split_image_into_tiles(img, tile_size, overlap=16)
+        
+        processed_tiles = []
+        for tile, pos in tiles_with_pos:
+            processed_tile = self._process_single(tile, device)
+            processed_tiles.append((processed_tile, pos))
+        
+        return merge_tiles_into_image(processed_tiles, img.size, self.scale, overlap=16)

@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Union
 import os
 
 from pydantic import BaseModel, Field
@@ -94,7 +94,7 @@ class RenderSettings(BaseModel):
 
 class UpscaleSettings(BaseModel):
     upscaler: str = "esrgan"
-    upscale_ratio: Optional[int] = None
+    upscale_ratio: Optional[Union[int, str]] = None  # 可以是数字或字符串(mangajanai: x2, x4, DAT2 x4)
     realcugan_model: Optional[str] = None
     tile_size: Optional[int] = None
     revert_upscaling: bool = False

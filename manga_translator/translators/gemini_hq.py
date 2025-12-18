@@ -9,7 +9,7 @@ from PIL import Image
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-from .common import CommonTranslator, VALID_LANGUAGES, draw_text_boxes_on_image
+from .common import CommonTranslator, VALID_LANGUAGES, draw_text_boxes_on_image, parse_json_or_text_response
 from .keys import GEMINI_API_KEY
 from ..utils import Context
 
@@ -230,7 +230,7 @@ class GeminiHighQualityTranslator(CommonTranslator):
     
 
     
-    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """构建系统提示词"""
         # Map language codes to full names for clarity in the prompt
         lang_map = {
@@ -276,6 +276,11 @@ class GeminiHighQualityTranslator(CommonTranslator):
 
         # Combine prompts
         final_prompt = ""
+        
+        # 添加重试提示到最前面（如果是重试）
+        if retry_attempt > 0:
+            final_prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
+        
         if line_break_prompt_str:
             final_prompt += f"{line_break_prompt_str}\n\n---\n\n"
         if custom_prompt_str:
@@ -288,26 +293,21 @@ class GeminiHighQualityTranslator(CommonTranslator):
         """构建用户提示词（高质量版）- 使用统一方法，只包含上下文和待翻译文本"""
         return self._build_user_prompt_for_hq(batch_data, ctx, self.prev_context, retry_attempt=retry_attempt, retry_reason=retry_reason)
     
-    def _get_system_instruction(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+    def _get_system_instruction(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """获取完整的系统指令（包含断句提示词、自定义提示词和基础系统提示词）"""
         # 构建系统提示词（包含所有指令）
-        return self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
+        return self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason)
 
     async def _translate_batch_high_quality(self, texts: List[str], batch_data: List[Dict], source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, ctx: Any = None, split_level: int = 0) -> List[str]:
         """高质量批量翻译方法"""
         if not texts:
             return []
         
-        # 获取系统指令（包含断句提示词、自定义提示词和基础系统提示词）
-        system_instruction = self._get_system_instruction(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
-        
-        # 重新初始化客户端以应用新的系统指令
-        self.client = None
-        self._setup_client(system_instruction=system_instruction)
-        
-        if not self.client:
-            self.logger.error("Gemini客户端初始化失败")
-            return texts
+        # 保存参数供重试时使用
+        _source_lang = source_lang
+        _target_lang = target_lang
+        _custom_prompt_json = custom_prompt_json
+        _line_break_prompt_json = line_break_prompt_json
         
         # 打印输入的原文
         self.logger.info("--- Original Texts for Translation ---")
@@ -358,6 +358,9 @@ class GeminiHighQualityTranslator(CommonTranslator):
         
         # 标记是否需要回退（不发送安全设置）
         should_retry_without_safety = False
+        
+        # 标记是否发送图片（降级机制）
+        send_images = True
 
         def generate_content_with_logging(**kwargs):
             # 打印请求体（去除图片数据）- 已注释以减少日志输出
@@ -393,11 +396,26 @@ class GeminiHighQualityTranslator(CommonTranslator):
             #     self.logger.warning(f"Triggering split after {local_attempt} local attempts")
             #     raise self.SplitException(local_attempt, texts)
             
+            # 获取系统指令并重新初始化客户端（包含重试信息以避免缓存）
+            system_instruction = self._get_system_instruction(_source_lang, _target_lang, custom_prompt_json=_custom_prompt_json, line_break_prompt_json=_line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason)
+            self.client = None
+            self._setup_client(system_instruction=system_instruction)
+            
+            if not self.client:
+                self.logger.error("Gemini客户端初始化失败")
+                return texts
+            
             # 构建用户提示词（包含重试信息以避免缓存）
             user_prompt = self._build_user_prompt(batch_data, ctx, retry_attempt=retry_attempt, retry_reason=retry_reason)
             
             # 准备内容：user消息只包含上下文、待翻译文本和图片
-            content_parts = [user_prompt] + image_parts
+            # 降级检查：如果 send_images 为 False，则不发送图片
+            if send_images:
+                content_parts = [user_prompt] + image_parts
+            else:
+                if retry_attempt > 0: # 仅在重试且被标记为不发图时打印
+                     self.logger.warning("降级模式：仅发送文本，不发送图片")
+                content_parts = [user_prompt]
             
             # 动态构建请求参数 - 默认总是发送安全设置
             request_args = {
@@ -461,6 +479,11 @@ class GeminiHighQualityTranslator(CommonTranslator):
                             reason_desc = finish_reason_map.get(finish_reason, f"未知错误码({finish_reason})")
 
                             self.logger.warning(f"Gemini API失败 ({log_attempt}): finish_reason={finish_reason} - {reason_desc}")
+                            
+                            # 降级策略：如果是安全策略拦截或其他非成功状态，尝试不发送图片
+                            if finish_reason == 2 or finish_reason == 5: # SAFETY or OTHER
+                                self.logger.warning("检测到安全策略拦截或未知错误，下次重试将不再发送图片")
+                                send_images = False
 
                             if not is_infinite and attempt >= max_retries:
                                 self.logger.error(f"Gemini翻译在多次重试后仍失败: {reason_desc}")
@@ -470,24 +493,16 @@ class GeminiHighQualityTranslator(CommonTranslator):
 
                 # 尝试访问 .text 属性，如果API因安全原因等返回空内容，这里会触发异常
                 result_text = response.text.strip()
+                self.logger.debug(f"--- Gemini Raw Response ---\n{result_text}\n---------------------------")
+                if not result_text:
+                     # 空回处理：也尝试降级
+                    self.logger.warning("Gemini API返回空文本，下次重试将不再发送图片")
+                    send_images = False
+                    raise Exception("Gemini API returned empty text")
 
-                # 调试日志：打印Gemini的原始返回内容
-                self.logger.info(f"--- Gemini Raw Response ---\n{result_text}\n---------------------------")
 
-                # 增加清理步骤，移除可能的Markdown代码块
-                if result_text.startswith("```") and result_text.endswith("```"):
-                    result_text = result_text[3:-3].strip()
-                
-                # 如果成功获取文本，则处理并返回
-                translations = []
-                for line in result_text.split('\n'):
-                    line = line.strip()
-                    if line:
-                        # 移除编号（如"1. "）
-                        line = re.sub(r'^\d+\.\s*', '', line)
-                        # Replace other possible newline representations, but keep [BR]
-                        line = line.replace('\\n', '\n').replace('↵', '\n')
-                        translations.append(line)
+                # 使用通用函数解析响应（支持JSON和纯文本）
+                translations = parse_json_or_text_response(result_text)
                 
                 # Strict validation: must match input count
                 if len(translations) != len(texts):
@@ -565,18 +580,26 @@ class GeminiHighQualityTranslator(CommonTranslator):
                     'image_url', 'multimodal', 'vision', 'expected `text`', 'unknown variant', 'does not support'
                 ])
                 
+                # 降级检查：502错误、安全设置错误或400错误（非多模态不支持）
+                is_502_error = '502' in error_message
+                is_safety_error = any(keyword in error_message.lower() for keyword in [
+                    'safety_settings', 'safetysettings', 'harm', 'block', 'safety'
+                ]) or ("400" in error_message and not is_multimodal_unsupported)
+
+                if is_502_error or is_safety_error:
+                     self.logger.warning(f"检测到网络错误(502)或安全设置错误，下次重试将不再发送图片。错误信息: {error_message}")
+                     send_images = False
+
                 if is_bad_request and is_multimodal_unsupported:
-                    self.logger.error(f"❌ 模型 {self.model} 不支持多模态输入（图片+文本）")
+                    self.logger.error(f"❌ 模型 {self.model_name} 不支持多模态输入（图片+文本）")
                     self.logger.error(f"💡 解决方案：")
                     self.logger.error(f"   1. 使用支持多模态的Gemini模型（如 gemini-1.5-flash, gemini-1.5-pro）")
                     self.logger.error(f"   2. 或者切换到普通翻译模式（不使用 _hq 高质量翻译器）")
                     self.logger.error(f"   3. 检查第三方API是否支持图片输入")
-                    raise Exception(f"模型不支持多模态输入: {self.model}") from e
+                    raise Exception(f"模型不支持多模态输入: {self.model_name}") from e
                 
                 # 检查是否是安全设置相关的错误
-                is_safety_error = any(keyword in error_message.lower() for keyword in [
-                    'safety_settings', 'safetysettings', 'harm', 'block', 'safety'
-                ]) or ("400" in error_message and not is_multimodal_unsupported)
+                # is_safety_error 已经在上面定义了
                 
                 # 如果是安全设置错误且还没有尝试回退，则标记回退
                 if is_safety_error and not should_retry_without_safety:
@@ -592,6 +615,7 @@ class GeminiHighQualityTranslator(CommonTranslator):
 
                 if "finish_reason: 2" in error_message or "finish_reason is 2" in error_message:
                     self.logger.warning("检测到Gemini安全策略拦截。正在重试...")
+                    send_images = False # 显式确保降级
                 
                 # 检查是否达到最大重试次数（注意：attempt已经+1了）
                 if not is_infinite and attempt >= max_retries:

@@ -1372,6 +1372,26 @@ function updateUpscaleRatioOptions(upscaler, ratioSelect) {
         } else {
             ratioSelect.value = '不使用';
         }
+    } else if (upscaler === 'mangajanai') {
+        // 显示 MangaJaNai 特殊选项
+        const mangajanaiOptions = ['x2', 'x4', 'DAT2 x4'];
+        const options = ['不使用', ...mangajanaiOptions];
+        
+        options.forEach(opt => {
+            const option = document.createElement('option');
+            option.value = opt;
+            option.textContent = opt;
+            ratioSelect.appendChild(option);
+        });
+        
+        // 尝试恢复之前的值，或者默认为 x4
+        // 注意：这里我们可能需要一个新的 lastMangaJaNaiValue 变量，或者复用 lastRealcuganModel
+        // 为了简单，我们复用 lastRealcuganModel，因为它也是存储模型名称的
+        if (options.includes(lastRealcuganModel)) {
+            ratioSelect.value = lastRealcuganModel;
+        } else {
+            ratioSelect.value = 'x4';
+        }
     } else {
         // 显示普通倍率选项
         ratioOptions.forEach(opt => {
@@ -1779,6 +1799,22 @@ function collectConfig() {
             } else {
                 config.upscale.realcugan_model = ratioValue;
                 config.upscale.upscale_ratio = null; // realcugan 不使用普通倍率
+            }
+        } else if (upscalerSelect.value === 'mangajanai') {
+            // 如果选择了 mangajanai
+            const ratioValue = upscaleRatioSelect.value;
+            if (ratioValue === '不使用') {
+                config.upscale.upscale_ratio = null;
+                config.upscale.mangajanai_model = null;
+            } else {
+                config.upscale.mangajanai_model = ratioValue;
+                // 解析倍率
+                if (ratioValue.includes('x2')) {
+                    config.upscale.upscale_ratio = 2;
+                } else if (ratioValue.includes('x4')) {
+                    config.upscale.upscale_ratio = 4;
+                }
+                config.upscale.realcugan_model = null;
             }
         } else {
             // 其他超分模型，使用普通倍率

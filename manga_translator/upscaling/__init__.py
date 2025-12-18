@@ -6,6 +6,7 @@ from .waifu2x import Waifu2xUpscaler
 from .esrgan import ESRGANUpscaler
 from .esrgan_pytorch import ESRGANUpscalerPytorch
 from .realcugan import RealCUGANUpscaler
+from .mangajanai import MangaJaNaiUpscaler
 from ..config import Upscaler
 
 UPSCALERS = {
@@ -13,6 +14,7 @@ UPSCALERS = {
     Upscaler.esrgan: ESRGANUpscaler,
     Upscaler.upscler4xultrasharp: ESRGANUpscalerPytorch,
     Upscaler.realcugan: RealCUGANUpscaler,
+    Upscaler.mangajanai: MangaJaNaiUpscaler,
 }
 upscaler_cache = {}
 
@@ -23,6 +25,8 @@ def get_upscaler(key: Upscaler, *args, **kwargs) -> CommonUpscaler:
     # Create a cache key that includes the upscaler type and its parameters
     cache_key_parts = [str(key)]
     if key == Upscaler.realcugan and 'model_name' in kwargs:
+        cache_key_parts.append(kwargs['model_name'])
+    if key == Upscaler.mangajanai and 'model_name' in kwargs:
         cache_key_parts.append(kwargs['model_name'])
     if 'tile_size' in kwargs:
         cache_key_parts.append(f"tile{kwargs['tile_size']}")
@@ -49,6 +53,8 @@ async def dispatch(upscaler_key: Upscaler, image_batch: List[Image.Image], upsca
 async def unload(upscaler_key: Upscaler, **kwargs):
     cache_key_parts = [str(upscaler_key)]
     if upscaler_key == Upscaler.realcugan and 'model_name' in kwargs:
+        cache_key_parts.append(kwargs['model_name'])
+    if upscaler_key == Upscaler.mangajanai and 'model_name' in kwargs:
         cache_key_parts.append(kwargs['model_name'])
     if 'tile_size' in kwargs:
         cache_key_parts.append(f"tile{kwargs['tile_size']}")

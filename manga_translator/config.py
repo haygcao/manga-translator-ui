@@ -2,10 +2,10 @@ import argparse
 import re
 from enum import Enum
 
-from typing import Optional, Any, Literal, List
+from typing import Optional, Any, Literal, List, Union
 
 from omegaconf import OmegaConf
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 # TODO: Refactor
@@ -136,6 +136,7 @@ class Upscaler(str, Enum):
     esrgan = "esrgan"
     upscler4xultrasharp = "4xultrasharp"
     realcugan = "realcugan"
+    mangajanai = "mangajanai"
 
 class RenderConfig(BaseModel):
     renderer: Renderer = Renderer.default
@@ -218,8 +219,8 @@ class UpscaleConfig(BaseModel):
     """Upscaler to use. --upscale-ratio has to be set for it to take effect"""
     revert_upscaling: bool = False
     """Downscales the previously upscaled image after translation back to original size (Use with --upscale-ratio)."""
-    upscale_ratio: Optional[int] = None
-    """Image upscale ratio applied before detection. Can improve text detection."""
+    upscale_ratio: Optional[Union[int, str]] = None
+    """Image upscale ratio applied before detection. Can be int (2,3,4) or string for mangajanai (x2, x4, DAT2 x4)."""
     realcugan_model: Optional[str] = None
     """Real-CUGAN model to use when upscaler is set to realcugan"""
     tile_size: Optional[int] = None
@@ -270,8 +271,9 @@ class TranslatorConfig(BaseModel):
     post_check_target_lang_threshold: float = 0.5  
     """Minimum ratio of target language in translation text for ratio check"""
     
-    _translator_gen = None
-    _gpt_config = None
+    # 使用 PrivateAttr 确保每个实例有独立的缓存
+    _translator_gen: Any = PrivateAttr(default=None)
+    _gpt_config: Any = PrivateAttr(default=None)
 
     @property
     def translator_gen(self):

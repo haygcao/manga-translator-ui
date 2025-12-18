@@ -46,6 +46,7 @@ pytest==7.2.2
 python-dotenv==1.1.1
 rich==14.1.0
 safetensors==0.6.2
+spandrel==0.4.1
 scipy==1.16.1
 sentencepiece==0.2.1
 setuptools==80.9.0

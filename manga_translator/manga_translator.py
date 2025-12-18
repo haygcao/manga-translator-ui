@@ -657,7 +657,13 @@ class MangaTranslator:
                 # This restores all saved attributes
                 if 'lines' in region_data and isinstance(region_data['lines'], list):
                     # Fix: Use np.float64 to match TextBlock expectation, not np.int32
-                    region_data['lines'] = np.array(region_data['lines'], dtype=np.float64)
+                    lines_arr = np.array(region_data['lines'], dtype=np.float64)
+                    # 验证并修正形状，确保是 (N, 4, 2)
+                    if lines_arr.ndim == 2 and lines_arr.shape == (4, 2):
+                        lines_arr = lines_arr.reshape(1, 4, 2)
+                    elif lines_arr.ndim != 3 or lines_arr.shape[1] != 4 or lines_arr.shape[2] != 2:
+                        continue
+                    region_data['lines'] = lines_arr
                 
                 region = TextBlock(**region_data)
                 regions.append(region)
@@ -1034,7 +1040,7 @@ class MangaTranslator:
         current_time = time.time()
         self._model_usage_timestamps[("upscaling", config.upscale.upscaler)] = current_time
         
-        # Prepare kwargs for Real-CUGAN (NCNN version)
+        # Prepare kwargs for Real-CUGAN (NCNN version) and MangaJaNai
         upscaler_kwargs = {}
         if config.upscale.upscaler == 'realcugan':
             realcugan_model = getattr(config.upscale, 'realcugan_model', None)
@@ -1044,11 +1050,37 @@ class MangaTranslator:
             tile_size = getattr(config.upscale, 'tile_size', None)
             if tile_size is not None:
                 upscaler_kwargs['tile_size'] = tile_size
+        elif config.upscale.upscaler == 'mangajanai':
+            # mangajanai 的 upscale_ratio 可以是字符串 (x2, x4, DAT2 x4) 或数字
+            ratio = config.upscale.upscale_ratio
+            if isinstance(ratio, str):
+                upscaler_kwargs['model_name'] = ratio
+                # 从字符串解析实际倍率
+                if 'x2' in ratio.lower():
+                    actual_ratio = 2
+                else:
+                    actual_ratio = 4
+            elif ratio == 2:
+                upscaler_kwargs['model_name'] = 'x2'
+                actual_ratio = 2
+            else:
+                upscaler_kwargs['model_name'] = 'x4'
+                actual_ratio = 4
+
+            tile_size = getattr(config.upscale, 'tile_size', None)
+            if tile_size is not None:
+                upscaler_kwargs['tile_size'] = tile_size
+        
+        # 获取实际的数字倍率
+        if config.upscale.upscaler == 'mangajanai':
+            upscale_ratio_num = actual_ratio
+        else:
+            upscale_ratio_num = config.upscale.upscale_ratio
         
         result = (await dispatch_upscaling(
             config.upscale.upscaler, 
             [ctx.img_colorized], 
-            config.upscale.upscale_ratio, 
+            upscale_ratio_num, 
             self.device,
             **upscaler_kwargs
         ))[0]
@@ -2670,8 +2702,17 @@ class MangaTranslator:
                         # 设置字体大小和默认translation
                         for region in loaded_regions:
                             if not hasattr(region, 'font_size') or not region.font_size:
-                                box_height = np.max(region.lines[:,:,1]) - np.min(region.lines[:,:,1])
-                                region.font_size = min(int(box_height * 0.8), 128)
+                                try:
+                                    # 确保lines形状正确 (N, 4, 2)
+                                    if region.lines.ndim == 3 and region.lines.shape[1] >= 4 and region.lines.shape[2] >= 2:
+                                        box_height = np.max(region.lines[:,:,1]) - np.min(region.lines[:,:,1])
+                                        region.font_size = min(int(box_height * 0.8), 128)
+                                    else:
+                                        logger.warning(f"Invalid lines shape {region.lines.shape}, using default font_size=24")
+                                        region.font_size = 24
+                                except Exception as e:
+                                    logger.warning(f"Error calculating font_size from lines: {e}, using default font_size=24")
+                                    region.font_size = 24
                             
                             # 如果translation为空或None，使用原文text作为默认值
                             if not region.translation:
@@ -2754,6 +2795,7 @@ class MangaTranslator:
                         if hasattr(image, 'name'):
                             ctx.image_name = image.name
                         ctx.translation_error = str(e)
+                        ctx.result = image
                         preprocessed_contexts.append((ctx, config))
                 
                 # load_text模式下已经完成了所有处理（包括渲染），直接保存并返回
@@ -2963,6 +3005,17 @@ class MangaTranslator:
                 if config.upscale.upscaler == 'realcugan':
                     if config.upscale.realcugan_model:
                         upscaler_kwargs['model_name'] = config.upscale.realcugan_model
+                    if config.upscale.tile_size is not None:
+                        upscaler_kwargs['tile_size'] = config.upscale.tile_size
+                elif config.upscale.upscaler == 'mangajanai':
+                    # mangajanai 的 upscale_ratio 可以是字符串 (x2, x4, DAT2 x4) 或数字
+                    ratio = config.upscale.upscale_ratio
+                    if isinstance(ratio, str):
+                        upscaler_kwargs['model_name'] = ratio
+                    elif ratio == 2:
+                        upscaler_kwargs['model_name'] = 'x2'
+                    else:
+                        upscaler_kwargs['model_name'] = 'x4'
                     if config.upscale.tile_size is not None:
                         upscaler_kwargs['tile_size'] = config.upscale.tile_size
                 await prepare_upscaling(config.upscale.upscaler, **upscaler_kwargs)

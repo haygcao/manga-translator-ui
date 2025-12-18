@@ -11,7 +11,7 @@ import httpx
 import openai
 from openai import AsyncOpenAI
 
-from .common import CommonTranslator, VALID_LANGUAGES, draw_text_boxes_on_image
+from .common import CommonTranslator, VALID_LANGUAGES, draw_text_boxes_on_image, parse_json_or_text_response
 from .keys import OPENAI_API_KEY, OPENAI_MODEL
 from ..utils import Context
 
@@ -209,7 +209,7 @@ class OpenAIHighQualityTranslator(CommonTranslator):
                 pass  # 忽略所有清理错误
 
     
-    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """构建系统提示词"""
         # Map language codes to full names for clarity in the prompt
         lang_map = {
@@ -301,6 +301,11 @@ This is an incorrect response because it includes extra text and explanations.
 
         # Combine prompts
         final_prompt = ""
+        
+        # 添加重试提示到最前面（如果是重试）
+        if retry_attempt > 0:
+            final_prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
+        
         if line_break_prompt_str:
             final_prompt += f"{line_break_prompt_str}\n\n---\n\n"
         if custom_prompt_str:
@@ -314,9 +319,9 @@ This is an incorrect response because it includes extra text and explanations.
         """构建用户提示词（高质量版）- 使用统一方法，只包含上下文和待翻译文本"""
         return self._build_user_prompt_for_hq(batch_data, ctx, self.prev_context, retry_attempt=retry_attempt, retry_reason=retry_reason)
     
-    def _get_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None) -> str:
+    def _get_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """获取完整的系统提示词（包含断句提示词、自定义提示词和基础系统提示词）"""
-        return self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
+        return self._build_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason)
 
     async def _translate_batch_high_quality(self, texts: List[str], batch_data: List[Dict], source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, ctx: Any = None, split_level: int = 0) -> List[str]:
         """高质量批量翻译方法"""
@@ -347,12 +352,12 @@ This is an incorrect response because it includes extra text and explanations.
                 "image_url": {"url": f"data:image/png;base64,{base64_img}"}
             })
         
-        # 构建消息：系统提示词放在 system role，用户内容（文本+图片）放在 user role
-        system_prompt = self._get_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json)
-        
         # 初始化重试信息
         retry_attempt = 0
         retry_reason = ""
+        
+        # 标记是否发送图片（降级机制）
+        send_images = True
         
         # 发送请求
         max_retries = self.attempts
@@ -380,10 +385,16 @@ This is an incorrect response because it includes extra text and explanations.
             #     self.logger.warning(f"Triggering split after {local_attempt} local attempts")
             #     raise self.SplitException(local_attempt, texts)
             
-            # 构建用户提示词（包含重试信息以避免缓存）
+            # 构建系统提示词和用户提示词（包含重试信息以避免缓存）
+            system_prompt = self._get_system_prompt(source_lang, target_lang, custom_prompt_json=custom_prompt_json, line_break_prompt_json=line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason)
             user_prompt = self._build_user_prompt(batch_data, ctx, retry_attempt=retry_attempt, retry_reason=retry_reason)
             user_content = [{"type": "text", "text": user_prompt}]
-            user_content.extend(image_contents)
+            
+            # 降级检查：如果 send_images 为 True，则发送图片
+            if send_images:
+                user_content.extend(image_contents)
+            elif retry_attempt > 0:
+                 self.logger.warning("降级模式：仅发送文本，不发送图片")
             
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -421,6 +432,7 @@ This is an incorrect response because it includes extra text and explanations.
                 # 检查成功条件
                 if response.choices and response.choices[0].message.content and response.choices[0].finish_reason != 'content_filter':
                     result_text = response.choices[0].message.content.strip()
+                    self.logger.debug(f"--- OpenAI Raw Response ---\n{result_text}\n---------------------------")
                     
                     # ✅ 检测HTML错误响应（404等）- 抛出特定异常供统一错误处理
                     if result_text.startswith('<!DOCTYPE') or result_text.startswith('<html') or '<h1>404</h1>' in result_text:
@@ -433,19 +445,14 @@ This is an incorrect response because it includes extra text and explanations.
                     if answer_match:
                         result_text = answer_match.group(1).strip()
                     
-                    # 增加清理步骤，移除可能的Markdown代码块
-                    if result_text.startswith("```") and result_text.endswith("```"):
-                        result_text = result_text[3:-3].strip()
+                    # 如果结果为空字符串
+                    if not result_text:
+                        self.logger.warning("OpenAI API返回空文本，下次重试将不再发送图片")
+                        send_images = False
+                        raise Exception("OpenAI API returned empty text")
                     
                     # 解析翻译结果
-                    translations = []
-                    for line in result_text.split('\n'):
-                        line = line.strip()
-                        if line:
-                            line = re.sub(r'^\d+\.\s*', '', line)
-                            # Replace other possible newline representations, but keep [BR]
-                            line = line.replace('\\n', '\n').replace('↵', '\n')
-                            translations.append(line)
+                    translations = parse_json_or_text_response(result_text)
                     
                     # Strict validation: must match input count
                     if len(translations) != len(texts):
@@ -519,10 +526,12 @@ This is an incorrect response because it includes extra text and explanations.
                 finish_reason = response.choices[0].finish_reason if response.choices else "N/A"
 
                 if finish_reason == 'content_filter':
-                    self.logger.warning(f"OpenAI内容被安全策略拦截 ({log_attempt})。正在重试...")
+                    self.logger.warning(f"OpenAI内容被安全策略拦截 ({log_attempt})。下次重试将不再发送图片")
+                    send_images = False
                     last_exception = Exception("OpenAI content filter triggered")
                 else:
-                    self.logger.warning(f"OpenAI返回空内容或意外的结束原因 '{finish_reason}' ({log_attempt})。正在重试...")
+                    self.logger.warning(f"OpenAI返回空内容或意外的结束原因 '{finish_reason}' ({log_attempt})。下次重试将不再发送图片")
+                    send_images = False
                     last_exception = Exception(f"OpenAI returned empty content or unexpected finish_reason: {finish_reason}")
 
                 if not is_infinite and attempt >= max_retries:
@@ -562,6 +571,12 @@ This is an incorrect response because it includes extra text and explanations.
                 attempt += 1
                 log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
                 last_exception = e
+                
+                # 降级检查：502错误
+                if '502' in str(e):
+                     self.logger.warning(f"检测到网络错误(502)，下次重试将不再发送图片。错误信息: {e}")
+                     send_images = False
+                
                 self.logger.warning(f"OpenAI高质量翻译出错 ({log_attempt}): {e}")
                 
                 if not is_infinite and attempt >= max_retries:

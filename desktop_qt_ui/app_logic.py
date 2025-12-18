@@ -472,7 +472,8 @@ class MainAppLogic(QObject):
                 "waifu2x": "Waifu2x",
                 "esrgan": "ESRGAN",
                 "4xultrasharp": "4x UltraSharp",
-                "realcugan": "Real-CUGAN"
+                "realcugan": "Real-CUGAN",
+                "mangajanai": "MangaJaNai"
             },
             "layout_mode": {
                 'default': self._t("layout_mode_default"),
@@ -1364,14 +1365,11 @@ class MainAppLogic(QObject):
             try:
                 from PyQt6.QtWidgets import QApplication
                 QApplication.beep()
-                self._ui_log("播放系统提示音")
-            except Exception as sound_error:
-                self._ui_log(f"播放提示音失败: {sound_error}", "WARNING")
+            except Exception:
+                pass
             
-            self._ui_log(f"准备发送 task_completed 信号，文件数: {len(saved_files)}")
             # 使用列表副本发送信号，避免引用问题
             self.task_completed.emit(list(saved_files))
-            self._ui_log("task_completed 信号已发送")
         except Exception as e:
             self._ui_log(f"完成任务状态更新或信号发射时发生致命错误: {e}", "ERROR")
             import traceback
@@ -2019,6 +2017,9 @@ class TranslationWorker(QObject):
                 ratio_value = upscale_config_data['upscale_ratio']
                 if ratio_value == '不使用' or ratio_value is None:
                     upscale_config_data['upscale_ratio'] = None
+                elif isinstance(ratio_value, str) and ratio_value in ('x2', 'x4', 'DAT2 x4'):
+                    # mangajanai 的字符串选项，直接保留
+                    upscale_config_data['upscale_ratio'] = ratio_value
                 else:
                     try:
                         upscale_config_data['upscale_ratio'] = int(ratio_value)

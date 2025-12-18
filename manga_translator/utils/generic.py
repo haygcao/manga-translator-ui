@@ -259,6 +259,12 @@ def download_url_with_progressbar(url: str, path: str):
                     downloaded_chunks += 1
                     if not is_tty and downloaded_chunks % 1000 == 0:
                         print(bar)
+        
+        # 检查下载的文件大小，如果太小可能是下载失败（如404页面）
+        final_size = os.path.getsize(path)
+        if final_size < 1024:  # 小于1KB认为下载失败
+            os.remove(path)
+            raise Exception(f'Downloaded file is too small ({final_size} bytes), possibly a 404 page: "{url}"')
     else:
         raise Exception(f'Couldn\'t resolve url: "{url}" (Error: {r.status_code})')
 

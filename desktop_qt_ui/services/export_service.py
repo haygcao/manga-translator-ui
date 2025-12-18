@@ -184,27 +184,10 @@ class ExportService:
                 )
                 
                 if rendered_text_layer:
-                    # 检查是否开启了超分（通过尺寸判断）
-                    # 如果后端返回的图片尺寸与原图不同，说明进行了超分处理
-                    # 此时后端返回的是完整的渲染结果（超分背景+文字），直接使用即可
-                    if image.size != rendered_text_layer.size:
-                        self.logger.info(f"检测到超分: 原图 {image.size}, 渲染结果 {rendered_text_layer.size}. 直接使用超分后的完整结果。")
-                        final_image = rendered_text_layer
-                        rendered_text_layer = None  # 避免后续释放
-                    else:
-                        # 尺寸相同，按原逻辑合成文字层到原图
-                        final_image = image.copy()
-                        if final_image.mode != 'RGBA':
-                            temp_img = final_image.convert('RGBA')
-                            final_image.close()
-                            final_image = temp_img
-                        if rendered_text_layer.mode != 'RGBA':
-                            temp_layer = rendered_text_layer.convert('RGBA')
-                            rendered_text_layer.close()
-                            rendered_text_layer = temp_layer
-
-                        final_image.paste(rendered_text_layer, (0, 0), rendered_text_layer)
-                        rendered_text_layer.close()
+                    # 后端返回的 ctx.result 已经是完整的渲染结果（inpainted背景 + 文字）
+                    # 直接使用，不需要再合成到原图上
+                    final_image = rendered_text_layer
+                    rendered_text_layer = None  # 避免后续释放
 
                     # --- Safer saving logic ---
                     temp_output_path = output_path + ".tmp"
@@ -338,8 +321,16 @@ class ExportService:
                     self.logger.warning(f"No valid polygons found in region: {region_copy}")
                     continue
             elif isinstance(lines_data, np.ndarray):
-                # 如果已经是numpy数组，直接使用
-                region_copy['lines'] = lines_data
+                # 如果已经是numpy数组，验证并修正形状
+                lines_arr = lines_data
+                if lines_arr.ndim == 2 and lines_arr.shape == (4, 2):
+                    # 单个多边形，需要添加一个维度变成 (1, 4, 2)
+                    lines_arr = lines_arr.reshape(1, 4, 2)
+                    self.logger.debug(f"Reshaped lines from (4, 2) to (1, 4, 2)")
+                elif lines_arr.ndim != 3 or lines_arr.shape[1] != 4 or lines_arr.shape[2] != 2:
+                    self.logger.warning(f"Invalid lines array shape: {lines_arr.shape}, expected (N, 4, 2)")
+                    continue
+                region_copy['lines'] = lines_arr.astype(np.float64)
             else:
                 self.logger.warning(f"Lines data is not a list or numpy array: {type(lines_data)}")
                 continue
@@ -583,7 +574,13 @@ class ExportService:
                         image = None
                     return result_image
                 else:
-                    self.logger.error("后端渲染没有生成结果")
+                    # 详细记录失败原因
+                    error_msg = "后端渲染没有生成结果"
+                    if hasattr(ctx, 'translation_error') and ctx.translation_error:
+                        error_msg += f", 错误: {ctx.translation_error}"
+                    if hasattr(ctx, 'text_regions'):
+                        error_msg += f", 区域数: {len(ctx.text_regions) if ctx.text_regions else 0}"
+                    self.logger.error(error_msg)
                     return None
 
             finally:
