@@ -90,6 +90,7 @@ async def translate_files(input_paths, output_dir, config_service, verbose=False
     from manga_translator.utils import init_logging, set_log_level, get_logger
     from PIL import Image
     import logging
+    import logging.handlers
     
     init_logging()
     if verbose:
@@ -108,6 +109,35 @@ async def translate_files(input_paths, output_dir, config_service, verbose=False
         formatter = logging.Formatter('[%(name)s] %(message)s')
         console_handler.setFormatter(formatter)
         manga_logger.addHandler(console_handler)
+    
+    # 添加文件日志（与 Qt UI 相同位置和格式）
+    from datetime import datetime
+    
+    log_dir = ROOT_DIR / 'result'
+    log_dir.mkdir(exist_ok=True)
+    
+    # 生成带时间戳的日志文件名（与 Qt UI 格式一致）
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    log_file = log_dir / f'log_{timestamp}.txt'
+    
+    # 检查是否已添加文件 handler
+    has_file_handler = any(
+        isinstance(h, logging.FileHandler)
+        for h in logging.root.handlers
+    )
+    
+    if not has_file_handler:
+        file_handler = logging.FileHandler(
+            str(log_file),
+            encoding='utf-8'
+        )
+        file_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+        file_formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - [%(name)s] - %(message)s'
+        )
+        file_handler.setFormatter(file_formatter)
+        logging.root.addHandler(file_handler)
+        print(f"📝 日志文件: {log_file}")
     
     logger = get_logger('local')
     
@@ -242,7 +272,7 @@ async def translate_files(input_paths, output_dir, config_service, verbose=False
     # 创建 Config 对象
     explicit_keys = {'render', 'upscale', 'translator', 'detector', 'colorizer', 'inpainter', 'ocr'}
     config_for_translate = {k: v for k, v in config_dict.items() if k in explicit_keys}
-    for key in ['filter_text', 'kernel_size', 'mask_dilation_offset', 'force_simple_sort']:
+    for key in ['kernel_size', 'mask_dilation_offset', 'force_simple_sort']:
         if key in config_dict:
             config_for_translate[key] = config_dict[key]
     

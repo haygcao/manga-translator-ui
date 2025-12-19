@@ -91,6 +91,9 @@ logs/
 # Ignore user config (这是用户自己的配置，防止推送到git)
 examples/config.json
 
+# Ignore filter list (用户自定义过滤列表)
+examples/filter_list.txt
+
 # Ignore API test files (本地测试文件)
 examples/api_test_ui.py
 examples/API_TEST_README.md
@@ -216,3 +219,6 @@ manga_translator/server/data/
 
 # MangaJaNai Converter Gui
 MangaJaNaiConverterGui/
+
+# Watermark removal tool (水印去除工具)
+watermark-removal-master/

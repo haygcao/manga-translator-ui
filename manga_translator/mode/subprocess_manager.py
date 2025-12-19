@@ -105,7 +105,7 @@ def worker_translate_batch(
         # 创建 Config 对象
         explicit_keys = {'render', 'upscale', 'translator', 'detector', 'colorizer', 'inpainter', 'ocr'}
         config_for_translate = {k: v for k, v in config_dict.items() if k in explicit_keys}
-        for key in ['filter_text', 'kernel_size', 'mask_dilation_offset', 'force_simple_sort']:
+        for key in ['kernel_size', 'mask_dilation_offset', 'force_simple_sort']:
             if key in config_dict:
                 config_for_translate[key] = config_dict[key]
         

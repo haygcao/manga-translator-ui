@@ -279,6 +279,7 @@ python -m manga_translator --help
 
 - [zyddnys/manga-image-translator](https://github.com/zyddnys/manga-image-translator) - 核心翻译引擎
 - [bilibili/ailab](https://github.com/bilibili/ailab) - Real-CUGAN 超分辨率模型
+- [the-database/MangaJaNai](https://github.com/the-database/MangaJaNai) - MangaJaNai/IllustrationJaNai 超分辨率模型
 - [lhj5426/YSG](https://github.com/lhj5426/YSG) - 提供模型支持
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 提供 OCR 模型支持
 - 所有贡献者和用户的支持

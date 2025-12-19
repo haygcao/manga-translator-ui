@@ -81,6 +81,22 @@ class MainView(QWidget):
             return self.i18n.translate(key, **kwargs)
         return key
 
+    def _open_filter_list(self):
+        """打开过滤列表文件"""
+        from manga_translator.utils.text_filter import ensure_filter_list_exists
+        import subprocess
+        import sys
+        
+        filter_path = ensure_filter_list_exists()
+        
+        # 根据操作系统打开文件
+        if sys.platform == 'win32':
+            subprocess.Popen(['notepad.exe', filter_path])
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', filter_path])
+        else:
+            subprocess.Popen(['xdg-open', filter_path])
+
     @pyqtSlot(dict)
     def set_parameters(self, config: dict):
         """
@@ -411,7 +427,25 @@ class MainView(QWidget):
             options = self.controller.get_options_for_key(key)
             display_map = self.controller.get_display_mapping(key)
 
-            if full_key == "render.font_path":
+            if full_key == "filter_text_enabled":
+                # 特殊处理：过滤列表开关 + 打开过滤列表按钮
+                container = QWidget()
+                hbox = QHBoxLayout(container)
+                hbox.setContentsMargins(0, 0, 0, 0)
+                
+                checkbox = QCheckBox()
+                checkbox.setChecked(value)
+                checkbox.stateChanged.connect(lambda state, k=full_key: self._on_setting_changed(bool(state), k, None))
+                
+                open_btn = QPushButton(self._t("btn_open_filter_list"))
+                open_btn.clicked.connect(self._open_filter_list)
+                
+                hbox.addWidget(checkbox)
+                hbox.addWidget(open_btn)
+                hbox.addStretch()
+                widget = container
+
+            elif full_key == "render.font_path":
                 container = QWidget()
                 hbox = QHBoxLayout(container)
                 hbox.setContentsMargins(0, 0, 0, 0)

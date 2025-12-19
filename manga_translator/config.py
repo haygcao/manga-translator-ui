@@ -410,8 +410,6 @@ class OcrConfig(BaseModel):
 
 class Config(BaseModel):
     # General
-    filter_text: Optional[str] = None
-    """Filter regions by their text with a regex. Example usage: '.*badtext.*'"""
     render: RenderConfig = RenderConfig()
     """render configs"""
     upscale: UpscaleConfig = UpscaleConfig()
@@ -435,10 +433,3 @@ class Config(BaseModel):
     """Set the convolution kernel size of the text erasure area to completely clean up text residues"""
     mask_dilation_offset: int = 20
     """By how much to extend the text mask to remove left-over text pixels of the original image."""
-    _filter_text = None
-
-    @property
-    def re_filter_text(self):
-        if self._filter_text is None:
-            self._filter_text = re.compile(self.filter_text)
-        return self._filter_text

@@ -32,6 +32,7 @@ from .utils import (
     TextBlock,
     imwrite_unicode
 )
+from .utils.text_filter import match_filter, ensure_filter_list_exists
 import matplotlib
 matplotlib.use('Agg')  # 使用非GUI后端
 import matplotlib.pyplot as plt·
@@ -167,6 +168,12 @@ class MangaTranslator:
         
         # 日志文件现在由UI层管理，这里不再创建
         self._log_file_path = None
+        
+        # 确保过滤列表文件存在
+        try:
+            ensure_filter_list_exists()
+        except Exception:
+            pass
 
     def parse_init_params(self, params: dict):
         self.verbose = params.get('verbose', False)
@@ -835,6 +842,20 @@ class MangaTranslator:
             if not self.ignore_errors:  
                 raise 
             ctx.text_regions = [] # Fallback to empty text_regions if textline merge fails
+
+        # -- 过滤列表：根据 OCR 识别的原文过滤
+        if ctx.text_regions:
+            filtered_regions = []
+            for region in ctx.text_regions:
+                match_result = match_filter(region.text)
+                if match_result:
+                    matched_word, match_type = match_result
+                    logger.info(f'过滤文本区域 ({match_type}匹配): "{region.text}" -> 匹配: "{matched_word}"')
+                else:
+                    filtered_regions.append(region)
+            if len(filtered_regions) < len(ctx.text_regions):
+                logger.info(f'过滤列表: 过滤了 {len(ctx.text_regions) - len(filtered_regions)} 个文本区域')
+            ctx.text_regions = filtered_regions
 
         if self.verbose and ctx.text_regions:
             show_panels = not config.force_simple_sort  # 当不使用简单排序时显示panel
@@ -2130,9 +2151,6 @@ class MangaTranslator:
                 if region.translation.isnumeric():
                     should_filter = True
                     filter_reason = "Numeric translation"
-                elif config.filter_text and re.search(config.re_filter_text, region.translation):
-                    should_filter = True
-                    filter_reason = f"Matched filter text: {config.filter_text}"
                 elif not config.translator.translator == Translator.original:
                     text_equal = region.text.lower().strip() == region.translation.lower().strip()
                     if text_equal:
@@ -2405,6 +2423,10 @@ class MangaTranslator:
         Returns:
             List of Context objects with translation results
         """
+        # 每次翻译任务开始时重新加载过滤列表
+        from .utils.text_filter import load_filter_list
+        load_filter_list(force_reload=True)
+        
         batch_size = batch_size or self.batch_size
         
         # 如果提供了全局总数，使用它来计算总批次数；否则使用当前批次的图片数
@@ -2994,9 +3016,7 @@ class MangaTranslator:
                 logger.debug(f"Exception details: {traceback.format_exc()}")
 
         # preload and download models (not strictly necessary, remove to lazy load)
-        logger.debug(f'[DEBUG-2] Checking model load: models_ttl={self.models_ttl}, _models_loaded={self._models_loaded}')
-        
-        if ( self.models_ttl == 0 and not self._models_loaded ):
+        if self.models_ttl == 0 and not self._models_loaded:
             logger.info('Loading models')
             
             if config.upscale.upscale_ratio:
@@ -3032,9 +3052,6 @@ class MangaTranslator:
                 await prepare_colorization(config.colorizer.colorizer)
             
             self._models_loaded = True  # 标记模型已加载
-            logger.info('[DEBUG-2] Models loaded and flag set to True')
-        else:
-            logger.debug('[DEBUG-2] Skipping model load - already loaded or TTL enabled')
 
         # Start the background cleanup job once if not already started.
         if self._detector_cleanup_task is None:
@@ -3257,6 +3274,20 @@ class MangaTranslator:
             if not self.ignore_errors:  
                 raise 
             ctx.text_regions = []
+
+        # -- 过滤列表：根据 OCR 识别的原文过滤
+        if ctx.text_regions:
+            filtered_regions = []
+            for region in ctx.text_regions:
+                match_result = match_filter(region.text)
+                if match_result:
+                    matched_word, match_type = match_result
+                    logger.info(f'过滤文本区域 ({match_type}匹配): "{region.text}" -> 匹配: "{matched_word}"')
+                else:
+                    filtered_regions.append(region)
+            if len(filtered_regions) < len(ctx.text_regions):
+                logger.info(f'过滤列表: 过滤了 {len(ctx.text_regions) - len(filtered_regions)} 个文本区域')
+            ctx.text_regions = filtered_regions
 
         if self.verbose and ctx.text_regions:
             show_panels = not config.force_simple_sort  # 当不使用简单排序时显示panel
@@ -3556,9 +3587,6 @@ class MangaTranslator:
                                 if region.translation.isnumeric():
                                     should_filter = True
                                     filter_reason = "Numeric translation"
-                                elif config.filter_text and re.search(config.re_filter_text, region.translation):
-                                    should_filter = True
-                                    filter_reason = f"Matched filter text: {config.filter_text}"
                                 elif not config.translator.translator == Translator.original:
                                     text_equal = region.text.lower().strip() == region.translation.lower().strip()
                                     if text_equal:
@@ -3730,9 +3758,6 @@ class MangaTranslator:
                             if region.translation.isnumeric():
                                 should_filter = True
                                 filter_reason = "Numeric translation"
-                            elif config.filter_text and re.search(config.re_filter_text, region.translation):
-                                should_filter = True
-                                filter_reason = f"Matched filter text: {config.filter_text}"
                             elif not config.translator.translator == Translator.original:
                                 text_equal = region.text.lower().strip() == region.translation.lower().strip()
                                 if text_equal:

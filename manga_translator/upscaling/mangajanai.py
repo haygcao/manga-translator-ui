@@ -34,6 +34,43 @@ _KNOWN_MODELS = {
     "4x_MangaJaNai_2048p_V1_ESRGAN_70k.pth": "f70e08c60da372b7207e7348486ea6b498ea8dea6246bb717530a4d45c955b9b",
 }
 
+def is_color_image(image: Image.Image, threshold: float = 0.1) -> bool:
+    """
+    检测图片是否为彩色图片
+    通过计算图片的色彩饱和度来判断
+    
+    Args:
+        image: PIL Image
+        threshold: 饱和度阈值，超过此值认为是彩色图片
+    
+    Returns:
+        True 如果是彩色图片，False 如果是黑白/灰度图片
+    """
+    if image.mode == 'L':
+        return False
+    
+    # 转换为 RGB
+    img_rgb = image.convert('RGB')
+    img_np = np.array(img_rgb, dtype=np.float32)
+    
+    # 计算每个像素的饱和度
+    # 饱和度 = (max - min) / max
+    max_val = img_np.max(axis=2)
+    min_val = img_np.min(axis=2)
+    
+    # 避免除零
+    max_val = np.maximum(max_val, 1)
+    saturation = (max_val - min_val) / max_val
+    
+    # 计算平均饱和度
+    mean_saturation = np.mean(saturation)
+    
+    is_color = mean_saturation > threshold
+    logger.debug(f"Image saturation: {mean_saturation:.3f}, is_color: {is_color}")
+    
+    return is_color
+
+
 def enhance_contrast(image: Image.Image) -> Image.Image:
     """
     Auto-adjust levels to enhance contrast, similar to MangaJaNaiConverterGui.
@@ -194,6 +231,21 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
                 if _KNOWN_MODELS.get(m):
                     mapping['hash'] = _KNOWN_MODELS[m]
                 self._MODEL_MAPPING[m] = mapping
+            
+            # 同时添加 IllustrationJaNai 模型（用于彩色图片）
+            illust_models = [
+                "2x_IllustrationJaNai_V1_ESRGAN_120k.pth",
+                "4x_IllustrationJaNai_V1_ESRGAN_135k.pth",
+            ]
+            for m in illust_models:
+                if m not in self._MODEL_MAPPING:
+                    mapping = {
+                        'file': m,
+                        'url': f'{base_url}{m}',
+                    }
+                    if _KNOWN_MODELS.get(m):
+                        mapping['hash'] = _KNOWN_MODELS[m]
+                    self._MODEL_MAPPING[m] = mapping
         else:
             mapping = {
                 'file': self.model_file,
@@ -241,15 +293,28 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
         return os.path.exists(model_path)
     
     def _select_best_model(self, img: Image.Image) -> str:
-        """Select best model from candidates based on image resolution"""
-        if not self.is_auto_mode or not self.model_candidates:
+        """Select best model from candidates based on image resolution and color"""
+        if not self.is_auto_mode:
+            return self.model_file
+        
+        # 检测是否为彩色图片
+        is_color = is_color_image(img)
+        
+        # 根据彩色/黑白和目标倍率选择模型
+        if is_color:
+            # 彩色图片使用 IllustrationJaNai 模型
+            if self.target_auto_scale == 2:
+                model_file = "2x_IllustrationJaNai_V1_ESRGAN_120k.pth"
+            else:
+                model_file = "4x_IllustrationJaNai_V1_ESRGAN_135k.pth"
+            logger.info(f"检测到彩色图片，使用 IllustrationJaNai 模型: {model_file}")
+            return model_file
+        
+        # 黑白图片使用 MangaJaNai 模型，根据分辨率选择
+        if not self.model_candidates:
             return self.model_file
             
-        # Extract resolutions from filenames
-        # Format: 2x_MangaJaNai_{RES}p_...
-        # We look for the resolution part
-        
-        # Get image short side (usually height for manga pages, but safety first)
+        # Get image short side (usually height for manga pages)
         res = min(img.width, img.height)
         
         best_model = self.model_candidates[0]
@@ -257,6 +322,7 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
         
         for m in self.model_candidates:
             # Parse resolution from filename
+            # Format: 2x_MangaJaNai_{RES}p_...
             try:
                 parts = m.split('_')
                 for p in parts:
@@ -270,6 +336,7 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
             except:
                 continue
         
+        logger.info(f"检测到黑白图片 (分辨率 {res}p)，使用 MangaJaNai 模型: {best_model}")
         return best_model
 
     async def _load(self, device: str):
@@ -297,31 +364,28 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
         elif 'params' in sd:
             sd = sd['params']
 
-        if 'DAT2' in filename:
-            # DAT2 模型使用 spandrel 库加载
-            try:
-                from spandrel import ModelLoader
-                loader = ModelLoader()
-                model_desc = loader.load_from_file(model_path)
-                self.model = model_desc.model
-                self.scale = model_desc.scale
-                logger.info(f"Loaded DAT2 model via spandrel: scale={self.scale}")
-            except ImportError:
-                logger.error("spandrel 库未安装，无法加载 DAT2 模型。请运行: pip install spandrel")
-                raise
-            except Exception as e:
-                logger.error(f"Failed to load DAT2 model via spandrel: {e}")
-                raise
-        else:
-            # Standard ESRGAN/RRDBNet handling
+        # 尝试使用 spandrel 库加载（支持多种模型架构，自动识别）
+        try:
+            from spandrel import ModelLoader
+            loader = ModelLoader()
+            model_desc = loader.load_from_file(model_path)
+            self.model = model_desc.model
+            self.scale = model_desc.scale
+            logger.info(f"Loaded model via spandrel: {filename}, scale={self.scale}x")
+        except ImportError:
+            # spandrel 未安装，回退到手动加载
+            logger.warning("spandrel 库未安装，尝试手动加载模型")
             try:
                 in_nc, out_nc, nf, nb, plus, mscale = infer_params(sd)
                 self.model = RRDBNet(in_nc=in_nc, out_nc=out_nc, nf=nf, nb=nb, upscale=mscale, plus=plus)
                 self.model.load_state_dict(sd)
                 self.scale = mscale
             except Exception as e:
-                logger.error(f"Failed to infer parameters for {filename}: {e}")
+                logger.error(f"Failed to load model {filename}: {e}")
                 raise
+        except Exception as e:
+            logger.error(f"Failed to load model via spandrel: {e}")
+            raise
 
         self.model.eval()
         self.model = self.model.to(device)
@@ -381,18 +445,29 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
         original_size = img.size
         padded = False
         
-        if img.size[0] < min_size or img.size[1] < min_size:
-            logger.warning(
-                f'Image size ({img.size[0]}x{img.size[1]}) is too small. '
-                f'Minimum size is {min_size}x{min_size}. Adding black padding.'
-            )
-            pad_w = max(0, min_size - img.size[0])
-            pad_h = max(0, min_size - img.size[1])
+        # 计算需要的 padding：尺寸必须是 2 的倍数（pixel_unshuffle 要求）
+        pad_w = (2 - img.size[0] % 2) % 2
+        pad_h = (2 - img.size[1] % 2) % 2
+        
+        # 同时检查最小尺寸要求
+        if img.size[0] + pad_w < min_size:
+            pad_w = min_size - img.size[0]
+        if img.size[1] + pad_h < min_size:
+            pad_h = min_size - img.size[1]
+        
+        # 确保 padding 后仍是 2 的倍数
+        if (img.size[0] + pad_w) % 2 != 0:
+            pad_w += 1
+        if (img.size[1] + pad_h) % 2 != 0:
+            pad_h += 1
+        
+        if pad_w > 0 or pad_h > 0:
             new_size = (img.size[0] + pad_w, img.size[1] + pad_h)
             padded_img = Image.new('RGB', new_size, (0, 0, 0))
             padded_img.paste(img, (0, 0))
             img = padded_img
             padded = True
+            logger.debug(f'Padded image from {original_size} to {new_size} for pixel_unshuffle compatibility')
         
         # Convert to tensor: B C H W
         img_np = np.array(img.convert('RGB'))

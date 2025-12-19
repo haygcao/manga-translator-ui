@@ -55,25 +55,6 @@ class LogService:
         for handler in logger.handlers[:]:
             logger.removeHandler(handler)
         
-        # 文件处理器 - 应用日志
-        app_log_path = os.path.join(self.log_dir, 'app.log')
-        file_handler = logging.handlers.RotatingFileHandler(
-            app_log_path,
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5,
-            encoding='utf-8'
-        )
-        
-        # 错误日志处理器
-        error_log_path = os.path.join(self.log_dir, 'error.log')
-        error_handler = logging.handlers.RotatingFileHandler(
-            error_log_path,
-            maxBytes=5*1024*1024,  # 5MB
-            backupCount=3,
-            encoding='utf-8'
-        )
-        error_handler.setLevel(logging.ERROR)
-        
         # 控制台处理器
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
@@ -82,24 +63,15 @@ class LogService:
         self.console_handler = console_handler
         
         # 创建格式化器
-        detailed_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        
         simple_formatter = logging.Formatter(
             '%(asctime)s - %(levelname)s - %(message)s',
             datefmt='%H:%M:%S'
         )
         
         # 设置格式化器
-        file_handler.setFormatter(detailed_formatter)
-        error_handler.setFormatter(detailed_formatter)
         console_handler.setFormatter(simple_formatter)
         
         # 添加处理器
-        logger.addHandler(file_handler)
-        logger.addHandler(error_handler)
         logger.addHandler(console_handler)
         
         # 添加自定义处理器用于收集实时日志
@@ -107,7 +79,7 @@ class LogService:
         logger.addHandler(memory_handler)
         
         self.loggers[self.app_name] = logger
-        self.log_handlers.extend([file_handler, error_handler, console_handler, memory_handler])
+        self.log_handlers.extend([console_handler, memory_handler])
     
     def _create_memory_handler(self):
         """创建内存日志处理器"""

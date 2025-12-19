@@ -130,18 +130,18 @@ def main():
     # --- 日志文件配置 ---
     from datetime import datetime
     
-    # 日志目录放在 result/ 下（和之前一样）
+    # 日志目录放在 result/ 下
     if getattr(sys, 'frozen', False):
         log_dir = os.path.join(os.path.dirname(sys.executable), '_internal', 'result')
     else:
         log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'result')
     os.makedirs(log_dir, exist_ok=True)
     
-    # 生成带时间戳的日志文件名（和之前格式一样）
+    # 生成带时间戳的日志文件名
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     log_file_path = os.path.join(log_dir, f'log_{timestamp}.txt')
     
-    # 添加文件日志处理器（使用自动刷新）
+    # 添加文件日志处理器
     file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(log_formatter)
@@ -151,7 +151,14 @@ def main():
     atexit.register(file_handler.close)
     
     logging.info(f"UI日志文件: {log_file_path}")
-
+    
+    # --- 确保过滤列表文件存在 ---
+    try:
+        from manga_translator.utils.text_filter import ensure_filter_list_exists
+        ensure_filter_list_exists()
+    except Exception as e:
+        logging.warning(f"创建过滤列表文件失败: {e}")
+    
     # --- 崩溃捕获 (faulthandler) ---
     # 启用 faulthandler 以捕获 C++ 级别的崩溃 (Segmentation Fault 等)
     # 将崩溃信息直接写入同一个日志文件

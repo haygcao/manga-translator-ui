@@ -69,8 +69,8 @@ def merge_tiles_into_image(
     output_width = orig_width * scale
     output_height = orig_height * scale
     
-    # Create output image with white background (to avoid black seams)
-    output = Image.new('RGB', (output_width, output_height), (255, 255, 255))
+    # Create output image with black background
+    output = Image.new('RGB', (output_width, output_height), (0, 0, 0))
     
     scaled_overlap = overlap * scale
     half_overlap = scaled_overlap // 2  # Use half overlap for blending
@@ -80,11 +80,17 @@ def merge_tiles_into_image(
         out_x = orig_x * scale
         out_y = orig_y * scale
         
-        # Calculate crop region - use half overlap on each side for smoother blending
+        # 计算裁剪区域 - 只裁剪重叠部分的一半，避免缝隙
+        # 对于非边缘的 tile，裁剪掉 overlap 的一半
         crop_left = half_overlap if orig_x > 0 else 0
         crop_top = half_overlap if orig_y > 0 else 0
-        crop_right = tile.width - (half_overlap if orig_x + orig_w < orig_width else 0)
-        crop_bottom = tile.height - (half_overlap if orig_y + orig_h < orig_height else 0)
+        
+        # 右边和下边：如果不是最后一个 tile，裁剪掉 overlap 的一半
+        is_right_edge = (orig_x + orig_w >= orig_width)
+        is_bottom_edge = (orig_y + orig_h >= orig_height)
+        
+        crop_right = tile.width if is_right_edge else (tile.width - half_overlap)
+        crop_bottom = tile.height if is_bottom_edge else (tile.height - half_overlap)
         
         # Ensure crop bounds are valid
         crop_right = max(crop_left + 1, min(crop_right, tile.width))

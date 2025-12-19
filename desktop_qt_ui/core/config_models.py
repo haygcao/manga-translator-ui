@@ -136,7 +136,7 @@ class AppSection(BaseModel):
 
 class AppSettings(BaseModel):
     app: AppSection = Field(default_factory=AppSection)
-    filter_text: Optional[str] = None
+    filter_text_enabled: bool = True  # 是否启用过滤列表
     kernel_size: int = 3
     mask_dilation_offset: int = 70
     translator: TranslatorSettings = Field(default_factory=TranslatorSettings)

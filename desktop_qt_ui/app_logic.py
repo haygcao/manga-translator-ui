@@ -513,7 +513,7 @@ class MainAppLogic(QObject):
                 },
                 "target_lang": self.translation_service.get_target_languages(),
                 "labels": {
-                    "filter_text": self._t("label_filter_text"),
+                    "filter_text_enabled": self._t("label_filter_text_enabled"),
                     "kernel_size": self._t("label_kernel_size"),
                     "mask_dilation_offset": self._t("label_mask_dilation_offset"),
                     "translator": self._t("label_translator"),
