@@ -864,9 +864,10 @@ class PropertyPanel(QWidget):
 
             if is_vertical and self.config_service.get_config().render.auto_rotate_symbols:
                 # 使用与后端一致的正则表达式(英文数字2+字符，符号2-4字符)
+                # 注意：移除了点号(.)以避免匹配省略号
                 # 但是要避免重复添加:如果已经有 <H> 标签,就不添加
                 if '<H>' not in translation_text.upper():
-                    horizontal_char_pattern = r'([a-zA-Z0-9_.-]{2,}|[!?！？]{2,4})'
+                    horizontal_char_pattern = r'([a-zA-Z0-9_-]{2,}|[!?！？]{2,4})'
                     translation_text = re.sub(horizontal_char_pattern, r'<H>\1</H>', translation_text)
 
             # 3. 将 <H> 标签替换为符号 ⇄ 显示在文本框中
