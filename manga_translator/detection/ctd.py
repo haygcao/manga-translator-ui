@@ -62,12 +62,18 @@ def postprocess_yolo(det, conf_thresh, nms_thresh, resize_ratio, sort_func=None)
 class ComicTextDetector(OfflineDetector):
     _MODEL_MAPPING = {
         'model-cuda': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/comictextdetector.pt',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/comictextdetector.pt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/comictextdetector.pt',
+            ],
             'hash': '1f90fa60aeeb1eb82e2ac1167a66bf139a8a61b8780acd351ead55268540cccb',
             'file': '.',
         },
         'model-cpu': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/comictextdetector.pt.onnx',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/comictextdetector.pt.onnx',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/comictextdetector.pt.onnx',
+            ],
             'hash': '1a86ace74961413cbd650002e7bb4dcec4980ffa21b2f19b86933372071d718f',
             'file': '.',
         },

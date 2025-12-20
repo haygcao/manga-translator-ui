@@ -26,11 +26,17 @@ from ..utils.bubble import is_ignore
 class Model48pxOCR(OfflineOCR):
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr_ar_48px.ckpt',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr_ar_48px.ckpt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ocr_ar_48px.ckpt',
+            ],
             'hash': '29daa46d080818bb4ab239a518a88338cbccff8f901bef8c9db191a7cb97671d',
         },
         'dict': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/alphabet-all-v7.txt',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/alphabet-all-v7.txt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/alphabet-all-v7.txt',
+            ],
             'hash': 'f5722368146aa0fbcc9f4726866e4efc3203318ebb66c811d8cbbe915576538a',
         },
     }
@@ -713,6 +719,19 @@ class OCR(nn.Module):
                 self.color_pred_bg_ind(color_feats)
             result.append((cur_hypo.out_idx[1:], cur_hypo.prob(), fg_pred[0], bg_pred[0], fg_ind_pred[0], bg_ind_pred[0]))
         
+        # ✅ 清理 beam search 的大张量（必须在函数内部直接删除局部变量）
+        del memory, finished_hypos
+        if 'input_mask' in locals():
+            del input_mask
+        if 'hypos' in locals():
+            del hypos
+        if 'hypos_per_sample' in locals():
+            del hypos_per_sample
+        
+        # ✅ 清理 GPU 显存
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
         return result
 
     def infer_beam_batch_tensor(self, img: torch.FloatTensor, img_widths: List[int], beams_k: int = 5, start_tok = 1, end_tok = 2, pad_tok = 0, max_finished_hypos: int = 2, max_seq_length = 384):
@@ -841,6 +860,21 @@ class OCR(nn.Module):
                 self.color_pred_fg_ind(color_feats), \
                 self.color_pred_bg_ind(color_feats)
             result.append((final_idx[1:], prob, fg_pred[0], bg_pred[0], fg_ind_pred[0], bg_ind_pred[0]))
+
+        # ✅ 清理 beam search 的大张量（必须在函数内部直接删除局部变量）
+        del memory, input_mask, cached_activations, finished_hypos
+        if 'out_idx' in locals():
+            del out_idx
+        if 'log_probs' in locals():
+            del log_probs
+        if 'batch_index' in locals():
+            del batch_index
+        if 'remaining_tensor' in locals():
+            del remaining_tensor
+        
+        # ✅ 清理 GPU 显存
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return result
 

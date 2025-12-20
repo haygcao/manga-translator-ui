@@ -76,7 +76,6 @@ ijson==3.4.0
 kornia==0.8.1
 langcodes==3.5.0
 loguru==0.7.3
-manga-ocr==0.1.14
 matplotlib==3.10.5
 networkx==3.5
 # numpy 由 PyTorch 自动管理，不要在此显式指定以避免版本冲突
@@ -130,6 +129,7 @@ google-genai==1.2.0
 # PDF/EPUB/CBZ 压缩包支持
 PyMuPDF==1.25.5
 rarfile==4.2
+py7zr==0.22.0
 
 # Server 模块依赖
 bcrypt==4.2.1

@@ -5,8 +5,10 @@
 [![DeepWiki文档](https://img.shields.io/badge/DeepWiki-在线文档-blue)](https://deepwiki.com/hgmzhn/manga-translator-ui)
 [![基于](https://img.shields.io/badge/基于-manga--image--translator-green)](https://github.com/zyddnys/manga-image-translator)
 [![模型](https://img.shields.io/badge/模型-Real--CUGAN-orange)](https://github.com/bilibili/ailab)
+[![模型](https://img.shields.io/badge/模型-MangaJaNai-orange)](https://github.com/the-database/MangaJaNai)
 [![模型](https://img.shields.io/badge/模型-YSG-orange)](https://github.com/lhj5426/YSG)
 [![OCR](https://img.shields.io/badge/OCR-PaddleOCR-blue)](https://github.com/PaddlePaddle/PaddleOCR)
+[![OCR](https://img.shields.io/badge/OCR-MangaOCR-blue)](https://github.com/kha-white/manga-ocr)
 [![许可证](https://img.shields.io/badge/许可证-GPL--3.0-red)](LICENSE)
 
 </div>
@@ -284,6 +286,7 @@ python -m manga_translator --help
 - [the-database/MangaJaNai](https://github.com/the-database/MangaJaNai) - MangaJaNai/IllustrationJaNai 超分辨率模型
 - [lhj5426/YSG](https://github.com/lhj5426/YSG) - 提供模型支持
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 提供 OCR 模型支持
+- [kha-white/manga-ocr](https://github.com/kha-white/manga-ocr) - MangaOCR 模型支持
 - 所有贡献者和用户的支持
 
 ---

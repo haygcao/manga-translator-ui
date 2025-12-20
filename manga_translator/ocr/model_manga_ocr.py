@@ -1,5 +1,6 @@
 import itertools
 import math
+import re
 from typing import Callable, List, Set, Optional, Tuple, Union
 from collections import defaultdict, Counter
 import os
@@ -13,8 +14,7 @@ from shapely.geometry import Polygon
 
 import torch
 
-# 在导入 manga_ocr 之前配置 HuggingFace 镜像
-# transformers 库需要这些环境变量来使用镜像站
+# 在导入 transformers 之前配置 HuggingFace 镜像
 os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
 os.environ.setdefault('HF_HUB_ENDPOINT', 'https://hf-mirror.com')
 
@@ -24,10 +24,10 @@ import urllib.request
 ssl._create_default_https_context = ssl._create_unverified_context
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ['REQUESTS_CA_BUNDLE'] = ''
-# 对于 huggingface_hub 库
 os.environ['HF_HUB_DISABLE_SSL_VERIFY'] = '1'
 
-from manga_ocr import MangaOcr
+# 直接导入 transformers 组件，不依赖 manga_ocr 库
+from transformers import ViTImageProcessor, AutoTokenizer, VisionEncoderDecoderModel
 
 from .common import OfflineOCR
 from .model_48px import OCR
@@ -35,6 +35,91 @@ from ..config import OcrConfig
 from ..textline_merge import split_text_region
 from ..utils import TextBlock, Quadrilateral, quadrilateral_can_merge_region, chunks, imwrite_unicode
 from ..utils.generic import AvgMeter
+
+
+# ============ 内置 MangaOCR 功能（不依赖 manga_ocr 库）============
+
+class InternalMangaOcr:
+    """
+    内置的 MangaOCR 实现，不依赖外部 manga_ocr 库
+    基于 transformers 的 VisionEncoderDecoderModel
+    """
+    def __init__(self, pretrained_model_name_or_path="kha-white/manga-ocr-base", device="cpu", logger=None):
+        self.logger = logger
+        if self.logger:
+            self.logger.info(f"加载 MangaOCR 模型: {pretrained_model_name_or_path}")
+        
+        # 加载模型组件
+        self.processor = ViTImageProcessor.from_pretrained(pretrained_model_name_or_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+        self.model = VisionEncoderDecoderModel.from_pretrained(pretrained_model_name_or_path)
+        
+        # 移动到指定设备
+        self.device = device
+        self.model.to(device)
+        self.model.eval()
+        
+        if self.logger:
+            self.logger.info(f"MangaOCR 模型已加载到 {device}")
+    
+    def __call__(self, img_or_path):
+        """
+        识别图像中的文本
+        
+        Args:
+            img_or_path: PIL.Image 或图像路径
+            
+        Returns:
+            str: 识别的文本
+        """
+        if isinstance(img_or_path, str):
+            img = Image.open(img_or_path)
+        elif isinstance(img_or_path, Image.Image):
+            img = img_or_path
+        else:
+            raise ValueError(f"img_or_path 必须是路径或 PIL.Image，得到: {type(img_or_path)}")
+        
+        # 转换为灰度再转回 RGB（manga_ocr 的预处理方式）
+        img = img.convert("L").convert("RGB")
+        
+        # 预处理
+        pixel_values = self.processor(img, return_tensors="pt").pixel_values
+        pixel_values = pixel_values.to(self.device)
+        
+        # 生成文本
+        with torch.no_grad():
+            generated_ids = self.model.generate(pixel_values, max_length=300)[0].cpu()
+        
+        # 解码
+        text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        
+        # 后处理
+        text = self._post_process(text)
+        
+        return text
+    
+    def _post_process(self, text):
+        """后处理识别的文本"""
+        # 移除所有空格
+        text = "".join(text.split())
+        
+        # 替换省略号
+        text = text.replace("…", "...")
+        
+        # 处理连续的点
+        text = re.sub("[・.]{2,}", lambda x: (x.end() - x.start()) * ".", text)
+        
+        # 半角转全角（ASCII 和数字）
+        try:
+            import jaconv
+            text = jaconv.h2z(text, ascii=True, digit=True)
+        except ImportError:
+            # 如果没有 jaconv，使用简单的转换
+            pass
+        
+        return text
+
+# ============ 原有的合并函数 ============
 
 async def merge_bboxes(bboxes: List[Quadrilateral], width: int, height: int) -> Tuple[List[Quadrilateral], int]:
     # step 1: divide into multiple text region candidates
@@ -104,12 +189,34 @@ async def merge_bboxes(bboxes: List[Quadrilateral], width: int, height: int) -> 
 class ModelMangaOCR(OfflineOCR):
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr_ar_48px.ckpt',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr_ar_48px.ckpt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ocr_ar_48px.ckpt',
+            ],
             'hash': '29daa46d080818bb4ab239a518a88338cbccff8f901bef8c9db191a7cb97671d',
         },
         'dict': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/alphabet-all-v7.txt',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/alphabet-all-v7.txt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/alphabet-all-v7.txt',
+            ],
             'hash': 'f5722368146aa0fbcc9f4726866e4efc3203318ebb66c811d8cbbe915576538a',
+        },
+        # MangaOCR 模型文件（从 GitHub Release 下载）
+        'manga_ocr_model': {
+            'url': [
+                'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.9.5/manga_ocr_model.7z',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/manga_ocr_model.7z',
+            ],
+            'hash': '5dc27bde275ad981818a06de92a77da18383c0db9b915d6faff2b8acbfe35475',
+            'archive': {
+                'manga_ocr_model/config.json': 'manga_ocr/config.json',
+                'manga_ocr_model/preprocessor_config.json': 'manga_ocr/preprocessor_config.json',
+                'manga_ocr_model/pytorch_model.bin': 'manga_ocr/pytorch_model.bin',
+                'manga_ocr_model/special_tokens_map.json': 'manga_ocr/special_tokens_map.json',
+                'manga_ocr_model/tokenizer_config.json': 'manga_ocr/tokenizer_config.json',
+                'manga_ocr_model/vocab.txt': 'manga_ocr/vocab.txt',
+            },
         },
     }
 
@@ -119,6 +226,7 @@ class ModelMangaOCR(OfflineOCR):
             shutil.move('ocr_ar_48px.ckpt', self._get_file_path('ocr_ar_48px.ckpt'))
         if os.path.exists('alphabet-all-v7.txt'):
             shutil.move('alphabet-all-v7.txt', self._get_file_path('alphabet-all-v7.txt'))
+        
         super().__init__(*args, **kwargs)
 
     async def _load(self, device: str):
@@ -126,7 +234,44 @@ class ModelMangaOCR(OfflineOCR):
             dictionary = [s[:-1] for s in fp.readlines()]
 
         self.model = OCR(dictionary, 768)
-        self.mocr = MangaOcr()
+        
+        # 使用内置的 MangaOCR 实现（不依赖 manga_ocr 库）
+        local_manga_ocr_path = os.path.join(self.model_dir, 'manga_ocr')
+        model_path = None
+        
+        # 1. 优先使用本地下载的模型
+        if os.path.exists(local_manga_ocr_path) and os.path.exists(os.path.join(local_manga_ocr_path, 'config.json')):
+            model_path = local_manga_ocr_path
+            self.logger.info(f"使用本地 MangaOCR 模型: {model_path}")
+        else:
+            # 2. 兼容旧版本：查找 HuggingFace 缓存
+            hf_cache_dir = os.path.expanduser('~/.cache/huggingface/hub')
+            if os.path.exists(hf_cache_dir):
+                for item in os.listdir(hf_cache_dir):
+                    if 'manga-ocr-base' in item.lower():
+                        snapshot_dir = os.path.join(hf_cache_dir, item, 'snapshots')
+                        if os.path.exists(snapshot_dir):
+                            snapshots = os.listdir(snapshot_dir)
+                            if snapshots:
+                                hf_model_path = os.path.join(snapshot_dir, snapshots[0])
+                                if os.path.exists(os.path.join(hf_model_path, 'config.json')):
+                                    model_path = hf_model_path
+                                    self.logger.info(f"使用 HuggingFace 缓存的 MangaOCR 模型: {model_path}")
+                                    break
+        
+        # 3. 如果都没找到，使用在线模型
+        if model_path is None:
+            model_path = "kha-white/manga-ocr-base"
+            self.logger.info("本地模型不存在，使用在线 HuggingFace 模型（首次使用会自动下载）")
+        
+        # 使用内置实现
+        manga_ocr_device = device if device in ['cuda', 'mps'] else 'cpu'
+        self.mocr = InternalMangaOcr(
+            pretrained_model_name_or_path=model_path,
+            device=manga_ocr_device,
+            logger=self.logger
+        )
+        
         sd = torch.load(self._get_file_path('ocr_ar_48px.ckpt'))
         self.model.load_state_dict(sd)
         self.model.eval()
@@ -177,8 +322,8 @@ class ModelMangaOCR(OfflineOCR):
         for idx in range(len(merged_region_imgs)):
             texts[idx] = self.mocr(Image.fromarray(merged_region_imgs[idx]))
         
-        # ✅ 清理合并后的region图像
-        del merged_region_imgs
+        # ✅ 使用统一的清理方法清理合并后的 region 图像
+        self._cleanup_batch_data(merged_region_imgs)
             
         ix = 0
         out_regions = {}
@@ -284,8 +429,8 @@ class ModelMangaOCR(OfflineOCR):
 
                 out_regions[idx_keys[i]] = cur_region
             
-            # ✅ 清理chunk处理结果
-            del ret
+            # ✅ 使用统一的清理方法清理 chunk 数据
+            self._cleanup_ocr_memory(ret, region, image_tensor, force_gpu_cleanup=True)
                 
         output_regions = []
         for i, nodes in enumerate(merged_idx):
@@ -341,10 +486,8 @@ class ModelMangaOCR(OfflineOCR):
                 cur_region.update_font_colors(np.array([fr, fg, fb]), np.array([br, bg, bb]))
             output_regions.append(cur_region)
         
-        # ✅ OCR完成后最终清理
-        del region_imgs, quadrilaterals, merged_quadrilaterals, out_regions
-        if self.use_gpu and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        # ✅ 使用统一的清理方法清理最终数据
+        self._cleanup_batch_data(region_imgs, quadrilaterals, merged_quadrilaterals, out_regions, force_gpu_cleanup=True)
 
         if is_quadrilaterals:
             return output_regions

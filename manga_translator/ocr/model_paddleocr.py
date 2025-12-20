@@ -17,6 +17,8 @@ import numpy as np
 from typing import List
 import cv2
 import math
+import torch
+import einops
 
 from .common import OfflineOCR
 from ..config import OcrConfig
@@ -37,32 +39,50 @@ class ModelPaddleOCR(OfflineOCR):
     # Model mapping for unified model management
     _MODEL_MAPPING = {
         'ch_onnx': {
-            'url': 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.7.1/ch_PP-OCRv5_rec_server_infer.onnx',
+            'url': [
+                'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.7.1/ch_PP-OCRv5_rec_server_infer.onnx',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ch_PP-OCRv5_rec_server_infer.onnx',
+            ],
             'hash': 'e09385400eaaaef34ceff54aeb7c4f0f1fe014c27fa8b9905d4709b65746562a',
             'file': '.',
         },
         'ch_dict': {
-            'url': 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.7.1/ppocrv5_dict.txt',
+            'url': [
+                'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.7.1/ppocrv5_dict.txt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ppocrv5_dict.txt',
+            ],
             'hash': 'd1979e9f794c464c0d2e0b70a7fe14dd978e9dc644c0e71f14158cdf8342af1b',
             'file': '.',
         },
         'korean_onnx': {
-            'url': 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.7.1/korean_PP-OCRv5_rec_mobile_infer.onnx',
+            'url': [
+                'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.7.1/korean_PP-OCRv5_rec_mobile_infer.onnx',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/korean_PP-OCRv5_rec_mobile_infer.onnx',
+            ],
             'hash': 'cd6e2ea50f6943ca7271eb8c56a877a5a90720b7047fe9c41a2e541a25773c9b',
             'file': '.',
         },
         'korean_dict': {
-            'url': 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.7.1/ppocrv5_korean_dict.txt',
+            'url': [
+                'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.7.1/ppocrv5_korean_dict.txt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ppocrv5_korean_dict.txt',
+            ],
             'hash': 'a88071c68c01707489baa79ebe0405b7beb5cca229f4fc94cc3ef992328802d7',
             'file': '.',
         },
         'latin_onnx': {
-            'url': 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.8.0/latin_PP-OCRv5_rec_mobile_infer.onnx',
+            'url': [
+                'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.8.0/latin_PP-OCRv5_rec_mobile_infer.onnx',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/latin_PP-OCRv5_rec_mobile_infer.onnx',
+            ],
             'hash': '614ffc2d6d3902d360fad7f1b0dd455ee45e877069d14c4e51a99dc4ef144409',
             'file': '.',
         },
         'latin_dict': {
-            'url': 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.8.0/ppocrv5_latin_dict.txt',
+            'url': [
+                'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.8.0/ppocrv5_latin_dict.txt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ppocrv5_latin_dict.txt',
+            ],
             'hash': '3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff',
             'file': '.',
         }
@@ -93,10 +113,13 @@ class ModelPaddleOCR(OfflineOCR):
         self.session = None
         self.char_dict = None
         self.device = 'cpu'
+        self.color_model = None  # 48px 模型用于颜色预测
+        self.use_gpu = False  # 初始化 use_gpu 标志
 
     async def _load(self, device: str):
-        """Load PP-OCRv5 ONNX model"""
+        """Load PP-OCRv5 ONNX model and 48px color prediction model"""
         import onnxruntime as ort
+        from .model_48px import OCR
 
         self.device = device
         model_config = self._MODELS[self.model_type]
@@ -121,6 +144,49 @@ class ModelPaddleOCR(OfflineOCR):
 
         self.session = ort.InferenceSession(model_path, providers=providers)
 
+        # 加载 48px 模型用于颜色预测
+        try:
+            # 获取 48px 模型的路径（在 ocr 目录下）
+            model_48px_dir = os.path.dirname(self.model_dir)
+            dict_48px_path = os.path.join(model_48px_dir, 'alphabet-all-v7.txt')
+            ckpt_48px_path = os.path.join(model_48px_dir, 'ocr_ar_48px.ckpt')
+            
+            if os.path.exists(dict_48px_path) and os.path.exists(ckpt_48px_path):
+                with open(dict_48px_path, 'r', encoding='utf-8') as fp:
+                    dictionary_48px = [s[:-1] for s in fp.readlines()]
+                
+                self.color_model = OCR(dictionary_48px, 768)
+                sd = torch.load(ckpt_48px_path, map_location='cpu', weights_only=False)
+                
+                # Handle PyTorch Lightning checkpoint format
+                if 'state_dict' in sd:
+                    sd = sd['state_dict']
+                
+                # Remove 'model.' prefix from keys if present
+                cleaned_sd = {}
+                for k, v in sd.items():
+                    if k.startswith('model.'):
+                        cleaned_sd[k[6:]] = v
+                    else:
+                        cleaned_sd[k] = v
+                
+                self.color_model.load_state_dict(cleaned_sd)
+                self.color_model.eval()
+                
+                if device == 'cuda' or device == 'mps':
+                    self.color_model = self.color_model.to(device)
+                    self.use_gpu = True
+                else:
+                    self.use_gpu = False
+                
+                self.logger.info(f"48px color prediction model loaded for PaddleOCR")
+            else:
+                self.logger.warning(f"48px model not found at {dict_48px_path} or {ckpt_48px_path}")
+                self.color_model = None
+        except Exception as e:
+            self.logger.warning(f"Failed to load 48px color model: {e}")
+            self.color_model = None
+
         self.logger.info(f"PP-OCRv5 ONNX loaded: {model_config['onnx']} ({len(self.char_dict)} chars, device={device})")
 
     async def _unload(self):
@@ -129,6 +195,9 @@ class ModelPaddleOCR(OfflineOCR):
             del self.session
             self.session = None
         self.char_dict = None
+        if self.color_model is not None:
+            del self.color_model
+            self.color_model = None
 
     async def _infer(self, image: np.ndarray, textlines: List[Quadrilateral],
                      config: OcrConfig, verbose: bool = False) -> List[Quadrilateral]:
@@ -231,9 +300,9 @@ class ModelPaddleOCR(OfflineOCR):
                     textline.text = text
                     textline.prob = confidence
 
-                    # Estimate colors
+                    # Estimate colors using 48px model
                     region_idx = valid_indices.index(idx)
-                    self._estimate_colors(regions[region_idx], textline)
+                    self._estimate_colors_48px(regions[region_idx], textline)
 
                     self.logger.info(f'prob: {confidence:.3f} {text} fg: ({textline.fg_r}, {textline.fg_g}, {textline.fg_b}) bg: ({textline.bg_r}, {textline.bg_g}, {textline.bg_b})')
 
@@ -311,87 +380,96 @@ class ModelPaddleOCR(OfflineOCR):
 
         return text, confidence
 
-    def _get_mode_color(self, pixels: np.ndarray, channel: int) -> int:
-        """计算某个通道的众数颜色值"""
-        channel_values = pixels[:, channel]
-        # 使用 bincount 找到出现次数最多的值
-        counts = np.bincount(channel_values.astype(np.int32), minlength=256)
-        mode_value = np.argmax(counts)
-        return int(mode_value)
-
-    def _estimate_colors(self, region: np.ndarray, textline: Quadrilateral):
-        """Estimate foreground/background colors using improved Otsu thresholding"""
+    def _estimate_colors_48px(self, region: np.ndarray, textline: Quadrilateral):
+        """使用 48px 模型预测前景色和背景色"""
+        from ..utils.generic import AvgMeter
+        
         try:
-            if len(region.shape) == 3:
-                gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-            else:
-                gray = region
-
-            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-            white_pixels = np.sum(binary == 255)
-            black_pixels = np.sum(binary == 0)
-
-            if white_pixels < black_pixels:
-                fg_mask = binary == 255
-                bg_mask = binary == 0
-            else:
-                fg_mask = binary == 0
-                bg_mask = binary == 255
-
-            if len(region.shape) == 3 and region.shape[2] == 3:
-                # BGR to RGB
-                region_rgb = cv2.cvtColor(region, cv2.COLOR_BGR2RGB)
-
-                if np.any(fg_mask):
-                    fg_pixels = region_rgb[fg_mask]
-
-                    # 使用众数代替中位数，获取最常出现的颜色
-                    fg_r = self._get_mode_color(fg_pixels, 0)
-                    fg_g = self._get_mode_color(fg_pixels, 1)
-                    fg_b = self._get_mode_color(fg_pixels, 2)
-
-                    # 颜色量化：如果接近黑色（RGB < 40），强制设为纯黑
-                    if fg_r < 40 and fg_g < 40 and fg_b < 40:
-                        textline.fg_r = textline.fg_g = textline.fg_b = 0
-                    # 如果接近白色（RGB > 215），强制设为纯白
-                    elif fg_r > 215 and fg_g > 215 and fg_b > 215:
-                        textline.fg_r = textline.fg_g = textline.fg_b = 255
-                    else:
-                        textline.fg_r = fg_r
-                        textline.fg_g = fg_g
-                        textline.fg_b = fg_b
-                else:
-                    textline.fg_r = textline.fg_g = textline.fg_b = 0
-
-                if np.any(bg_mask):
-                    bg_pixels = region_rgb[bg_mask]
-
-                    # 使用众数代替中位数
-                    bg_r = self._get_mode_color(bg_pixels, 0)
-                    bg_g = self._get_mode_color(bg_pixels, 1)
-                    bg_b = self._get_mode_color(bg_pixels, 2)
-
-                    # 颜色量化：如果接近白色（RGB > 215），强制设为纯白
-                    if bg_r > 215 and bg_g > 215 and bg_b > 215:
-                        textline.bg_r = textline.bg_g = textline.bg_b = 255
-                    # 如果接近黑色（RGB < 40），强制设为纯黑
-                    elif bg_r < 40 and bg_g < 40 and bg_b < 40:
-                        textline.bg_r = textline.bg_g = textline.bg_b = 0
-                    else:
-                        textline.bg_r = bg_r
-                        textline.bg_g = bg_g
-                        textline.bg_b = bg_b
-                else:
-                    textline.bg_r = textline.bg_g = textline.bg_b = 255
-            else:
+            # 如果 48px 模型未加载，使用默认颜色
+            if self.color_model is None:
                 textline.fg_r = textline.fg_g = textline.fg_b = 0
                 textline.bg_r = textline.bg_g = textline.bg_b = 255
-
+                return
+            
+            # 将 BGR 转换为 RGB
+            if len(region.shape) == 3 and region.shape[2] == 3:
+                region_rgb = cv2.cvtColor(region, cv2.COLOR_BGR2RGB)
+            else:
+                region_rgb = region
+            
+            # 调整大小到 48px 高度
+            text_height = 48
+            h, w = region_rgb.shape[:2]
+            ratio = w / float(h)
+            new_w = int(round(ratio * text_height))
+            
+            if new_w == 0:
+                new_w = 1
+            
+            region_resized = cv2.resize(region_rgb, (new_w, text_height), interpolation=cv2.INTER_AREA)
+            
+            # 转换为 tensor
+            image_tensor = (torch.from_numpy(region_resized).float() - 127.5) / 127.5
+            image_tensor = einops.rearrange(image_tensor, 'H W C -> 1 C H W')
+            
+            # GPU 加速
+            if self.use_gpu:
+                image_tensor = image_tensor.to(self.device)
+            
+            # 使用 48px 模型推理
+            with torch.no_grad():
+                ret = self.color_model.infer_beam_batch_tensor(image_tensor, [new_w], beams_k=5, max_seq_length=255)
+            
+            if ret and len(ret) > 0:
+                pred_chars_index, prob, fg_pred, bg_pred, fg_ind_pred, bg_ind_pred = ret[0]
+                
+                # 计算颜色
+                has_fg = (fg_ind_pred[:, 1] > fg_ind_pred[:, 0])
+                has_bg = (bg_ind_pred[:, 1] > bg_ind_pred[:, 0])
+                
+                fr = AvgMeter()
+                fg = AvgMeter()
+                fb = AvgMeter()
+                br = AvgMeter()
+                bg = AvgMeter()
+                bb = AvgMeter()
+                
+                for chid, c_fg, c_bg, h_fg, h_bg in zip(pred_chars_index, fg_pred, bg_pred, has_fg, has_bg):
+                    ch = self.color_model.dictionary[chid]
+                    if ch == '<S>':
+                        continue
+                    if ch == '</S>':
+                        break
+                    if h_fg.item():
+                        fr(int(c_fg[0] * 255))
+                        fg(int(c_fg[1] * 255))
+                        fb(int(c_fg[2] * 255))
+                    if h_bg.item():
+                        br(int(c_bg[0] * 255))
+                        bg(int(c_bg[1] * 255))
+                        bb(int(c_bg[2] * 255))
+                    else:
+                        br(int(c_fg[0] * 255))
+                        bg(int(c_fg[1] * 255))
+                        bb(int(c_fg[2] * 255))
+                
+                textline.fg_r = min(max(int(fr()), 0), 255)
+                textline.fg_g = min(max(int(fg()), 0), 255)
+                textline.fg_b = min(max(int(fb()), 0), 255)
+                textline.bg_r = min(max(int(br()), 0), 255)
+                textline.bg_g = min(max(int(bg()), 0), 255)
+                textline.bg_b = min(max(int(bb()), 0), 255)
+            else:
+                # 如果推理失败，设置默认颜色
+                textline.fg_r = textline.fg_g = textline.fg_b = 0
+                textline.bg_r = textline.bg_g = textline.bg_b = 255
+                self.logger.debug("48px color prediction returned no results, using default colors")
+                
         except Exception as e:
+            # 如果出错，设置默认颜色
             textline.fg_r = textline.fg_g = textline.fg_b = 0
             textline.bg_r = textline.bg_g = textline.bg_b = 255
-            self.logger.debug(f"Color estimation failed: {e}")
+            self.logger.debug(f"48px color prediction failed: {e}, using default colors")
 
     def _get_rotate_crop_image(self, img: np.ndarray, points: np.ndarray) -> np.ndarray:
         """

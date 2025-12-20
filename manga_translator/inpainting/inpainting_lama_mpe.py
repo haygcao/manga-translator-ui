@@ -122,12 +122,18 @@ class LamaMPEInpainter(OfflineInpainter):
 
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/inpainting_lama_mpe.ckpt',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/inpainting_lama_mpe.ckpt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/inpainting_lama_mpe.ckpt',
+            ],
             'hash': 'd625aa1b3e0d0408acfd6928aa84f005867aa8dbb9162480346a4e20660786cc',
             'file': '.',
         },
         'onnx': {
-            'url': 'https://github.com/frederik-uni/manga-image-translator-rust/releases/download/lama_mpe/model.onnx',
+            'url': [
+                'https://github.com/frederik-uni/manga-image-translator-rust/releases/download/lama_mpe/model.onnx',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/lama_mpe_inpainting.onnx',
+            ],
             'hash': '4c372fdbb974d9b6ccce7a91eaa3aef65c68bf2178e9671a50f65b6eae590a66',
             'file': 'lamampe.onnx',
         },
@@ -435,12 +441,18 @@ class LamaLargeInpainter(LamaMPEInpainter):
     _MODEL_MAPPING = {
         'model': {
             # 使用 Hugging Face 镜像站（自动遵循 HF_ENDPOINT 环境变量）
-            'url': 'https://hf-mirror.com/dreMaz/AnimeMangaInpainting/resolve/main/lama_large_512px.ckpt',
+            'url': [
+                'https://hf-mirror.com/dreMaz/AnimeMangaInpainting/resolve/main/lama_large_512px.ckpt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/lama_large_512px.ckpt',
+            ],
             'hash': '11d30fbb3000fb2eceae318b75d9ced9229d99ae990a7f8b3ac35c8d31f2c935',
             'file': '.',
         },
         'onnx': {
-            'url': 'https://github.com/frederik-uni/manga-image-translator-rust/releases/download/lama_large_512px/model.onnx',
+            'url': [
+                'https://github.com/frederik-uni/manga-image-translator-rust/releases/download/lama_large_512px/model.onnx',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/lama_large_512px_inpainting.onnx',
+            ],
             'hash': '107c8306ac1d27c83638d6535846986542dfe2707f1498b1ac9be25b4a963864',
             'file': 'lamalarge.onnx',
         },

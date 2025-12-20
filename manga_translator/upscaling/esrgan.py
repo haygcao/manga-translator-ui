@@ -15,7 +15,10 @@ if platform == 'win32':
     esrgan_executable_path = os.path.join(esrgan_base_folder, 'realesrgan-ncnn-vulkan.exe')
     model_mapping = {
         'esrgan-win': {
-            'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip',
+            'url': [
+                'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/realesrgan-ncnn-vulkan-20220424-windows.zip',
+            ],
             'hash': 'abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d',
             'archive': {
                 'realesrgan-ncnn-vulkan.exe': esrgan_base_folder,
@@ -28,7 +31,10 @@ elif platform == 'darwin':
     esrgan_executable_path = os.path.join(esrgan_base_folder, 'realesrgan-ncnn-vulkan')
     model_mapping = {
         'esrgan-macos': {
-            'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip',
+            'url': [
+                'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/realesrgan-ncnn-vulkan-20220424-macos.zip',
+            ],
             'hash': 'e0ad05580abfeb25f8d8fb55aaf7bedf552c375b5b4d9bd3c8d59764d2cc333a',
             'archive': {
                 'realesrgan-ncnn-vulkan': esrgan_base_folder,
@@ -41,7 +47,10 @@ else:
     esrgan_executable_path = os.path.join(esrgan_base_folder, 'realesrgan-ncnn-vulkan')
     model_mapping = {
         'esrgan-linux': {
-            'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip',
+            'url': [
+                'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/realesrgan-ncnn-vulkan-20220424-ubuntu.zip',
+            ],
             'hash': 'e5aa6eb131234b87c0c51f82b89390f5e3e642b7b70f2b9bbe95b6a285a40c96',
             'archive': {
                 'realesrgan-ncnn-vulkan': esrgan_base_folder,

@@ -13,7 +13,10 @@ if platform == 'win32':
     waifu2x_executable_path = os.path.join(waifu2x_base_folder, 'waifu2x-ncnn-vulkan.exe')
     model_mapping = {
         'waifu2x-win': {
-            'url': 'https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20220728/waifu2x-ncnn-vulkan-20220728-windows.zip',
+            'url': [
+                'https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20220728/waifu2x-ncnn-vulkan-20220728-windows.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/waifu2x-ncnn-vulkan-20220728-windows.zip',
+            ],
             'hash': '3f60ba0b26763c602cb75178c2051bf0c46f3cc9d13975a052a902773988a34b',
             'archive': {
                 'waifu2x-ncnn-vulkan-20220728-windows': waifu2x_base_folder,
@@ -25,7 +28,10 @@ elif platform == 'darwin':
     waifu2x_executable_path = os.path.join(waifu2x_base_folder, 'waifu2x-ncnn-vulkan')
     model_mapping = {
         'waifu2x-macos': {
-            'url': 'https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20220728/waifu2x-ncnn-vulkan-20220728-macos.zip',
+            'url': [
+                'https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20220728/waifu2x-ncnn-vulkan-20220728-macos.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/waifu2x-ncnn-vulkan-20220728-macos.zip',
+            ],
             'hash': '9801839aa1a73a3a22e86d05f09a9b7412c289d1a03215e1b2713cc969690ba4',
             'archive': {
                 'waifu2x-ncnn-vulkan-20220728-macos': waifu2x_base_folder,
@@ -37,7 +43,10 @@ else:
     waifu2x_executable_path = os.path.join(waifu2x_base_folder, 'waifu2x-ncnn-vulkan')
     model_mapping = {
         'waifu2x-linux': {
-            'url': 'https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20220728/waifu2x-ncnn-vulkan-20220728-ubuntu.zip',
+            'url': [
+                'https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20220728/waifu2x-ncnn-vulkan-20220728-ubuntu.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/waifu2x-ncnn-vulkan-20220728-ubuntu.zip',
+            ],
             'hash': 'f2244412aeaf474d58e262f636737abca24ee24cd632d86eb8f0a4c4f9649aaa',
             'archive': {
                 'waifu2x-ncnn-vulkan-20220728-ubuntu': waifu2x_base_folder,

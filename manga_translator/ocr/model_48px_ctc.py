@@ -18,7 +18,10 @@ from ..utils.bubble import is_ignore
 class Model48pxCTCOCR(OfflineOCR):
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr-ctc.zip',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr-ctc.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ocr-ctc.zip',
+            ],
             'hash': 'fc61c52f7a811bc72c54f6be85df814c6b60f63585175db27cb94a08e0c30101',
             'archive': {
                 'ocr-ctc.ckpt': '.',
@@ -172,6 +175,9 @@ class Model48pxCTCOCR(OfflineOCR):
                     cur_region.update_font_colors(np.array([fr, fg, fb]), np.array([br, bg, bb]))
 
                 out_regions.append(cur_region)
+            
+            # ✅ 使用统一的清理方法清理 chunk 数据
+            self._cleanup_ocr_memory(region, images, texts, force_gpu_cleanup=True)
 
         if is_quadrilaterals:
             return out_regions

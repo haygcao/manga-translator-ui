@@ -512,7 +512,10 @@ def infer_params(state_dict):
 class ESRGANUpscalerPytorch(OfflineUpscaler):
     _MODEL_MAPPING = {
         '4x-UltraSharp': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/4xESRGAN.pth',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/4xESRGAN.pth',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/4xESRGAN.pth',
+            ],
             'hash': '545805CE2D861EE90972B5FA50B851F19EE4BB35DEDD2EB090BE1F7C935B6B00'.lower(),
         },
     }

@@ -19,7 +19,10 @@ from ..utils.bubble import is_ignore
 class Model32pxOCR(OfflineOCR):
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr.zip',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ocr.zip',
+            ],
             'hash': '47405638b96fa2540a5ee841a4cd792f25062c09d9458a973362d40785f95d7a',
             'archive': {
                 'ocr.ckpt': '.',
@@ -623,7 +626,7 @@ class OCR(nn.Module):
                 self.bg_b_pred(color_feats)
             result.append((cur_hypo.out_idx, cur_hypo.prob(), fg_r, fg_g, fg_b, bg_r, bg_g, bg_b))
         
-        # ✅ 清理beam search的大张量,防止内存泄漏
+        # ✅ 清理 beam search 的大张量（必须在函数内部直接删除局部变量）
         del memory, finished_hypos
         if 'input_mask' in locals():
             del input_mask
@@ -633,8 +636,11 @@ class OCR(nn.Module):
             del hypos_per_sample
         if 'feats' in locals():
             del feats
-        if img.device.type == 'cuda' and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        
+        # ✅ 清理 GPU 显存
+        if self.use_gpu:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         
         return result
 

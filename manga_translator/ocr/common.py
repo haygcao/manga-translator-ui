@@ -53,6 +53,10 @@ class CommonOCR(InfererModule):
 class OfflineOCR(CommonOCR, ModelWrapper):
     _MODEL_SUB_DIR = 'ocr'
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_gpu = False  # 子类应该在 _load 中设置这个标志
+
     async def _recognize(self, *args, **kwargs):
         result = await self.infer(*args, **kwargs)
         return result
@@ -60,3 +64,81 @@ class OfflineOCR(CommonOCR, ModelWrapper):
     @abstractmethod
     async def _infer(self, image: np.ndarray, textlines: List[Quadrilateral], args: OcrConfig, verbose: bool = False) -> List[Quadrilateral]:
         pass
+
+    def _cleanup_ocr_memory(self, *objects, force_gpu_cleanup: bool = False):
+        """
+        OCR 模块统一的内存清理方法
+        
+        Args:
+            *objects: 要删除的对象（变量名或对象引用）
+            force_gpu_cleanup: 是否强制清理 GPU 显存
+            
+        Example:
+            # 清理单个对象
+            self._cleanup_ocr_memory(region)
+            
+            # 清理多个对象
+            self._cleanup_ocr_memory(region, image_tensor, ret)
+            
+            # 清理并强制 GPU 清理
+            self._cleanup_ocr_memory(region, image_tensor, force_gpu_cleanup=True)
+        """
+        import gc
+        
+        # 删除传入的对象
+        for obj in objects:
+            try:
+                del obj
+            except:
+                pass
+        
+        # 如果使用 GPU 或强制清理，清理 GPU 显存
+        if force_gpu_cleanup or (hasattr(self, 'use_gpu') and self.use_gpu):
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except:
+                pass
+        
+        # 轻量级垃圾回收（不强制完整 GC，避免性能影响）
+        # 主进程会在批次结束时进行完整的 gc.collect()
+        
+    def _cleanup_batch_data(self, *data_lists, force_gpu_cleanup: bool = False):
+        """
+        清理批量数据（列表、字典等容器）
+        
+        Args:
+            *data_lists: 要清理的数据容器（list, dict 等）
+            force_gpu_cleanup: 是否强制清理 GPU 显存
+            
+        Example:
+            # 清理列表
+            self._cleanup_batch_data(region_imgs, quadrilaterals)
+            
+            # 清理字典
+            self._cleanup_batch_data(out_regions, texts)
+        """
+        import gc
+        
+        for data in data_lists:
+            if data is None:
+                continue
+                
+            try:
+                if isinstance(data, list):
+                    data.clear()
+                elif isinstance(data, dict):
+                    data.clear()
+                del data
+            except:
+                pass
+        
+        # GPU 清理
+        if force_gpu_cleanup or (hasattr(self, 'use_gpu') and self.use_gpu):
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except:
+                pass

@@ -128,16 +128,37 @@ class ModelWrapper(ABC):
         for map_key, mapping in self._MODEL_MAPPING.items():
             if 'url' not in mapping:
                 raise InvalidModelMappingException(self._key, map_key, 'Missing url property')
-            elif not re.search(r'^https?://', mapping['url']):
-                raise InvalidModelMappingException(self._key, map_key, 'Malformed url property: "%s"' % mapping['url'])
+            
+            # Support both single URL and list of URLs
+            urls = mapping['url'] if isinstance(mapping['url'], list) else [mapping['url']]
+            for url in urls:
+                if not re.search(r'^https?://', url):
+                    raise InvalidModelMappingException(self._key, map_key, 'Malformed url property: "%s"' % url)
+            
             if 'file' not in mapping and 'archive' not in mapping:
                 mapping['file'] = '.'
             elif 'file' in mapping and 'archive' in mapping:
                 raise InvalidModelMappingException(self._key, map_key, 'Properties file and archive are mutually exclusive')
 
-    async def _download_file(self, url: str, path: str):
-        print(f' -- Downloading: "{url}"')
-        download_url_with_progressbar(url, path)
+    async def _download_file(self, url, path):
+        """Download file with fallback URL support"""
+        urls = url if isinstance(url, list) else [url]
+        
+        for i, current_url in enumerate(urls):
+            try:
+                if i > 0:
+                    print(f' -- Trying fallback URL {i}: "{current_url}"')
+                else:
+                    print(f' -- Downloading: "{current_url}"')
+                download_url_with_progressbar(current_url, path)
+                return  # Success, exit
+            except Exception as e:
+                if i < len(urls) - 1:
+                    print(f' -- Download failed: {e}')
+                    print(f' -- Switching to fallback URL...')
+                else:
+                    # Last URL failed, re-raise exception
+                    raise
 
     async def _verify_file(self, sha256_pre_calculated: str, path: str):
         print(f' -- Verifying: "{path}"')
@@ -193,7 +214,9 @@ class ModelWrapper(ABC):
             if not os.path.basename(download_path):
                 os.makedirs(download_path, exist_ok=True)
             if os.path.basename(download_path) in ('', '.'):
-                download_path = os.path.join(download_path, get_filename_from_url(mapping['url'], map_key))
+                # Get URL (use first URL if it's a list)
+                url_for_filename = mapping['url'] if isinstance(mapping['url'], str) else mapping['url'][0]
+                download_path = os.path.join(download_path, get_filename_from_url(url_for_filename, map_key))
             if not is_archive:
                 download_path += '.part'
 
@@ -220,7 +243,19 @@ class ModelWrapper(ABC):
             if is_archive:
                 extracted_path = os.path.join(os.path.dirname(download_path), 'extracted')
                 print(f' -- Extracting files')
-                shutil.unpack_archive(download_path, extracted_path)
+                
+                # 处理 .7z 格式
+                if download_path.endswith('.7z'):
+                    try:
+                        import py7zr
+                    except ImportError:
+                        raise ImportError('py7zr is required for .7z archives. Install it with: pip install py7zr')
+                    
+                    os.makedirs(extracted_path, exist_ok=True)
+                    with py7zr.SevenZipFile(download_path, mode='r') as archive:
+                        archive.extractall(path=extracted_path)
+                else:
+                    shutil.unpack_archive(download_path, extracted_path)
 
                 def get_real_archive_files():
                     archive_files = []
@@ -292,7 +327,9 @@ class ModelWrapper(ABC):
         if 'file' in mapping:
             path = mapping['file']
             if os.path.basename(path) in ('.', ''):
-                path = os.path.join(path, get_filename_from_url(mapping['url'], map_key))
+                # Get URL (use first URL if it's a list)
+                url_for_filename = mapping['url'] if isinstance(mapping['url'], str) else mapping['url'][0]
+                path = os.path.join(path, get_filename_from_url(url_for_filename, map_key))
             if not os.path.exists(self._get_file_path(path)):
                 return False
 

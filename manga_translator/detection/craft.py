@@ -111,12 +111,18 @@ def copyStateDict(state_dict):
 class CRAFTDetector(OfflineDetector):
     _MODEL_MAPPING = {
         'refiner': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/craft_refiner_CTW1500.pth',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/craft_refiner_CTW1500.pth',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/craft_refiner_CTW1500.pth',
+            ],
             'hash': 'f7000cd3e9c76f2231b62b32182212203f73c08dfaa12bb16ffb529948a01399',
             'file': 'craft_refiner_CTW1500.pth',
         },
         'craft': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/craft_mlt_25k.pth',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/craft_mlt_25k.pth',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/craft_mlt_25k.pth',
+            ],
             'hash': '4a5efbfb48b4081100544e75e1e2b57f8de3d84f213004b14b85fd4b3748db17',
             'file': 'craft_mlt_25k.pth',
         }

@@ -11,7 +11,10 @@ from .inpainting_lama_mpe import LamaMPEInpainter
 class AotInpainter(LamaMPEInpainter):
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/inpainting.ckpt',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/inpainting.ckpt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/inpainting.ckpt',
+            ],
             'hash': '878d541c68648969bc1b042a6e997f3a58e49b6c07c5636ad55130736977149f',
             'file': '.',
         },

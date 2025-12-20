@@ -17,12 +17,18 @@ class MangaColorizationV2(OfflineColorizer):
     _MODEL_MAPPING = {
         # Models were in google drive so had to upload to github
         'generator': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/manga-colorization-v2-generator.zip',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/manga-colorization-v2-generator.zip',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/manga-colorization-v2-generator.zip',
+            ],
             'file': 'generator.zip',
             'hash': '087e6a0bc02770e732a52f33878b71a272a6123c9ac649e9b5bfb75e39e5c1d5',
         },
         'denoiser': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/manga-colorization-v2-net_rgb.pth',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/manga-colorization-v2-net_rgb.pth',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/manga-colorization-v2-net_rgb.pth',
+            ],
             'file': 'net_rgb.pth',
             'hash': '0fe98bfd2ac870b15f360661b1c4789eecefc6dc2e4462842a0dd15e149a0433',
         }

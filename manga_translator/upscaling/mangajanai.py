@@ -217,7 +217,8 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
 
         # Populate MODEL_MAPPING for download checks
         # We use the v1.9.5 release from hgmzhn/manga-translator-ui
-        base_url = 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.9.5/'
+        base_url_github = 'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.9.5/'
+        base_url_modelscope = 'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/'
         
         self._MODEL_MAPPING = {}
         
@@ -226,7 +227,10 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
             for m in self.model_candidates:
                 mapping = {
                     'file': m,
-                    'url': f'{base_url}{m}',
+                    'url': [
+                        f'{base_url_github}{m}',
+                        f'{base_url_modelscope}{m}',
+                    ],
                 }
                 if _KNOWN_MODELS.get(m):
                     mapping['hash'] = _KNOWN_MODELS[m]
@@ -241,7 +245,10 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
                 if m not in self._MODEL_MAPPING:
                     mapping = {
                         'file': m,
-                        'url': f'{base_url}{m}',
+                        'url': [
+                            f'{base_url_github}{m}',
+                            f'{base_url_modelscope}{m}',
+                        ],
                     }
                     if _KNOWN_MODELS.get(m):
                         mapping['hash'] = _KNOWN_MODELS[m]
@@ -249,7 +256,10 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
         else:
             mapping = {
                 'file': self.model_file,
-                'url': f'{base_url}{self.model_file}',
+                'url': [
+                    f'{base_url_github}{self.model_file}',
+                    f'{base_url_modelscope}{self.model_file}',
+                ],
             }
             if _KNOWN_MODELS.get(self.model_file):
                 mapping['hash'] = _KNOWN_MODELS[self.model_file]

@@ -106,7 +106,10 @@ class RealCUGANUpscaler(OfflineUpscaler):
         # Only add the selected model to _MODEL_MAPPING for downloading
         self._MODEL_MAPPING = {
             model_name: {
-                'url': f'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.8.0/{self.model_file}',
+                'url': [
+                    f'https://github.com/hgmzhn/manga-translator-ui/releases/download/v1.8.0/{self.model_file}',
+                    f'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/{self.model_file}',
+                ],
                 'hash': _MODEL_HASHES.get(self.model_file),
                 'file': self.model_file
             }

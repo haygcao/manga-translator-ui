@@ -28,7 +28,10 @@ def det_batch_forward_default(batch: np.ndarray, device: str):
 class DefaultDetector(OfflineDetector):
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/detect-20241225.ckpt',
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/detect-20241225.ckpt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/detect-20241225.ckpt',
+            ],
             'hash': '67ce1c4ed4793860f038c71189ba9630a7756f7683b1ee5afb69ca0687dc502e',
             'file': '.',
         }

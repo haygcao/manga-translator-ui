@@ -217,7 +217,16 @@ def get_filename_from_url(url: str, default: str = '') -> str:
         return m.group(1)
     return default
 
-def download_url_with_progressbar(url: str, path: str):
+def download_url_with_progressbar(url: str, path: str, min_speed_kbps: float = 100, speed_check_interval: int = 10):
+    """
+    下载文件并显示进度条
+    
+    Args:
+        url: 下载链接
+        path: 保存路径
+        min_speed_kbps: 最低速度要求（KB/s），低于此速度会抛出异常
+        speed_check_interval: 速度检查间隔（秒）
+    """
     if os.path.basename(path) in ('.', '') or os.path.isdir(path):
         new_filename = get_filename_from_url(url)
         if not new_filename:
@@ -251,14 +260,40 @@ def download_url_with_progressbar(url: str, path: str):
             with open(path, 'ab' if downloaded_size else 'wb') as f:
                 is_tty = sys.stdout.isatty()
                 downloaded_chunks = 0
+                
+                # 速度监控变量
+                import time
+                last_check_time = time.time()
+                last_check_size = downloaded_size
+                
                 for data in r.iter_content(chunk_size=chunk_size):
                     size = f.write(data)
                     bar.update(size)
+                    downloaded_size += size
 
                     # Fallback for non TTYs so output still shown
                     downloaded_chunks += 1
                     if not is_tty and downloaded_chunks % 1000 == 0:
                         print(bar)
+                    
+                    # 速度检查：每隔一定时间检查一次下载速度
+                    current_time = time.time()
+                    elapsed = current_time - last_check_time
+                    if elapsed >= speed_check_interval:
+                        downloaded_in_interval = downloaded_size - last_check_size
+                        speed_kbps = (downloaded_in_interval / 1024) / elapsed
+                        
+                        # 如果速度太慢，抛出异常以切换到备用链接
+                        if speed_kbps < min_speed_kbps:
+                            r.close()
+                            raise Exception(
+                                f'Download speed too slow: {speed_kbps:.1f} KB/s '
+                                f'(minimum required: {min_speed_kbps} KB/s)'
+                            )
+                        
+                        # 更新检查点
+                        last_check_time = current_time
+                        last_check_size = downloaded_size
         
         # 检查下载的文件大小，如果太小可能是下载失败（如404页面）
         final_size = os.path.getsize(path)
