@@ -75,22 +75,15 @@
 - **原始项目**：https://github.com/zyddnys/manga-image-translator
 - **问题反馈**：https://github.com/hgmzhn/manga-translator-ui/issues
 
-## ⚠️ 注意事项
+## 📝 模型来源与协议
 
-1. **版权声明**：本仓库托管的模型文件来自各开源项目，版权归原作者所有
-2. **仅供学习**：请勿将模型用于商业用途，仅供个人学习研究使用
-3. **自动下载**：软件会根据用户选择的功能自动下载所需模型，无需全部下载
-4. **存储空间**：建议预留至少 10GB 的磁盘空间用于存储模型文件
-
-## 📝 模型来源
-
-本仓库的模型文件来自以下开源项目：
+本仓库的模型文件来自以下开源项目，**各模型遵守其原始项目的开源协议**：
 
 - [manga-image-translator](https://github.com/zyddnys/manga-image-translator) - 主要模型来源
 - [manga-ocr](https://github.com/kha-white/manga-ocr) - 日文 OCR 模型
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 多语言 OCR 模型
 - [Real-CUGAN](https://github.com/bilibili/ailab) - B站 AI Lab 超分模型
-- [MangaJaNai](https://github.com/the-database/MangaJaNai) - 漫画专用超分模型
+- [MangaJaNai](https://github.com/the-database/MangaJaNai) - 漫画专用超分模型 **(CC BY-NC 4.0，仅限非商业用途)**
 - [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) - 通用超分模型
 - [waifu2x](https://github.com/nihui/waifu2x-ncnn-vulkan) - 动漫图像超分模型
 

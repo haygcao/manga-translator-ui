@@ -308,3 +308,13 @@ python -m manga_translator --help
 ## 📝 许可证
 
 本项目基于 GPL-3.0 许可证开源。
+
+### 模型协议声明
+
+本项目代码采用 **GPL-3.0 协议**。
+
+本项目支持使用 MangaJaNai/IllustrationJaNai 模型进行图像超分辨率处理。这些模型权重文件采用 **CC BY-NC 4.0 协议**（署名-非商业性使用 4.0 国际），仅供非商业用途使用。
+
+- **模型来源**：[MangaJaNai](https://github.com/the-database/MangaJaNai)
+- **模型协议**：CC BY-NC 4.0
+- **使用限制**：仅限非商业用途
