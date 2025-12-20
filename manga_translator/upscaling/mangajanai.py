@@ -40,12 +40,17 @@ def is_color_image(image: Image.Image, threshold: float = 0.1) -> bool:
     通过计算图片的色彩饱和度来判断
     
     Args:
-        image: PIL Image
+        image: PIL Image 或 numpy array
         threshold: 饱和度阈值，超过此值认为是彩色图片
     
     Returns:
         True 如果是彩色图片，False 如果是黑白/灰度图片
     """
+    # 如果是 numpy array，转换为 PIL Image
+    if isinstance(image, np.ndarray):
+        from PIL import Image
+        image = Image.fromarray(image)
+    
     if image.mode == 'L':
         return False
     
