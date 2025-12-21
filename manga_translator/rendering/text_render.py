@@ -1424,6 +1424,8 @@ def put_text_horizontal(font_size: int, text: str, width: int, height: int, alig
                         reversed_direction: bool, fg: Tuple[int, int, int], bg: Tuple[int, int, int],
                         lang: str = 'en_US', hyphenate: bool = True, line_spacing: int = 0, config=None, region_count: int = 1):
 
+    logger.debug(f"[RENDER] put_text_horizontal开始，文本长度: {len(text)}, font_size: {font_size}, width: {width}, height: {height}")
+    
     # 应用最大字体限制
     if config and hasattr(config.render, 'max_font_size') and config.render.max_font_size > 0:
         font_size = min(font_size, config.render.max_font_size)
@@ -1469,10 +1471,14 @@ def put_text_horizontal(font_size: int, text: str, width: int, height: int, alig
     logger.debug(f"[RENDER DEBUG] text='{text[:50]}...', lang={lang}, layout_mode={layout_mode}, is_cjk={is_cjk_lang(lang)}")
 
     if layout_mode != 'default' and is_cjk_lang(lang):
+        logger.debug(f"[RENDER] 调用calc_horizontal_cjk，font_size: {font_size}, max_width: {width}")
         line_text_list, line_width_list = calc_horizontal_cjk(font_size, text, width)
+        logger.debug(f"[RENDER] calc_horizontal_cjk完成，行数: {len(line_text_list)}")
         logger.debug(f"[RENDER DEBUG] Using calc_horizontal_cjk, lines={len(line_text_list)}")
     else:
+        logger.debug(f"[RENDER] 调用calc_horizontal，font_size: {font_size}, max_width: {width}, max_height: {height}")
         line_text_list, line_width_list = calc_horizontal(font_size, text, width, height, lang, hyphenate)
+        logger.debug(f"[RENDER] calc_horizontal完成，行数: {len(line_text_list)}")
         logger.debug(f"[RENDER DEBUG] Using calc_horizontal, lines={len(line_text_list)}")
 
     canvas_w = max(line_width_list) + (font_size + bg_size) * 2
