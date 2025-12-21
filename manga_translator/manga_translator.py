@@ -98,6 +98,40 @@ def apply_dictionary(text, dictionary):
     for pattern, value, line_number in dictionary:
         original_text = text  
         text = pattern.sub(value, text)
+
+def parse_upscale_ratio(upscale_ratio) -> float:
+    """
+    解析超分倍率，支持多种格式：
+    - 数字: 2, 3, 4
+    - 字符串数字: "2", "3", "4"
+    - mangajanai格式: "x2", "x4", "DAT2 x4"
+    - realcugan格式: "2x-conservative", "3x-denoise1x" 等
+    
+    返回浮点数倍率，如果无法解析则返回 0
+    """
+    if not upscale_ratio:
+        return 0
+    
+    try:
+        if isinstance(upscale_ratio, (int, float)):
+            return float(upscale_ratio)
+        
+        if isinstance(upscale_ratio, str):
+            # 移除空格并转小写
+            upscale_ratio = upscale_ratio.strip().lower()
+            # 优先匹配开头的数字（如 "2x-conservative" 中的 2）
+            match = re.match(r'^(\d+)x', upscale_ratio)
+            if not match:
+                # 如果没匹配到，尝试匹配任意位置的数字（如 "x2" 或 "DAT2 x4"）
+                match = re.search(r'(\d+)', upscale_ratio)
+            
+            if match:
+                return float(match.group(1))
+        
+        return 0
+    except (ValueError, TypeError):
+        logger.warning(f"无法解析超分倍率: {upscale_ratio}, 将忽略")
+        return 0
         if text != original_text:  
             logger.info(f'Line {line_number}: Replaced "{original_text}" with "{text}" using pattern "{pattern.pattern}" and value "{value}"')
     return text
@@ -2695,16 +2729,17 @@ class MangaTranslator:
                         
                         # 如果执行了超分，需要将mask和坐标也超分
                         if config.upscale.upscale_ratio:
-                            upscale_ratio = config.upscale.upscale_ratio
-                            if ctx.mask_raw is not None:
-                                ctx.mask_raw = cv2.resize(ctx.mask_raw, (ctx.img_rgb.shape[1], ctx.img_rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
-                            if ctx.mask is not None:
-                                ctx.mask = cv2.resize(ctx.mask, (ctx.img_rgb.shape[1], ctx.img_rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
-                            
-                            for region in ctx.text_regions:
-                                region.lines = region.lines * upscale_ratio
-                                if hasattr(region, 'font_size') and region.font_size:
-                                    region.font_size = int(region.font_size * upscale_ratio)
+                            upscale_ratio = parse_upscale_ratio(config.upscale.upscale_ratio)
+                            if upscale_ratio > 0:
+                                if ctx.mask_raw is not None:
+                                    ctx.mask_raw = cv2.resize(ctx.mask_raw, (ctx.img_rgb.shape[1], ctx.img_rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
+                                if ctx.mask is not None:
+                                    ctx.mask = cv2.resize(ctx.mask, (ctx.img_rgb.shape[1], ctx.img_rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
+                                
+                                for region in ctx.text_regions:
+                                    region.lines = region.lines * upscale_ratio
+                                    if hasattr(region, 'font_size') and region.font_size:
+                                        region.font_size = int(region.font_size * upscale_ratio)
                         
                         # 如果没有文本区域，跳过mask refinement、inpainting和rendering，直接返回原图
                         if not ctx.text_regions:
