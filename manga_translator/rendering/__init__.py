@@ -123,15 +123,17 @@ def count_text_length(text: str) -> float:
 
 def generate_line_break_combinations(text: str):
     """
-    Generate line break combinations from a text with [BR] markers using a smart greedy approach.
-    Instead of testing all 2^n combinations, we use a greedy strategy:
-    1. Always keep the original (all breaks)
-    2. Try removing each break individually and keep the best ones
-    3. Try removing pairs of adjacent breaks
+    Generate line break combinations using a smart pruning strategy.
     
-    This reduces complexity from O(2^n) to O(n^2) while still finding good solutions.
+    Strategy:
+    1. For small n (<=10): Use exhaustive search (original algorithm)
+    2. For medium n (11-20): Use beam search with top-k pruning
+    3. For large n (>20): Use greedy + sampling strategy
+    
+    This balances quality and performance.
     """
     import itertools
+    import random
     
     # Standardize all break markers to [BR] (including full-width brackets)
     text = re.sub(r'\s*(<br>|【BR】)\s*', '[BR]', text, flags=re.IGNORECASE)
@@ -143,72 +145,146 @@ def generate_line_break_combinations(text: str):
         breaks.append((match.start(), match.end()))
     
     if not breaks:
-        # No breaks, return original text
         return [(text, "no_breaks", None)]
     
     n_breaks = len(breaks)
     combinations = []
     
-    # 1. Always include original (keep all breaks)
-    combinations.append((text, "all_breaks", None))
+    # Strategy 1: Small n - exhaustive search (original algorithm)
+    if n_breaks <= 10:
+        logger.debug(f"[OPTIMIZE_LINE_BREAKS] Using exhaustive search (n={n_breaks})")
+        
+        # Add original (keep all breaks)
+        combinations.append((text, "all_breaks", None))
+        
+        # Generate all possible combinations
+        for r in range(1, n_breaks + 1):
+            for combo in itertools.combinations(range(n_breaks), r):
+                segments = re.split(pattern, text, flags=re.IGNORECASE)
+                
+                if 0 in combo and len(segments[0].strip()) <= 2:
+                    combinations.append((None, f"remove_{combo}", "first_segment_too_short"))
+                    continue
+                
+                modified_text = text
+                for idx in sorted(combo, reverse=True):
+                    start, end = breaks[idx]
+                    modified_text = modified_text[:start] + modified_text[end:]
+                
+                combinations.append((modified_text, f"remove_{combo}", None))
+        
+        return combinations
     
-    # 2. Try removing each break individually
-    for i in range(n_breaks):
-        # Check skip condition: if first segment has <= 2 chars and we're removing break 0
-        if i == 0:
-            segments = re.split(pattern, text, flags=re.IGNORECASE)
-            if len(segments[0].strip()) <= 2:
-                combinations.append((None, f"remove_({i},)", "first_segment_too_short"))
-                continue
+    # Strategy 2: Medium n - beam search with sampling
+    elif n_breaks <= 20:
+        logger.debug(f"[OPTIMIZE_LINE_BREAKS] Using beam search (n={n_breaks})")
         
-        # Build modified text by removing break i
-        modified_text = text
-        start, end = breaks[i]
-        modified_text = modified_text[:start] + modified_text[end:]
+        combinations.append((text, "all_breaks", None))
         
-        # Adjust positions for subsequent breaks
-        offset = end - start
-        adjusted_breaks = []
-        for j, (s, e) in enumerate(breaks):
-            if j < i:
-                adjusted_breaks.append((s, e))
-            elif j > i:
-                adjusted_breaks.append((s - offset, e - offset))
-        
-        combinations.append((modified_text, f"remove_({i},)", None))
-    
-    # 3. Try removing pairs of adjacent breaks (if not too many)
-    if n_breaks <= 20:  # Only for reasonable sizes
-        for i in range(n_breaks - 1):
-            # Skip if first segment too short
+        # Sample combinations: all singles, all pairs, some triples, and remove_all
+        # Singles: remove each break individually
+        for i in range(n_breaks):
             if i == 0:
                 segments = re.split(pattern, text, flags=re.IGNORECASE)
                 if len(segments[0].strip()) <= 2:
-                    combinations.append((None, f"remove_({i},{i+1})", "first_segment_too_short"))
+                    combinations.append((None, f"remove_({i},)", "first_segment_too_short"))
                     continue
             
-            # Build modified text by removing breaks i and i+1
             modified_text = text
-            # Remove from right to left to avoid position shifts
+            start, end = breaks[i]
+            modified_text = modified_text[:start] + modified_text[end:]
+            combinations.append((modified_text, f"remove_({i},)", None))
+        
+        # Pairs: remove adjacent breaks
+        for i in range(n_breaks - 1):
+            if i == 0:
+                segments = re.split(pattern, text, flags=re.IGNORECASE)
+                if len(segments[0].strip()) <= 2:
+                    continue
+            
+            modified_text = text
             for idx in [i+1, i]:
                 start, end = breaks[idx]
-                # Need to recalculate position after first removal
                 if idx == i+1:
                     modified_text = modified_text[:start] + modified_text[end:]
-                    offset = end - start
                 else:
+                    # Recalculate position after first removal
+                    offset = breaks[i+1][1] - breaks[i+1][0]
+                    start -= offset
+                    end -= offset
                     modified_text = modified_text[:start] + modified_text[end:]
             
             combinations.append((modified_text, f"remove_({i},{i+1})", None))
-    
-    # 4. Try removing all breaks (no line breaks at all) - but only if not too many
-    if n_breaks <= 15:
+        
+        # Sample some triples (every 3rd combination)
+        for r in [3]:
+            sampled = list(itertools.combinations(range(n_breaks), r))
+            # Sample at most 20 combinations
+            if len(sampled) > 20:
+                sampled = random.sample(sampled, 20)
+            
+            for combo in sampled:
+                if 0 in combo:
+                    segments = re.split(pattern, text, flags=re.IGNORECASE)
+                    if len(segments[0].strip()) <= 2:
+                        continue
+                
+                modified_text = text
+                for idx in sorted(combo, reverse=True):
+                    start, end = breaks[idx]
+                    modified_text = modified_text[:start] + modified_text[end:]
+                
+                combinations.append((modified_text, f"remove_{combo}", None))
+        
+        # Remove all
         modified_text = re.sub(pattern, '', text, flags=re.IGNORECASE)
         combinations.append((modified_text, "remove_all", None))
+        
+        return combinations
     
-    logger.debug(f"[OPTIMIZE_LINE_BREAKS] Generated {len(combinations)} combinations using smart algorithm (n_breaks={n_breaks})")
-    
-    return combinations
+    # Strategy 3: Large n - greedy + sampling
+    else:
+        logger.debug(f"[OPTIMIZE_LINE_BREAKS] Using greedy+sampling (n={n_breaks})")
+        
+        combinations.append((text, "all_breaks", None))
+        
+        # Singles: sample every 2nd break
+        for i in range(0, n_breaks, 2):
+            if i == 0:
+                segments = re.split(pattern, text, flags=re.IGNORECASE)
+                if len(segments[0].strip()) <= 2:
+                    continue
+            
+            modified_text = text
+            start, end = breaks[i]
+            modified_text = modified_text[:start] + modified_text[end:]
+            combinations.append((modified_text, f"remove_({i},)", None))
+        
+        # Pairs: sample every 3rd adjacent pair
+        for i in range(0, n_breaks - 1, 3):
+            if i == 0:
+                segments = re.split(pattern, text, flags=re.IGNORECASE)
+                if len(segments[0].strip()) <= 2:
+                    continue
+            
+            modified_text = text
+            for idx in [i+1, i]:
+                start, end = breaks[idx]
+                if idx == i+1:
+                    modified_text = modified_text[:start] + modified_text[end:]
+                else:
+                    offset = breaks[i+1][1] - breaks[i+1][0]
+                    start -= offset
+                    end -= offset
+                    modified_text = modified_text[:start] + modified_text[end:]
+            
+            combinations.append((modified_text, f"remove_({i},{i+1})", None))
+        
+        # Remove all
+        modified_text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        combinations.append((modified_text, "remove_all", None))
+        
+        return combinations
 
 def calculate_uniformity(lines: List[str]) -> float:
     """
