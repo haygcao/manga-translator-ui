@@ -64,6 +64,9 @@ class ConcurrentPipeline:
         # 控制标志
         self.stop_workers = False
         self.detection_ocr_done = False  # 检测+OCR是否全部完成
+        self.has_critical_error = False  # 是否发生严重错误
+        self.critical_error_msg = None   # 严重错误信息
+        self.critical_error_exception = None  # 原始异常对象
         
         # 统计信息
         self.start_time = None
@@ -88,7 +91,9 @@ class ConcurrentPipeline:
         from PIL import Image
         
         for idx, (file_path, config) in enumerate(zip(file_paths, configs)):
+            # 检查是否需要停止（其他线程出错）
             if self.stop_workers:
+                logger.warning(f"[检测+OCR] 收到停止信号，已处理 {idx}/{len(file_paths)} 张图片")
                 break
             
             try:
@@ -193,7 +198,12 @@ class ConcurrentPipeline:
                 
             except Exception as e:
                 logger.error(f"[检测+OCR] 失败: {e}")
-                logger.error(traceback.format_exc())
+                # 标记严重错误，停止所有线程
+                self.has_critical_error = True
+                self.critical_error_msg = f"检测+OCR失败: {e}"
+                self.critical_error_exception = e  # 保存原始异常
+                self.stop_workers = True
+                break
         
         # 标记检测+OCR全部完成
         self.detection_ocr_done = True
@@ -214,6 +224,11 @@ class ConcurrentPipeline:
         
         while not self.stop_workers:
             try:
+                # 如果发生严重错误，立即退出
+                if self.has_critical_error:
+                    logger.warning(f"[翻译] 检测到严重错误，停止翻译 (已完成 {self.stats['translation']}/{self.total_images})")
+                    break
+                
                 # 尝试从队列获取图片（非阻塞检查）
                 try:
                     image_name, config = await asyncio.wait_for(self.translation_queue.get(), timeout=0.1)
@@ -228,6 +243,10 @@ class ConcurrentPipeline:
                     if not batch:
                         # 批次为空，检查是否所有工作都完成了
                         if self.detection_ocr_done and self.translation_queue.empty():
+                            break
+                        # 检查是否发生错误
+                        if self.has_critical_error:
+                            logger.warning(f"[翻译] 检测到严重错误，停止等待")
                             break
                         continue
                 
@@ -265,10 +284,15 @@ class ConcurrentPipeline:
                 
             except Exception as e:
                 logger.error(f"[翻译线程] 错误: {e}")
-                logger.error(traceback.format_exc())
+                # 标记严重错误，停止所有线程
+                self.has_critical_error = True
+                self.critical_error_msg = f"翻译线程错误: {e}"
+                self.critical_error_exception = e
+                self.stop_workers = True
+                break
         
         # 处理剩余批次
-        if batch:
+        if batch and not self.stop_workers:
             logger.info(f"[翻译] 翻译剩余 {len(batch)} 张图片")
             await self._process_translation_batch(batch)
         
@@ -322,7 +346,11 @@ class ConcurrentPipeline:
             
         except Exception as e:
             logger.error(f"[翻译] 批次失败: {e}")
-            logger.error(traceback.format_exc())
+            # 标记严重错误，停止所有线程
+            self.has_critical_error = True
+            self.critical_error_msg = f"翻译批次失败: {e}"
+            self.critical_error_exception = e
+            self.stop_workers = True
             # 标记所有上下文为失败
             for ctx, config in batch:
                 ctx.translation_error = str(e)
@@ -344,10 +372,19 @@ class ConcurrentPipeline:
         
         while not self.stop_workers:
             try:
+                # 如果发生严重错误，立即退出
+                if self.has_critical_error:
+                    logger.warning(f"[修复] 检测到严重错误，停止修复 (已完成 {inpaint_count}/{self.total_images})")
+                    break
+                
                 # 尝试获取任务（超时1秒）
                 try:
                     image_name, config = await asyncio.wait_for(self.inpaint_queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
+                    # 检查是否发生错误
+                    if self.has_critical_error:
+                        logger.warning(f"[修复] 检测到严重错误，停止等待")
+                        break
                     continue
                 
                 # ✅ 从base_contexts获取ctx
@@ -414,7 +451,12 @@ class ConcurrentPipeline:
                 
             except Exception as e:
                 logger.error(f"[修复线程] 错误: {e}")
-                logger.error(traceback.format_exc())
+                # 标记严重错误，停止所有线程
+                self.has_critical_error = True
+                self.critical_error_msg = f"修复线程错误: {e}"
+                self.critical_error_exception = e
+                self.stop_workers = True
+                break
         
         logger.info("[修复线程] 停止")
     
@@ -433,12 +475,21 @@ class ConcurrentPipeline:
         
         while not self.stop_workers or rendered_count < self.total_images:
             try:
+                # 如果发生严重错误，立即退出
+                if self.has_critical_error:
+                    logger.warning(f"[渲染] 检测到严重错误，停止渲染 (已完成 {rendered_count}/{self.total_images})")
+                    break
+                
                 # 尝试获取任务（超时1秒）
                 try:
                     ctx, config = await asyncio.wait_for(self.render_queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     # 超时，检查是否还有任务
                     if rendered_count >= self.total_images:
+                        break
+                    # 检查是否发生错误
+                    if self.has_critical_error:
+                        logger.warning(f"[渲染] 检测到严重错误，停止等待")
                         break
                     continue
                 
@@ -566,7 +617,12 @@ class ConcurrentPipeline:
                 
             except Exception as e:
                 logger.error(f"[渲染线程] 错误: {e}")
-                logger.error(traceback.format_exc())
+                # 标记严重错误，停止所有线程
+                self.has_critical_error = True
+                self.critical_error_msg = f"渲染线程错误: {e}"
+                self.critical_error_exception = e
+                self.stop_workers = True
+                break
         
         logger.info("[渲染线程] 停止")
     
@@ -618,6 +674,16 @@ class ConcurrentPipeline:
             self.stop_workers = True
             # 关闭线程池
             self.executor.shutdown(wait=True)
+        
+        # 检查是否有严重错误
+        if self.has_critical_error:
+            error_msg = self.critical_error_msg or "未知错误"
+            logger.error(f"[并发流水线] 处理失败: {error_msg}")
+            # 重新抛出原始异常（保留完整的异常链）
+            if self.critical_error_exception:
+                raise self.critical_error_exception
+            else:
+                raise RuntimeError(f"并发流水线处理失败: {error_msg}")
         
         # 统计
         elapsed = (datetime.now(timezone.utc) - self.start_time).total_seconds()

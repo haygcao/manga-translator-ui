@@ -2219,9 +2219,7 @@ class TranslationWorker(QObject):
             for line in lines:
                 # 只保留API错误信息行（包含详细的错误内容）
                 if line.strip() and any(keyword in line for keyword in ['BadRequest', 'Error code:', "'error':", "'message':", "{'error':"]):
-                    # 如果这是详细的错误信息行，保留它
-                    if 'Error code:' in line or "'error':" in line or "{'error':" in line:
-                        api_error_lines.append(line.strip())
+                    api_error_lines.append(line.strip())
             
             if api_error_lines:
                 friendly_msg += '\n'.join(api_error_lines) + "\n"
@@ -2717,7 +2715,6 @@ class TranslationWorker(QObject):
             try:
                 from manga_translator.translators import translator_cache
                 translator_cache.clear()
-                self.log_received.emit("--- [CLEANUP] Cleared translator cache")
             except Exception as e:
                 self.log_received.emit(f"--- [CLEANUP] Warning: Failed to clear cache: {e}")
 
@@ -2762,7 +2759,7 @@ class TranslationWorker(QObject):
             
             self._current_task = loop.create_task(self._do_processing())
             loop.run_until_complete(self._current_task)
-            self.log_received.emit("--- 任务处理完成")
+            # 任务处理完成，不输出日志
 
         except asyncio.CancelledError:
             self.log_received.emit("--- 任务已取消")
@@ -2791,4 +2788,4 @@ class TranslationWorker(QObject):
                 finally:
                     loop.close()
                     asyncio.set_event_loop(None)
-                    self.log_received.emit("--- 清理完成")
+                    # 清理完成，不输出日志
