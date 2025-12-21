@@ -304,7 +304,8 @@ class EditorLogic(QObject):
                     source = t_map[norm_path]
                     if os.path.exists(source):
                         return source, file_path
-        except Exception: pass
+        except Exception:
+            pass
         
         # Case 2: The given file is a source file (a value in a map)
         try:
@@ -322,7 +323,8 @@ class EditorLogic(QObject):
 
                     if t_map.get(norm_trans) == norm_path:
                         return file_path, trans_file
-        except Exception: pass
+        except Exception:
+            pass
 
         # Case 3: No pair found, it's a source file with no known translation.
         return file_path, None

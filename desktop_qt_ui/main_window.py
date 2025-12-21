@@ -452,14 +452,15 @@ class MainWindow(QMainWindow):
                         translated_folder_map[translated_file] = output_folder
 
             # 判断是否从翻译完成进入（有 files_to_load 参数）
-            # 如果是，文件列表应该显示翻译后的文件，而不是源文件
             if files_to_load and len(files_to_load) > 0:
-                # 从翻译完成进入：显示翻译后的文件列表
+                # 从翻译完成进入：直接使用翻译后的文件列表
+                # 直接传递翻译后的文件，让编辑器像手动添加一样处理
                 self.editor_logic.load_file_lists(
-                    source_files=translated_files,  # 显示翻译后的文件
-                    translated_files=translated_files,
-                    folder_tree=folder_tree
+                    source_files=translated_files,  # 直接使用翻译后的文件
+                    translated_files=[],  # 清空翻译文件列表
+                    folder_tree=None  # 不使用树结构，让编辑器自己构建
                 )
+                
                 # 加载第一个翻译后的文件
                 self.editor_logic.load_image_into_editor(files_to_load[0])
             else:

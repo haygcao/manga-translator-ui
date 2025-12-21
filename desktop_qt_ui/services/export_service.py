@@ -157,6 +157,7 @@ class ExportService:
                                      error_callback: Optional[callable] = None):
         """在后台线程中执行后端渲染导出"""
         import gc
+        import os
         try:
             if progress_callback:
                 progress_callback("准备导出环境...")
@@ -212,13 +213,14 @@ class ExportService:
                             final_image.save(temp_output_path, format='PNG')
 
                         # 确保文件已写入磁盘
-                        import os
                         if not os.path.exists(temp_output_path):
                             raise Exception(f"临时文件未成功创建: {temp_output_path}")
 
                         # 释放 final_image（只在保存成功后）
-                        if not final_image.closed:
+                        try:
                             final_image.close()
+                        except:
+                            pass
 
                         # If save is successful, rename the temp file to the final output path
                         os.replace(temp_output_path, output_path)
@@ -226,9 +228,12 @@ class ExportService:
 
                     except Exception as e:
                         self.logger.error(f"Failed to save image to {output_path}: {e}")
-                        # 确保释放图像（但不要重复关闭已关闭的图像）
-                        if 'final_image' in locals() and final_image and not final_image.closed:
-                            final_image.close()
+                        # 确保释放图像
+                        try:
+                            if 'final_image' in locals() and final_image:
+                                final_image.close()
+                        except:
+                            pass
                         # Re-raise the exception to be caught by the main try-except block
                         raise
                     finally:
