@@ -421,7 +421,8 @@ class ConfigService(QObject):
         try:
             if os.path.exists(self.env_path):
                 return dotenv_values(self.env_path)
-            return {}
+            else:
+                return {}
         except Exception as e:
             self.logger.error(f"加载环境变量失败: {e}")
             return {}
@@ -485,6 +486,8 @@ class ConfigService(QObject):
             return True
         except Exception as e:
             self.logger.error(f"批量保存环境变量失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return False
     
     def validate_translator_env_vars(self, translator_name: str) -> Dict[str, bool]:

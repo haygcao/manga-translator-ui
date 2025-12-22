@@ -197,10 +197,17 @@ class ConcurrentPipeline:
                     logger.debug(f"[检测+OCR] {ctx.image_name} 无文本，直接进入渲染队列")
                 
             except Exception as e:
-                logger.error(f"[检测+OCR] 失败: {e}")
+                # 安全地获取异常信息
+                try:
+                    error_msg = str(e)
+                except Exception:
+                    error_msg = f"无法获取异常信息 (异常类型: {type(e).__name__})"
+                
+                logger.error(f"[检测+OCR] 失败: {error_msg}")
+                logger.error(traceback.format_exc())
                 # 标记严重错误，停止所有线程
                 self.has_critical_error = True
-                self.critical_error_msg = f"检测+OCR失败: {e}"
+                self.critical_error_msg = f"检测+OCR失败: {error_msg}"
                 self.critical_error_exception = e  # 保存原始异常
                 self.stop_workers = True
                 break
@@ -283,10 +290,17 @@ class ConcurrentPipeline:
                     batch = []
                 
             except Exception as e:
-                logger.error(f"[翻译线程] 错误: {e}")
+                # 安全地获取异常信息
+                try:
+                    error_msg = str(e)
+                except Exception:
+                    error_msg = f"无法获取异常信息 (异常类型: {type(e).__name__})"
+                
+                logger.error(f"[翻译线程] 错误: {error_msg}")
+                logger.error(traceback.format_exc())
                 # 标记严重错误，停止所有线程
                 self.has_critical_error = True
-                self.critical_error_msg = f"翻译线程错误: {e}"
+                self.critical_error_msg = f"翻译线程错误: {error_msg}"
                 self.critical_error_exception = e
                 self.stop_workers = True
                 break
@@ -345,15 +359,25 @@ class ConcurrentPipeline:
                 logger.debug(f"[翻译] 批次中 0/{len(batch)} 张图片完成修复，等待修复完成后加入渲染队列")
             
         except Exception as e:
-            logger.error(f"[翻译] 批次失败: {e}")
+            # 安全地获取异常信息
+            try:
+                error_msg = str(e)
+            except Exception as str_error:
+                error_msg = f"无法获取异常信息 (转换错误: {type(str_error).__name__})"
+                logger.error(f"[翻译] 异常转换失败: {str_error}")
+            
+            logger.error(f"[翻译] 批次失败: {error_msg}")
+            logger.error(f"[翻译] 异常类型: {type(e).__name__}")
+            logger.error(traceback.format_exc())
+            
             # 标记严重错误，停止所有线程
             self.has_critical_error = True
-            self.critical_error_msg = f"翻译批次失败: {e}"
+            self.critical_error_msg = f"翻译批次失败: {error_msg}"
             self.critical_error_exception = e
             self.stop_workers = True
             # 标记所有上下文为失败
             for ctx, config in batch:
-                ctx.translation_error = str(e)
+                ctx.translation_error = error_msg
                 # 设置为空列表而不是True，避免渲染阶段类型错误
                 self.translation_done[ctx.image_name] = []
                 ctx.text_regions = []
@@ -450,10 +474,17 @@ class ConcurrentPipeline:
                         break
                 
             except Exception as e:
-                logger.error(f"[修复线程] 错误: {e}")
+                # 安全地获取异常信息
+                try:
+                    error_msg = str(e)
+                except Exception:
+                    error_msg = f"无法获取异常信息 (异常类型: {type(e).__name__})"
+                
+                logger.error(f"[修复线程] 错误: {error_msg}")
+                logger.error(traceback.format_exc())
                 # 标记严重错误，停止所有线程
                 self.has_critical_error = True
-                self.critical_error_msg = f"修复线程错误: {e}"
+                self.critical_error_msg = f"修复线程错误: {error_msg}"
                 self.critical_error_exception = e
                 self.stop_workers = True
                 break
@@ -563,6 +594,11 @@ class ConcurrentPipeline:
                             final_output_path = self.translator._calculate_output_path(ctx.image_name, save_info)
                             self.translator._save_translated_image(ctx.result, final_output_path, ctx.image_name, overwrite, "CONCURRENT")
                             
+                            # ✅ 保存修复后的图片到inpainted目录（与批量模式保持一致）
+                            # 与JSON保存逻辑保持一致：save_text或text_output_file任一满足即保存
+                            if (self.translator.save_text or self.translator.text_output_file) and hasattr(ctx, 'image_name') and ctx.image_name and ctx.img_inpainted is not None:
+                                self.translator._save_inpainted_image(ctx.image_name, ctx.img_inpainted)
+                            
                             # 保存JSON（如果需要）
                             if (self.translator.save_text or self.translator.text_output_file) and ctx.text_regions is not None:
                                 self.translator._save_text_to_file(ctx.image_name, ctx, config)
@@ -616,10 +652,17 @@ class ConcurrentPipeline:
                     logger.debug(f"[渲染] 已清理 {ctx.image_name} 的基础上下文")
                 
             except Exception as e:
-                logger.error(f"[渲染线程] 错误: {e}")
+                # 安全地获取异常信息
+                try:
+                    error_msg = str(e)
+                except Exception:
+                    error_msg = f"无法获取异常信息 (异常类型: {type(e).__name__})"
+                
+                logger.error(f"[渲染线程] 错误: {error_msg}")
+                logger.error(traceback.format_exc())
                 # 标记严重错误，停止所有线程
                 self.has_critical_error = True
-                self.critical_error_msg = f"渲染线程错误: {e}"
+                self.critical_error_msg = f"渲染线程错误: {error_msg}"
                 self.critical_error_exception = e
                 self.stop_workers = True
                 break

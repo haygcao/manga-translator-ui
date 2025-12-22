@@ -417,10 +417,12 @@ class GeminiHighQualityTranslator(CommonTranslator):
             
             extract_glossary = bool(_custom_prompt_json) and config_extract
 
-            # 获取系统指令并重新初始化客户端（包含重试信息以避免缓存）
+            # 获取系统指令（不再用于初始化客户端，而是合并到用户消息）
             system_instruction = self._get_system_instruction(_source_lang, _target_lang, custom_prompt_json=_custom_prompt_json, line_break_prompt_json=_line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason, extract_glossary=extract_glossary)
+            
+            # 初始化客户端（不传入 system_instruction）
             self.client = None
-            self._setup_client(system_instruction=system_instruction)
+            self._setup_client(system_instruction=None)
             
             if not self.client:
                 self.logger.error("Gemini客户端初始化失败")
@@ -429,14 +431,17 @@ class GeminiHighQualityTranslator(CommonTranslator):
             # 构建用户提示词（包含重试信息以避免缓存）
             user_prompt = self._build_user_prompt(batch_data, ctx, retry_attempt=retry_attempt, retry_reason=retry_reason)
             
-            # 准备内容：user消息只包含上下文、待翻译文本和图片
+            # 将系统提示词合并到用户消息的开头
+            combined_prompt = f"{system_instruction}\n\n{user_prompt}"
+            
+            # 准备内容：user消息包含系统提示词、上下文、待翻译文本和图片
             # 降级检查：如果 send_images 为 False，则不发送图片
             if send_images:
-                content_parts = [user_prompt] + image_parts
+                content_parts = [combined_prompt] + image_parts
             else:
                 if retry_attempt > 0: # 仅在重试且被标记为不发图时打印
                      self.logger.warning("降级模式：仅发送文本，不发送图片")
-                content_parts = [user_prompt]
+                content_parts = [combined_prompt]
             
             # 动态构建请求参数 - 默认总是发送安全设置
             request_args = {

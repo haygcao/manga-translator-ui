@@ -1476,20 +1476,6 @@ def put_text_horizontal(font_size: int, text: str, width: int, height: int, alig
     canvas_border = canvas_text.copy()
     pen_orig = [font_size + bg_size, font_size + bg_size]
 
-    # Center text block when AI line breaking is enabled
-    if config and config.render.center_text_in_bubble and config.render.disable_auto_wrap:
-        # Horizontal centering: based on the widest line
-        max_width = max(line_width_list)
-        horizontal_offset = (canvas_w - max_width - (font_size + bg_size) * 2) // 2
-        if horizontal_offset > 0:
-            pen_orig[0] += horizontal_offset
-
-        # Vertical centering: based on total height of all lines
-        total_lines_height = font_size * len(line_width_list) + spacing_y * (len(line_width_list) - 1)
-        vertical_offset = (canvas_h - total_lines_height - (font_size + bg_size) * 2) // 2
-        if vertical_offset > 0:
-            pen_orig[1] += vertical_offset
-
     if reversed_direction:
         pen_orig[0] = canvas_w - bg_size - 10
 

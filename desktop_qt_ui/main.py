@@ -131,6 +131,13 @@ def main():
     # --- 日志文件配置 ---
     from datetime import datetime
     
+    # 创建强制刷新的文件处理器类（确保日志立即写入磁盘，防止丢失）
+    class FlushingFileHandler(logging.FileHandler):
+        """每次写入后立即刷新到磁盘的文件处理器"""
+        def emit(self, record):
+            super().emit(record)
+            self.flush()  # 强制刷新缓冲区
+    
     # 日志目录放在 result/ 下
     if getattr(sys, 'frozen', False):
         log_dir = os.path.join(os.path.dirname(sys.executable), '_internal', 'result')
@@ -142,8 +149,8 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
     log_file_path = os.path.join(log_dir, f'log_{timestamp}.txt')
     
-    # 添加文件日志处理器
-    file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+    # 使用强制刷新的文件处理器
+    file_handler = FlushingFileHandler(log_file_path, encoding='utf-8', delay=False)
     file_handler.setLevel(logging.DEBUG)  # 始终为 DEBUG 级别
     file_handler.setFormatter(log_formatter)
     root_logger.addHandler(file_handler)

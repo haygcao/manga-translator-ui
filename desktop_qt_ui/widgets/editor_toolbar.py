@@ -20,6 +20,7 @@ class EditorToolbar(QWidget):
     # --- Define signals for all actions ---
     back_requested = pyqtSignal()
     export_requested = pyqtSignal()
+    save_json_requested = pyqtSignal()
     edit_file_requested = pyqtSignal()
     undo_requested = pyqtSignal()
     redo_requested = pyqtSignal()
@@ -29,7 +30,6 @@ class EditorToolbar(QWidget):
     fit_window_requested = pyqtSignal()
     display_mode_changed = pyqtSignal(str)
     original_image_alpha_changed = pyqtSignal(int)
-    render_inpaint_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -58,6 +58,11 @@ class EditorToolbar(QWidget):
         self.export_button.setText(self._t("Export Image"))
         self.export_button.setToolTip(self._t("Export current rendered image"))
         layout.addWidget(self.export_button)
+        
+        self.save_json_button = QToolButton()
+        self.save_json_button.setText(self._t("Save JSON"))
+        self.save_json_button.setToolTip(self._t("Save translation data to JSON file"))
+        layout.addWidget(self.save_json_button)
         
         self.edit_file_button = QToolButton()
         self.edit_file_button.setText(self._t("Edit Original"))
@@ -149,13 +154,6 @@ class EditorToolbar(QWidget):
         # 将整个容器添加到主布局
         layout.addWidget(display_mode_container, 0)
 
-        # --- Inpaint Preview ---
-        self.inpaint_preview_label = QLabel(self._t("Inpaint Preview:"))
-        layout.addWidget(self.inpaint_preview_label)
-        self.render_inpaint_button = QToolButton()
-        self.render_inpaint_button.setText(self._t("Generate Preview"))
-        layout.addWidget(self.render_inpaint_button)
-
         self.opacity_label = QLabel(self._t("Original Image Opacity:"))
         layout.addWidget(self.opacity_label)
         self.original_image_alpha_slider = QSlider(Qt.Orientation.Horizontal)
@@ -181,6 +179,7 @@ class EditorToolbar(QWidget):
     def _connect_signals(self):
         self.back_button.clicked.connect(self.back_requested)
         self.export_button.clicked.connect(self.export_requested)
+        self.save_json_button.clicked.connect(self.save_json_requested)
         self.edit_file_button.clicked.connect(self.edit_file_requested)
         self.undo_button.clicked.connect(self.undo_requested)
         self.redo_button.clicked.connect(self.redo_requested)
@@ -190,7 +189,6 @@ class EditorToolbar(QWidget):
         self.fit_window_button.clicked.connect(self.fit_window_requested)
         self.display_mode_combo.currentTextChanged.connect(self.display_mode_changed)
         self.original_image_alpha_slider.valueChanged.connect(self.original_image_alpha_changed)
-        self.render_inpaint_button.clicked.connect(self.render_inpaint_requested)
 
     # --- Public Slots ---
     def update_undo_redo_state(self, can_undo: bool, can_redo: bool):
@@ -218,6 +216,8 @@ class EditorToolbar(QWidget):
         self.back_button.setToolTip(self._t("Back to Main"))
         self.export_button.setText(self._t("Export Image"))
         self.export_button.setToolTip(self._t("Export current rendered image"))
+        self.save_json_button.setText(self._t("Save JSON"))
+        self.save_json_button.setToolTip(self._t("Save translation data to JSON file"))
         self.edit_file_button.setText(self._t("Edit Original"))
         self.edit_file_button.setToolTip(self._t("Switch to source file of current translation for editing"))
         self.undo_button.setText(self._t("Undo"))
@@ -229,7 +229,6 @@ class EditorToolbar(QWidget):
         self.zoom_out_button.setText(self._t("Zoom Out (-)"))
         self.zoom_in_button.setText(self._t("Zoom In (+)"))
         self.fit_window_button.setText(self._t("Fit to Window"))
-        self.render_inpaint_button.setText(self._t("Generate Preview"))
         
         # 刷新下拉菜单
         current_index = self.display_mode_combo.currentIndex()
@@ -247,7 +246,5 @@ class EditorToolbar(QWidget):
         # 刷新标签
         if hasattr(self, 'display_mode_label'):
             self.display_mode_label.setText(self._t("Display Mode:"))
-        if hasattr(self, 'inpaint_preview_label'):
-            self.inpaint_preview_label.setText(self._t("Inpaint Preview:"))
         if hasattr(self, 'opacity_label'):
             self.opacity_label.setText(self._t("Original Image Opacity:"))

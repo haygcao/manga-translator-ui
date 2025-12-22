@@ -200,6 +200,9 @@ class MangaTranslator:
         # 日志文件现在由UI层管理，这里不再创建
         self._log_file_path = None
         
+        # 过滤列表开关（默认启用）
+        self.filter_text_enabled = params.get('filter_text_enabled', True)
+        
         # 确保过滤列表文件存在
         try:
             ensure_filter_list_exists()
@@ -912,7 +915,7 @@ class MangaTranslator:
             ctx.text_regions = [] # Fallback to empty text_regions if textline merge fails
 
         # -- 过滤列表：根据 OCR 识别的原文过滤
-        if ctx.text_regions:
+        if ctx.text_regions and self.filter_text_enabled:
             filtered_regions = []
             for region in ctx.text_regions:
                 match_result = match_filter(region.text)
@@ -2500,9 +2503,10 @@ class MangaTranslator:
         Returns:
             List of Context objects with translation results
         """
-        # 每次翻译任务开始时重新加载过滤列表
-        from .utils.text_filter import load_filter_list
-        load_filter_list(force_reload=True)
+        # 每次翻译任务开始时重新加载过滤列表（仅在启用时）
+        if self.filter_text_enabled:
+            from .utils.text_filter import load_filter_list
+            load_filter_list(force_reload=True)
         
         batch_size = batch_size or self.batch_size
         
@@ -3266,7 +3270,7 @@ class MangaTranslator:
             ctx.text_regions = []
 
         # -- 过滤列表：根据 OCR 识别的原文过滤
-        if ctx.text_regions:
+        if ctx.text_regions and self.filter_text_enabled:
             filtered_regions = []
             for region in ctx.text_regions:
                 match_result = match_filter(region.text)
@@ -3596,7 +3600,14 @@ class MangaTranslator:
                 results.extend(batch)
                 
             except Exception as e:
-                logger.error(f"Error in batch translation: {e}")
+                # 安全地获取异常信息
+                try:
+                    error_msg = str(e)
+                except Exception:
+                    error_msg = f"无法获取异常信息 (异常类型: {type(e).__name__})"
+                
+                logger.error(f"Error in batch translation: {error_msg}")
+                logger.error(traceback.format_exc())
                 if not self.ignore_errors:
                     raise
                 # 错误时保持原文

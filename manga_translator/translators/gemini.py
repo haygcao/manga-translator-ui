@@ -324,10 +324,12 @@ class GeminiTranslator(CommonTranslator):
             
             extract_glossary = bool(_custom_prompt_json) and config_extract
 
-            # 获取系统指令并重新初始化客户端（包含重试信息以避免缓存）
+            # 获取系统指令（不再用于初始化客户端，而是合并到用户消息）
             system_instruction = self._get_system_instruction(_source_lang, _target_lang, custom_prompt_json=_custom_prompt_json, line_break_prompt_json=_line_break_prompt_json, retry_attempt=retry_attempt, retry_reason=retry_reason, extract_glossary=extract_glossary)
+            
+            # 初始化客户端（不传入 system_instruction）
             self.client = None
-            self._setup_client(system_instruction=system_instruction)
+            self._setup_client(system_instruction=None)
             
             if not self.client:
                 self.logger.error("Gemini客户端初始化失败")
@@ -337,9 +339,12 @@ class GeminiTranslator(CommonTranslator):
             # 如果加载了 HQ Prompt，_build_user_prompt (即 _build_user_prompt_for_texts) 会生成 JSON 格式的输入，与 System Prompt 匹配
             user_prompt = self._build_user_prompt(texts, ctx, retry_attempt=retry_attempt, retry_reason=retry_reason)
             
+            # 将系统提示词合并到用户消息的开头
+            combined_prompt = f"{system_instruction}\n\n{user_prompt}"
+            
             # 动态构建请求参数 - 默认总是发送安全设置
             request_args = {
-                "contents": user_prompt,
+                "contents": combined_prompt,
                 "safety_settings": self.safety_settings
             }
 

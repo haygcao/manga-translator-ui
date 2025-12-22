@@ -270,8 +270,20 @@ class ExportService:
             except Exception:
                 pass
     
+    def _save_regions_data_with_path(self, regions_data: List[Dict[str, Any]], json_path: str, image_path: str, mask: Optional[np.ndarray] = None, config: Optional[Dict[str, Any]] = None):
+        """保存区域数据到JSON文件，使用正确的图片路径作为键（用于编辑器保存）"""
+        # 使用图片的绝对路径作为键，与加载时保持一致
+        image_key = os.path.abspath(image_path)
+        self._save_regions_data_internal(regions_data, json_path, image_key, mask, config)
+    
     def _save_regions_data(self, regions_data: List[Dict[str, Any]], json_path: str, mask: Optional[np.ndarray] = None, config: Optional[Dict[str, Any]] = None):
-        """保存区域数据到JSON文件，确保格式与TextBlock兼容"""
+        """保存区域数据到JSON文件，确保格式与TextBlock兼容（用于导出）"""
+        # 使用文件名作为键（向后兼容）
+        image_key = os.path.splitext(os.path.basename(json_path.replace('_translations.json', '')))[0]
+        self._save_regions_data_internal(regions_data, json_path, image_key, mask, config)
+    
+    def _save_regions_data_internal(self, regions_data: List[Dict[str, Any]], json_path: str, image_key: str, mask: Optional[np.ndarray] = None, config: Optional[Dict[str, Any]] = None):
+        """保存区域数据到JSON文件的内部实现"""
         # 获取超分倍率，用于放大坐标
         upscale_ratio = 1
         if config:
@@ -398,8 +410,7 @@ class ExportService:
             save_data.append(region_copy)
         
         # load_text模式期望的格式：字典，键为图片路径，值为包含regions的字典
-        # 使用临时图片路径作为键
-        image_key = os.path.splitext(os.path.basename(json_path.replace('_translations.json', '')))[0]
+        # image_key 由调用方传入（可以是完整路径或文件名）
         formatted_data = {
             image_key: {
                 'regions': save_data

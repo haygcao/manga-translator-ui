@@ -452,22 +452,37 @@ class EditorController(QObject):
         has_changes = self._has_changes_since_last_export()
         if has_changes:
             from PyQt6.QtWidgets import QMessageBox
-            reply = QMessageBox.question(
-                None,
-                "未保存的编辑",
-                "当前图片有未导出的编辑,是否导出?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel
-            )
-
-            if reply == QMessageBox.StandardButton.Cancel:
+            msg_box = QMessageBox(None)
+            msg_box.setWindowTitle("未保存的编辑")
+            msg_box.setText("当前图片有未保存的编辑")
+            msg_box.setInformativeText("请选择保存方式：")
+            
+            # 添加三个按钮
+            export_btn = msg_box.addButton("导出图片", QMessageBox.ButtonRole.YesRole)
+            save_json_btn = msg_box.addButton("保存JSON", QMessageBox.ButtonRole.YesRole)
+            cancel_btn = msg_box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            no_btn = msg_box.addButton("不保存", QMessageBox.ButtonRole.NoRole)
+            
+            msg_box.setDefaultButton(cancel_btn)
+            msg_box.exec()
+            
+            clicked_button = msg_box.clickedButton()
+            
+            if clicked_button == cancel_btn:
                 return
-            elif reply == QMessageBox.StandardButton.Yes:
+            elif clicked_button == export_btn:
                 self.export_image()
                 # 使用QTimer延迟加载，避免阻塞UI
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(500, lambda: self._do_load_image(image_path))
                 return
+            elif clicked_button == save_json_btn:
+                self.save_json()
+                # 使用QTimer延迟加载，避免阻塞UI
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(500, lambda: self._do_load_image(image_path))
+                return
+            # 如果点击"不保存"，继续执行下面的加载逻辑
 
         self._do_load_image(image_path)
     
@@ -1760,6 +1775,90 @@ class EditorController(QObject):
             self.logger.error(f"Error during async export: {e}", exc_info=True)
             err_msg = str(e)
             QTimer.singleShot(0, lambda: QMessageBox.critical(None, "导出失败", f"导出过程中发生意外错误:\n{err_msg}"))
+
+    @pyqtSlot()
+    def save_json(self):
+        """保存当前翻译数据到JSON文件"""
+        try:
+            source_path = self.model.get_source_image_path()
+            if not source_path:
+                self.logger.warning("Cannot save JSON: no image loaded")
+                if hasattr(self, 'toast_manager'):
+                    self.toast_manager.show_error("保存失败：没有加载图像")
+                return
+            
+            regions = self._get_regions()
+            if regions is None:
+                regions = []
+            
+            # 查找现有的JSON文件路径
+            from manga_translator.utils.path_manager import find_json_path, get_json_path
+            json_path = find_json_path(source_path)
+            
+            # 如果找不到现有的JSON文件，使用默认路径
+            if not json_path:
+                json_path = get_json_path(source_path, create_dir=True)
+                self.logger.info(f"No existing JSON found, will create new one at: {json_path}")
+            else:
+                self.logger.info(f"Found existing JSON, will replace: {json_path}")
+            
+            # 显示开始Toast
+            if hasattr(self, 'toast_manager'):
+                self.toast_manager.show_info("正在保存JSON...", duration=0)
+            
+            self.async_service.submit_task(self._async_save_json(source_path, regions, json_path))
+        except Exception as e:
+            self.logger.error(f"Error during save JSON request: {e}", exc_info=True)
+            if hasattr(self, 'toast_manager'):
+                self.toast_manager.show_error("保存JSON失败")
+
+    async def _async_save_json(self, source_path, regions, json_path):
+        """异步保存JSON文件"""
+        try:
+            import json
+            import sys
+            sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+            from services.export_service import ExportService
+            
+            export_service = ExportService()
+            
+            # 获取配置
+            config = self.config_service.get_config()
+            if hasattr(config, 'model_dump'):
+                config_dict = config.model_dump()
+            elif hasattr(config, 'dict'):
+                config_dict = config.dict()
+            else:
+                config_dict = {}
+            
+            # 获取蒙版数据
+            mask = self.model.get_refined_mask()
+            if mask is None:
+                mask = self.model.get_raw_mask()
+            
+            # 保存JSON文件 - 传入source_path用于生成正确的键
+            export_service._save_regions_data_with_path(regions, json_path, source_path, mask, config_dict)
+            
+            # 保存快照，标记为已保存状态
+            self._save_export_snapshot()
+            
+            # 关闭"正在保存"的toast，显示成功toast
+            if hasattr(self, 'toast_manager'):
+                # 直接调用close_all（在主线程中执行）
+                self.toast_manager.close_all()
+            
+            # 使用信号在主线程显示Toast
+            self._show_toast_signal.emit(f"JSON保存成功\n{json_path}", 3000, True, json_path)
+            
+        except Exception as e:
+            self.logger.error(f"Error during async save JSON: {e}", exc_info=True)
+            
+            # 关闭"正在保存"的toast
+            if hasattr(self, 'toast_manager'):
+                self.toast_manager.close_all()
+            
+            # 使用信号在主线程显示Toast
+            self._show_toast_signal.emit(f"保存JSON失败：{str(e)}", 3000, False, "")
 
     @pyqtSlot()
     def edit_source_file(self):

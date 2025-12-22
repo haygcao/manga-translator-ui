@@ -319,6 +319,7 @@ class EditorView(QWidget):
         # --- Toolbar (Top) to Controller/View ---
         self.toolbar.back_requested.connect(self.back_to_main_requested)
         self.toolbar.export_requested.connect(self.controller.export_image)
+        self.toolbar.save_json_requested.connect(self.controller.save_json)
         self.toolbar.edit_file_requested.connect(self.controller.edit_source_file)
         self.toolbar.undo_requested.connect(self.controller.undo)
         self.toolbar.redo_requested.connect(self.controller.redo)
@@ -328,7 +329,6 @@ class EditorView(QWidget):
         self.toolbar.fit_window_requested.connect(self.graphics_view.fit_to_window)
         self.toolbar.display_mode_changed.connect(self.controller.set_display_mode)
         self.toolbar.original_image_alpha_changed.connect(self.controller.set_original_image_alpha)
-        self.toolbar.render_inpaint_requested.connect(self.controller.render_inpaint)
 
         # --- Model to Toolbar (同步滑块) ---
         self.model.original_image_alpha_changed.connect(self.toolbar.set_original_image_alpha_slider)

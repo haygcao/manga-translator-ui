@@ -430,6 +430,7 @@ class MainAppLogic(QObject):
     def load_preset(self, preset_name: str) -> bool:
         """加载预设并更新环境变量到.env"""
         try:
+            # 加载预设文件
             preset_env_vars = self.preset_service.load_preset(preset_name)
             if preset_env_vars is None:
                 self._ui_log(f"加载预设失败: {preset_name}", "ERROR")
@@ -445,13 +446,15 @@ class MainAppLogic(QObject):
                 # 使用预设中的值，如果预设中没有或为空，则设为空字符串
                 env_vars_to_update[key] = preset_env_vars.get(key, "")
             
-            # 更新当前翻译器的环境变量
+            # 更新当前翻译器的环境变量到.env文件
             success = self.config_service.save_env_vars(env_vars_to_update)
             if not success:
                 self._ui_log(f"应用预设失败: {preset_name}", "ERROR")
             return success
         except Exception as e:
             self.logger.error(f"加载预设失败: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             self._ui_log(f"加载预设失败: {e}", "ERROR")
             return False
     

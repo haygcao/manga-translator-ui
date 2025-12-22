@@ -219,10 +219,17 @@ class DefaultDetector(OfflineDetector):
         
         # 使用mask生成raw_mask（用于inpainting修复）
         mask_resized = cv2.resize(mask, (mask.shape[1] * 2, mask.shape[0] * 2), interpolation=cv2.INTER_LINEAR)
+        # 修复：去除padding时需要同时处理pad_h和pad_w，而不是用elif
         if pad_h > 0:
             mask_resized = mask_resized[:-pad_h, :]
-        elif pad_w > 0:
+        if pad_w > 0:
             mask_resized = mask_resized[:, :-pad_w]
+        
+        # 修复：将mask缩放回原图尺寸，与textlines坐标系统保持一致
+        original_h, original_w = image.shape[:2]
+        if mask_resized.shape[0] != original_h or mask_resized.shape[1] != original_w:
+            mask_resized = cv2.resize(mask_resized, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
+        
         raw_mask = np.clip(mask_resized * 255, 0, 255).astype(np.uint8)
         
         # 在verbose模式下，同时生成db版本用于对比

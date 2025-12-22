@@ -107,7 +107,6 @@ class PresetService:
             with open(preset_path, 'r', encoding='utf-8') as f:
                 env_vars = json.load(f)
             
-            # 不输出日志，避免刷屏
             return env_vars
         except Exception as e:
             self.logger.error(f"加载预设失败: {e}")

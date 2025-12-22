@@ -1463,7 +1463,25 @@ class MainView(QWidget):
         if old_preset_name == new_preset_name:
             return
         
-        # 加载新预设（不自动保存旧预设，避免覆盖）
+        # 在切换前，强制触发防抖动定时器，确保所有待保存的环境变量都已保存
+        if self._env_debounce_timer.isActive():
+            self._env_debounce_timer.stop()
+            # 手动触发所有待保存的环境变量
+            for key, (label, widget) in self.env_widgets.items():
+                current_value = widget.text()
+                self.controller.save_env_var(key, current_value)
+        
+        # 在切换前，先保存当前预设的内容（如果有旧预设）
+        if old_preset_name:
+            # 检查旧预设是否还存在（可能已被删除）
+            existing_presets = self.controller.get_presets_list()
+            if old_preset_name in existing_presets:
+                # 读取当前 .env 文件中的所有环境变量
+                current_env_values = self.config_service.load_env_vars()
+                # 保存到旧预设文件
+                self.controller.preset_service.save_preset(old_preset_name, current_env_values)
+        
+        # 加载新预设
         success = self.controller.load_preset(new_preset_name)
         if success:
             # 更新当前预设名称

@@ -1448,8 +1448,13 @@ def render(
             h_ext = int((w / r_orig - h) // 2) if r_orig > 0 else 0
             if h_ext >= 0:
                 box = np.zeros((h + h_ext * 2, w, 4), dtype=np.uint8)
-                # 垂直方向不居中，贴顶部
-                box[0:h, 0:w] = temp_box
+                # 垂直方向：根据center_text_in_bubble决定是否居中
+                if config.render.center_text_in_bubble:
+                    # 居中开启：垂直居中
+                    box[h_ext:h_ext+h, 0:w] = temp_box
+                else:
+                    # 默认：贴顶部
+                    box[0:h, 0:w] = temp_box
             else:
                 box = temp_box.copy()
         else:
@@ -1465,8 +1470,13 @@ def render(
             h_ext = int(w / (2 * r_orig) - h / 2) if r_orig > 0 else 0
             if h_ext >= 0:
                 box = np.zeros((h + h_ext * 2, w, 4), dtype=np.uint8)
-                # 竖排文本保持原逻辑
-                box[0:h, 0:w] = temp_box
+                # 竖排文本垂直方向：根据center_text_in_bubble决定是否居中
+                if config.render.center_text_in_bubble:
+                    # 居中开启：垂直居中
+                    box[h_ext:h_ext+h, 0:w] = temp_box
+                else:
+                    # 默认：贴顶部
+                    box[0:h, 0:w] = temp_box
             else:
                 box = temp_box.copy()
         else:

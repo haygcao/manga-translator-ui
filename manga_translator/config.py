@@ -156,7 +156,7 @@ class RenderConfig(BaseModel):
     font_scale_ratio: float = 1.0
     """Font size scale ratio. Applied before max_font_size limit"""
     center_text_in_bubble: bool = False
-    """Center the entire text block in the bubble when AI line breaking is enabled"""
+    """Center the text block vertically in the bubble"""
     optimize_line_breaks: bool = False
     """Automatically optimize line breaks by testing all combinations to find the best font size"""
     check_br_and_retry: bool = False
