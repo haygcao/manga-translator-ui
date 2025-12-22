@@ -1118,7 +1118,12 @@ class MangaTranslator:
     async def _run_colorizer(self, config: Config, ctx: Context):
         current_time = time.time()
         self._model_usage_timestamps[("colorizer", config.colorizer.colorizer)] = current_time
-        #todo: im pretty sure the ctx is never used. does it need to be passed in?
+        
+        # 调试：检查 ctx.input 的类型
+        if not hasattr(ctx.input, 'convert'):
+            logger.error(f"[_run_colorizer] ctx.input 类型错误: {type(ctx.input)}, 值: {ctx.input}")
+            raise TypeError(f"ctx.input 必须是 PIL Image 对象，但得到了 {type(ctx.input)}")
+        
         return await dispatch_colorization(
             config.colorizer.colorizer,
             colorization_size=config.colorizer.colorization_size,
