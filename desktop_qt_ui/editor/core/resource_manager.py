@@ -67,11 +67,21 @@ class ResourceManager:
             FileNotFoundError: 图片文件不存在
             Exception: 加载失败
         """
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image file not found: {image_path}")
+        from pathlib import Path
         
-        # 规范化路径
-        image_path = os.path.normpath(image_path)
+        # 使用 pathlib 处理路径，更好地支持中文和特殊字符
+        path_obj = Path(image_path)
+        
+        # 检查文件是否存在
+        if not path_obj.exists():
+            # 尝试使用原始路径再检查一次
+            if not os.path.exists(image_path):
+                self.logger.error(f"Image file not found: {image_path}")
+                self.logger.error(f"Resolved path: {path_obj.resolve()}")
+                raise FileNotFoundError(f"Image file not found: {image_path}")
+        
+        # 获取绝对路径并规范化
+        image_path = str(path_obj.resolve())
         
         # 检查缓存
         if image_path in self._image_cache:
@@ -83,7 +93,8 @@ class ResourceManager:
         # 加载图片
         try:
             self.logger.debug(f"Loading image: {image_path}")
-            image = Image.open(image_path)
+            # 使用 pathlib.Path 对象打开图片，更好地处理中文路径
+            image = Image.open(path_obj)
             
             # 创建资源对象
             resource = ImageResource(
@@ -136,7 +147,10 @@ class ResourceManager:
         Returns:
             bool: 是否成功释放
         """
-        path = os.path.normpath(path)
+        from pathlib import Path
+        
+        # 规范化路径以匹配缓存中的键
+        path = str(Path(path).resolve())
         if path in self._image_cache:
             resource = self._image_cache.pop(path)
             resource.release()

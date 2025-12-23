@@ -428,21 +428,29 @@ class EditorController(QObject):
         """
         try:
             import json
-            norm_path = os.path.normpath(image_path)
-            output_dir = os.path.dirname(norm_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
+            from pathlib import Path
+            
+            # 使用 pathlib 规范化路径
+            path_obj = Path(image_path)
+            norm_path = str(path_obj.resolve())
+            output_dir = path_obj.parent
+            map_path = output_dir / 'translation_map.json'
 
             self.logger.debug(f"Checking if translated image: {image_path}")
             self.logger.debug(f"Normalized path: {norm_path}")
             self.logger.debug(f"Looking for translation_map.json at: {map_path}")
 
-            if os.path.exists(map_path):
+            if map_path.exists():
                 with open(map_path, 'r', encoding='utf-8') as f:
                     translation_map = json.load(f)
                 self.logger.debug(f"Found translation_map.json with {len(translation_map)} entries")
                 self.logger.debug(f"Translation map keys: {list(translation_map.keys())[:3]}...")  # 只显示前3个
+                
+                # 规范化 translation_map 中的所有键
+                normalized_map = {str(Path(k).resolve()): v for k, v in translation_map.items()}
+                
                 # 如果当前路径是translation_map的key，说明是翻译后的图片
-                if norm_path in translation_map:
+                if norm_path in normalized_map:
                     self.logger.debug(f"✓ Found translation mapping for: {image_path}")
                     return True
                 else:
