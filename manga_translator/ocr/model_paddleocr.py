@@ -85,6 +85,21 @@ class ModelPaddleOCR(OfflineOCR):
             ],
             'hash': '3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff',
             'file': '.',
+        },
+        # 48px 模型用于颜色预测
+        'model_48px': {
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr_ar_48px.ckpt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ocr_ar_48px.ckpt',
+            ],
+            'hash': '29daa46d080818bb4ab239a518a88338cbccff8f901bef8c9db191a7cb97671d',
+        },
+        'dict_48px': {
+            'url': [
+                'https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/alphabet-all-v7.txt',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/alphabet-all-v7.txt',
+            ],
+            'hash': 'f5722368146aa0fbcc9f4726866e4efc3203318ebb66c811d8cbbe915576538a',
         }
     }
 
@@ -146,10 +161,8 @@ class ModelPaddleOCR(OfflineOCR):
 
         # 加载 48px 模型用于颜色预测
         try:
-            # 获取 48px 模型的路径（在 ocr 目录下）
-            model_48px_dir = os.path.dirname(self.model_dir)
-            dict_48px_path = os.path.join(model_48px_dir, 'alphabet-all-v7.txt')
-            ckpt_48px_path = os.path.join(model_48px_dir, 'ocr_ar_48px.ckpt')
+            dict_48px_path = self._get_file_path('alphabet-all-v7.txt')
+            ckpt_48px_path = self._get_file_path('ocr_ar_48px.ckpt')
             
             if os.path.exists(dict_48px_path) and os.path.exists(ckpt_48px_path):
                 with open(dict_48px_path, 'r', encoding='utf-8') as fp:
@@ -278,8 +291,13 @@ class ModelPaddleOCR(OfflineOCR):
                 outputs = self.session.run(None, {input_name: batch})
                 predictions = outputs[0]  # [batch, seq_len, num_classes]
 
+                # Batch color prediction if 48px model is available
+                color_results = None
+                if self.color_model is not None:
+                    color_results = self._estimate_colors_batch(regions)
+
                 # Decode predictions
-                for idx, pred in zip(valid_indices, predictions):
+                for i, (idx, pred) in enumerate(zip(valid_indices, predictions)):
                     text, confidence = self._decode_ctc(pred)
 
                     textline = textlines[idx]
@@ -300,9 +318,19 @@ class ModelPaddleOCR(OfflineOCR):
                     textline.text = text
                     textline.prob = confidence
 
-                    # Estimate colors using 48px model
-                    region_idx = valid_indices.index(idx)
-                    self._estimate_colors_48px(regions[region_idx], textline)
+                    # Apply batch color prediction results
+                    if color_results is not None and i < len(color_results):
+                        fr, fg, fb, br, bg, bb = color_results[i]
+                        textline.fg_r = fr
+                        textline.fg_g = fg
+                        textline.fg_b = fb
+                        textline.bg_r = br
+                        textline.bg_g = bg
+                        textline.bg_b = bb
+                    else:
+                        # Default colors if no color prediction
+                        textline.fg_r = textline.fg_g = textline.fg_b = 0
+                        textline.bg_r = textline.bg_g = textline.bg_b = 255
 
                     self.logger.info(f'prob: {confidence:.3f} {text} fg: ({textline.fg_r}, {textline.fg_g}, {textline.fg_b}) bg: ({textline.bg_r}, {textline.bg_g}, {textline.bg_b})')
 
@@ -380,6 +408,116 @@ class ModelPaddleOCR(OfflineOCR):
 
         return text, confidence
 
+    def _estimate_colors_batch(self, regions: List[np.ndarray]) -> List[tuple]:
+        """批量预测前景色和背景色（复用 mocr 的批量处理逻辑）"""
+        from ..utils.generic import AvgMeter
+        from ..utils import chunks
+        
+        try:
+            if not regions:
+                return []
+            
+            text_height = 48
+            max_chunk_size = 16  # 与 mocr 保持一致
+            results = [None] * len(regions)
+            
+            # 分批处理（与 mocr 相同）
+            for indices in chunks(range(len(regions)), max_chunk_size):
+                N = len(indices)
+                
+                # 准备批量数据
+                widths = []
+                resized_regions = []
+                
+                for idx in indices:
+                    region = regions[idx]
+                    # 将 BGR 转换为 RGB
+                    if len(region.shape) == 3 and region.shape[2] == 3:
+                        region_rgb = cv2.cvtColor(region, cv2.COLOR_BGR2RGB)
+                    else:
+                        region_rgb = region
+                    
+                    # 调整大小到 48px 高度
+                    h, w = region_rgb.shape[:2]
+                    ratio = w / float(h)
+                    new_w = int(round(ratio * text_height))
+                    if new_w == 0:
+                        new_w = 1
+                    
+                    region_resized = cv2.resize(region_rgb, (new_w, text_height), interpolation=cv2.INTER_AREA)
+                    resized_regions.append(region_resized)
+                    widths.append(new_w)
+                
+                # 打包成 batch
+                max_width = 4 * (max(widths) + 7) // 4
+                batch_region = np.zeros((N, text_height, max_width, 3), dtype=np.uint8)
+                
+                for i, region_resized in enumerate(resized_regions):
+                    W = region_resized.shape[1]
+                    batch_region[i, :, :W, :] = region_resized
+                
+                # 转换为 tensor
+                image_tensor = (torch.from_numpy(batch_region).float() - 127.5) / 127.5
+                image_tensor = einops.rearrange(image_tensor, 'N H W C -> N C H W')
+                
+                # GPU 加速
+                if self.use_gpu:
+                    image_tensor = image_tensor.to(self.device)
+                
+                # 批量推理
+                with torch.no_grad():
+                    ret = self.color_model.infer_beam_batch(image_tensor, widths, beams_k=5, max_seq_length=255)
+                
+                # 处理结果（与 mocr 完全相同的逻辑）
+                for i, (pred_chars_index, prob, fg_pred, bg_pred, fg_ind_pred, bg_ind_pred) in enumerate(ret):
+                    has_fg = (fg_ind_pred[:, 1] > fg_ind_pred[:, 0])
+                    has_bg = (bg_ind_pred[:, 1] > bg_ind_pred[:, 0])
+                    
+                    fr = AvgMeter()
+                    fg = AvgMeter()
+                    fb = AvgMeter()
+                    br = AvgMeter()
+                    bg = AvgMeter()
+                    bb = AvgMeter()
+                    
+                    for chid, c_fg, c_bg, h_fg, h_bg in zip(pred_chars_index, fg_pred, bg_pred, has_fg, has_bg):
+                        ch = self.color_model.dictionary[chid]
+                        if ch == '<S>':
+                            continue
+                        if ch == '</S>':
+                            break
+                        # 处理前景色
+                        if h_fg.item():
+                            fr(int(c_fg[0] * 255))
+                            fg(int(c_fg[1] * 255))
+                            fb(int(c_fg[2] * 255))
+                        # 处理背景色
+                        if h_bg.item():
+                            br(int(c_bg[0] * 255))
+                            bg(int(c_bg[1] * 255))
+                            bb(int(c_bg[2] * 255))
+                        else:
+                            # 如果没有背景色，使用前景色作为背景色
+                            br(int(c_fg[0] * 255))
+                            bg(int(c_fg[1] * 255))
+                            bb(int(c_fg[2] * 255))
+                    
+                    fr = min(max(int(fr()), 0), 255)
+                    fg = min(max(int(fg()), 0), 255)
+                    fb = min(max(int(fb()), 0), 255)
+                    br = min(max(int(br()), 0), 255)
+                    bg = min(max(int(bg()), 0), 255)
+                    bb = min(max(int(bb()), 0), 255)
+                    
+                    results[indices[i]] = (fr, fg, fb, br, bg, bb)
+            
+            return results
+            
+        except Exception as e:
+            self.logger.warning(f"Batch color prediction failed: {e}")
+            # 返回默认颜色
+            return [(0, 0, 0, 255, 255, 255)] * len(regions)
+
     def _estimate_colors_48px(self, region: np.ndarray, textline: Quadrilateral):
         """使用 48px 模型预测前景色和背景色"""
         from ..utils.generic import AvgMeter
@@ -416,14 +554,14 @@ class ModelPaddleOCR(OfflineOCR):
             if self.use_gpu:
                 image_tensor = image_tensor.to(self.device)
             
-            # 使用 48px 模型推理
+            # 使用 48px 模型推理 - 使用 infer_beam_batch 而不是 infer_beam_batch_tensor
             with torch.no_grad():
-                ret = self.color_model.infer_beam_batch_tensor(image_tensor, [new_w], beams_k=5, max_seq_length=255)
+                ret = self.color_model.infer_beam_batch(image_tensor, [new_w], beams_k=5, max_seq_length=255)
             
             if ret and len(ret) > 0:
                 pred_chars_index, prob, fg_pred, bg_pred, fg_ind_pred, bg_ind_pred = ret[0]
                 
-                # 计算颜色
+                # 计算颜色 - 与 mocr 保持一致的逻辑
                 has_fg = (fg_ind_pred[:, 1] > fg_ind_pred[:, 0])
                 has_bg = (bg_ind_pred[:, 1] > bg_ind_pred[:, 0])
                 
@@ -440,15 +578,18 @@ class ModelPaddleOCR(OfflineOCR):
                         continue
                     if ch == '</S>':
                         break
+                    # 处理前景色
                     if h_fg.item():
                         fr(int(c_fg[0] * 255))
                         fg(int(c_fg[1] * 255))
                         fb(int(c_fg[2] * 255))
+                    # 处理背景色
                     if h_bg.item():
                         br(int(c_bg[0] * 255))
                         bg(int(c_bg[1] * 255))
                         bb(int(c_bg[2] * 255))
                     else:
+                        # 如果没有背景色，使用前景色作为背景色
                         br(int(c_fg[0] * 255))
                         bg(int(c_fg[1] * 255))
                         bb(int(c_fg[2] * 255))

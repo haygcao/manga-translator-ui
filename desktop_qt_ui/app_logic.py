@@ -1971,6 +1971,10 @@ class TranslationWorker(QObject):
             friendly_msg += "   4. 关闭「AI断句」功能\n"
             friendly_msg += "      - 位置：高级设置 → 渲染设置 → AI断句\n"
             friendly_msg += "      - 说明：使用传统的自动换行（可能导致排版不够精确）\n\n"
+            friendly_msg += "   5. 减小批量大小\n"
+            friendly_msg += "      - 位置：高级设置 → 批量大小\n"
+            friendly_msg += "      - 建议：将批量大小减小（如从 3 减到 1 或 2）\n"
+            friendly_msg += "      - 说明：批量处理的文本越少，AI越容易正确添加断句标记\n\n"
         
         # 检查是否是翻译数量不匹配错误
         elif "翻译数量不匹配" in real_error or "Translation count mismatch" in real_error:
@@ -1986,9 +1990,10 @@ class TranslationWorker(QObject):
             friendly_msg += "   2. 更换翻译模型\n"
             friendly_msg += "      - 某些模型对指令的遵循能力更强\n"
             friendly_msg += "      - 建议：尝试 gpt-4o 或 gemini-2.0-flash-exp\n\n"
-            friendly_msg += "   3. 减少单次翻译的文本数量\n"
-            friendly_msg += "      - 文本过多时AI更容易出错\n"
-            friendly_msg += "      - 可以尝试分批处理图片\n\n"
+            friendly_msg += "   3. 减小批量大小\n"
+            friendly_msg += "      - 位置：高级设置 → 批量大小\n"
+            friendly_msg += "      - 建议：将批量大小减小（如从 3 减到 1 或 2）\n"
+            friendly_msg += "      - 说明：批量处理的文本越少，AI越不容易出错\n\n"
         
         # 检查是否是翻译质量检查失败
         elif "翻译质量检查失败" in real_error or "Quality check failed" in real_error:
@@ -2002,6 +2007,10 @@ class TranslationWorker(QObject):
             friendly_msg += "   2. 更换翻译模型\n"
             friendly_msg += "      - 某些模型翻译质量更稳定\n"
             friendly_msg += "      - 建议：尝试 gpt-4o 或 gemini-2.0-flash-exp\n\n"
+            friendly_msg += "   3. 减小批量大小\n"
+            friendly_msg += "      - 位置：高级设置 → 批量大小\n"
+            friendly_msg += "      - 建议：将批量大小减小（如从 3 减到 1 或 2）\n"
+            friendly_msg += "      - 说明：批量处理的文本越少，AI翻译质量越稳定\n\n"
         
         # 检查是否是模型不支持多模态
         elif "不支持多模态" in real_error or "multimodal" in real_error.lower() or "vision" in real_error.lower():
@@ -2033,9 +2042,10 @@ class TranslationWorker(QObject):
             friendly_msg += "      - 注意：地址末尾必须是 /v1，不要多加或少加路径\n\n"
             friendly_msg += "   2. 检查模型名称是否正确\n"
             friendly_msg += "      - 位置：翻译设置 → 环境变量 → OPENAI_MODEL\n"
-            friendly_msg += "      - OpenAI支持的模型：gpt-4o, gpt-4-turbo, gpt-4, gpt-3.5-turbo\n"
-            friendly_msg += "      - 注意：模型名称区分大小写，必须完全匹配\n\n"
-            friendly_msg += "   3. 如果使用自定义API（如中转API）\n"
+            friendly_msg += "      - 确认模型名称与API服务提供的模型完全匹配\n"
+            friendly_msg += "      - 注意：模型名称区分大小写\n"
+            friendly_msg += "      - 提示：可以使用「测试连接」功能查看可用模型列表\n\n"
+            friendly_msg += "   3. 如果使用自定义API（如中转API、第三方服务）\n"
             friendly_msg += "      - 确认中转服务的API地址格式\n"
             friendly_msg += "      - 确认中转服务支持你使用的模型\n"
             friendly_msg += "      - 联系中转服务提供商确认配置\n\n"
@@ -2056,7 +2066,7 @@ class TranslationWorker(QObject):
             friendly_msg += "      - 登录对应平台查看余额和使用情况\n\n"
         
         # 检查是否是网络连接错误
-        elif "connection" in real_error.lower() or "timeout" in real_error.lower() or "network" in real_error.lower():
+        elif "connection" in real_error.lower() or "连接" in real_error or "timeout" in real_error.lower() or "超时" in real_error or "network" in real_error.lower() or "网络" in real_error:
             friendly_msg += "🔍 错误原因：网络连接失败\n\n"
             friendly_msg += "📝 详细说明：\n"
             friendly_msg += "   无法连接到API服务器，可能是网络问题或需要代理。\n\n"
@@ -2069,17 +2079,35 @@ class TranslationWorker(QObject):
         
         # 检查是否是速率限制错误
         elif "rate limit" in real_error.lower() or "429" in real_error or "too many requests" in real_error.lower():
-            friendly_msg += "🔍 错误原因：API请求速率限制 (HTTP 429)\n\n"
+            friendly_msg += "🔍 错误原因：API请求被拒绝 (HTTP 429)\n\n"
             friendly_msg += "📝 详细说明：\n"
-            friendly_msg += "   请求过于频繁，超过了API的速率限制。\n\n"
-            friendly_msg += "💡 解决方案：\n"
-            friendly_msg += "   1. ⭐ 设置每分钟最大请求数（推荐）\n"
+            friendly_msg += "   HTTP 429 错误有多种可能原因：\n"
+            friendly_msg += "   • API密钥错误或无效\n"
+            friendly_msg += "   • 账户余额不足或欠费\n"
+            friendly_msg += "   • 请求速率超过限制（RPM/TPM）\n"
+            friendly_msg += "   • 当前账户级别不支持该模型\n\n"
+            friendly_msg += "💡 解决方案（按顺序检查）：\n"
+            friendly_msg += "   1. ⭐ 检查API密钥是否正确（最常见）\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量配置区域\n"
+            friendly_msg += "      - 确认密钥没有多余的空格或换行\n"
+            friendly_msg += "      - 使用「测试连接」功能验证密钥是否有效\n\n"
+            friendly_msg += "   2. 检查账户余额和状态\n"
+            friendly_msg += "      - OpenAI: https://platform.openai.com/usage\n"
+            friendly_msg += "      - Gemini: https://aistudio.google.com/app/apikey\n"
+            friendly_msg += "      - 确认账户余额充足且未欠费\n"
+            friendly_msg += "      - 确认账户状态正常（未被限制）\n\n"
+            friendly_msg += "   3. 检查模型是否支持\n"
+            friendly_msg += "      - 某些模型需要特定的账户级别或付费套餐\n"
+            friendly_msg += "      - 例如：GPT-4 需要付费账户，免费账户只能用 GPT-3.5\n"
+            friendly_msg += "      - 尝试更换为账户支持的模型\n\n"
+            friendly_msg += "   4. 降低请求速率\n"
             friendly_msg += "      - 位置：通用设置 → 每分钟最大请求数\n"
-            friendly_msg += "      - 建议：设置为 3-10（取决于API套餐）\n\n"
-            friendly_msg += "   2. 稍后重试\n"
+            friendly_msg += "      - 建议：设置为 3-10（取决于API套餐）\n"
+            friendly_msg += "      - 免费账户建议设置为 3\n\n"
+            friendly_msg += "   5. 稍后重试\n"
             friendly_msg += "      - 等待几分钟后再次尝试翻译\n\n"
-            friendly_msg += "   3. 升级API套餐\n"
-            friendly_msg += "      - 联系API提供商升级到更高的速率限制\n\n"
+            friendly_msg += "   6. 升级API套餐\n"
+            friendly_msg += "      - 联系API提供商升级到更高级别的套餐\n\n"
         
         # 检查是否是403禁止访问错误
         elif "403" in real_error or "forbidden" in real_error.lower():
@@ -2097,16 +2125,25 @@ class TranslationWorker(QObject):
         elif "404" in real_error or "not found" in real_error.lower():
             friendly_msg += "🔍 错误原因：资源未找到 (HTTP 404)\n\n"
             friendly_msg += "📝 详细说明：\n"
-            friendly_msg += "   请求的API端点不存在或模型名称错误。\n\n"
+            friendly_msg += "   请求的API端点不存在或模型名称错误。\n"
+            friendly_msg += "   也可能是翻译器类型与API地址不匹配。\n\n"
             friendly_msg += "💡 解决方案：\n"
-            friendly_msg += "   1. ⭐ 检查API地址是否正确（推荐）\n"
+            friendly_msg += "   1. ⭐ 检查翻译器类型是否匹配API地址（最常见）\n"
+            friendly_msg += "      - 如果API地址是 xxxx/v1 格式（OpenAI兼容接口）\n"
+            friendly_msg += "        → 应选择「OpenAI」或「OpenAI高质量」翻译器\n"
+            friendly_msg += "      - 如果使用 Gemini 官方 API (generativelanguage.googleapis.com)\n"
+            friendly_msg += "        → 应选择「Gemini」或「Gemini高质量」翻译器\n"
+            friendly_msg += "      - 位置：翻译设置 → 翻译器\n\n"
+            friendly_msg += "   2. 检查API地址是否正确\n"
             friendly_msg += "      - 位置：翻译设置 → 环境变量 → API_BASE\n"
             friendly_msg += "      - OpenAI默认：https://api.openai.com/v1\n"
-            friendly_msg += "      - Gemini默认：https://generativelanguage.googleapis.com\n\n"
-            friendly_msg += "   2. 检查模型名称\n"
+            friendly_msg += "      - Gemini默认：https://generativelanguage.googleapis.com\n"
+            friendly_msg += "      - 注意：地址末尾的 /v1 不要多加或少加\n\n"
+            friendly_msg += "   3. 检查模型名称\n"
             friendly_msg += "      - 位置：翻译设置 → 环境变量 → MODEL\n"
-            friendly_msg += "      - 确认模型名称拼写正确（如 gpt-4o 不是 gpt4o）\n\n"
-            friendly_msg += "   3. 验证模型可用性\n"
+            friendly_msg += "      - 确认模型名称拼写正确（如 gpt-4o 不是 gpt4o）\n"
+            friendly_msg += "      - 使用「测试连接」功能查看可用模型列表\n\n"
+            friendly_msg += "   4. 验证模型可用性\n"
             friendly_msg += "      - 某些模型可能已下线或更名\n"
             friendly_msg += "      - 访问官方文档查看可用模型列表\n\n"
         

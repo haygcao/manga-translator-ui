@@ -292,9 +292,6 @@
     "你好": "Hello",
     "世界": "World",
     "欢迎": "Welcome",
-
-    ...
-
     "再见": "Goodbye",
     "谢谢": "Thank you",
     "早安": "Good morning"

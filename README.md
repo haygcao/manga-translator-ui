@@ -28,7 +28,7 @@
 | [命令行模式](doc/CLI_USAGE.md) | 命令行使用指南、参数说明、批量处理 |
 | [API 配置](doc/API_CONFIG.md) | API Key 申请、配置教程 |
 | [功能特性](doc/FEATURES.md) | 完整功能列表、可视化编辑器详解 |
-| [工作流程](doc/WORKFLOWS.md) | 4 种工作流程、AI 断句、自定义模版 |
+| [工作流程](doc/WORKFLOWS.md) | 7 种工作流程、AI 断句、自定义模版 |
 | [设置说明](doc/SETTINGS.md) | 翻译器配置、OCR 模型、参数详解 |
 | [调试指南](doc/DEBUGGING.md) | 调试流程、可调节参数、问题排查 |
 | [开发者指南](doc/DEVELOPMENT.md) | 项目结构、环境配置、构建打包 |
@@ -192,11 +192,8 @@ python -m manga_translator -i manga.jpg
 # 翻译整个文件夹
 python -m manga_translator local -i ./manga_folder/ -o ./output/
 
-# Web API 服务器模式（纯API，无界面）
+# Web 服务器模式（带管理界面和 API）
 python -m manga_translator web --host 127.0.0.1 --port 8000 --use-gpu
-
-# Web UI 服务器模式（带管理界面和用户界面）
-python -m manga_translator ui --host 127.0.0.1 --port 8000 --use-gpu
 
 # 查看所有参数
 python -m manga_translator --help
