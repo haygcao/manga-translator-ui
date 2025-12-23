@@ -9,6 +9,7 @@ from shapely.geometry import Polygon
 from tqdm import tqdm
 
 from . import text_render
+from . import text_render_hq
 from .text_render_eng import render_textblock_list_eng
 from .text_render_pillow_eng import render_textblock_list_eng as render_textblock_list_eng_pillow
 from .ballon_extractor import extract_ballon_region
@@ -1402,8 +1403,33 @@ def render(
         text_to_render = re.sub(r'<H>(.*?)</H>', r'\1', text_to_render, flags=re.IGNORECASE | re.DOTALL)
 
     # 使用 freetype 渲染器（稳定可靠）
-    # 使用 freetype 渲染器（稳定可靠）
-    if render_horizontally:
+    # 检测是否需要使用高质量渲染（针对低分辨率优化）
+    use_hq_render = text_render_hq.should_use_hq_rendering(
+        region.font_size, 
+        (img.shape[1], img.shape[0])
+    )
+    
+    if use_hq_render:
+        logger.debug(f"[HQ_RENDER] 使用高质量渲染模式 (font_size={region.font_size})")
+        temp_box = text_render_hq.render_text_with_upscale(
+            font_size=region.font_size,
+            text=text_to_render,
+            width=round(norm_h[0]),
+            height=round(norm_v[0]),
+            alignment=region.alignment,
+            fg=fg,
+            bg=bg,
+            line_spacing=line_spacing,
+            config=config,
+            is_horizontal=render_horizontally,
+            upscale_factor=None,  # 自动计算
+            region_count=len(region.lines),
+            # 横排专用参数
+            reversed_direction=(region.direction == 'hl'),
+            target_lang=region.target_lang,
+            hyphenate=hyphenate
+        )
+    elif render_horizontally:
         temp_box = text_render.put_text_horizontal(
             region.font_size,
             text_to_render,
