@@ -13,6 +13,8 @@
 ### 依赖安装优化
 - **优化 PyTorch 依赖源配置**：移除 requirements 文件中的 `--extra-index-url https://pypi.org/simple`，避免版本冲突
 - **移除 xformers 版本限制**：将 `xformers==0.0.32.post2` 改为 `xformers`，允许安装最新兼容版本
+- **移除 torchsummary 版本限制**：将 `torchsummary==1.5.1` 改为 `torchsummary`，修复该版本在 PyPI 上不存在导致的安装失败问题
+- **修复 torchsummary 安装源问题**：在 launch.py 中添加排除列表，防止 torchsummary 被误判为 PyTorch 包而从 PyTorch CUDA 源安装（该源不包含此包），确保从 PyPI 镜像源正确安装
 - **扩展 PyTorch 包识别列表**：在 launch.py 中扩展了 PyTorch 相关包的识别范围，确保所有 NVIDIA CUDA、Intel oneAPI 及 PyTorch 生态包都从正确的源（cu128）下载，包括：
   - PyTorch 核心包及变体（torch, torchvision, torchaudio, pytorch-triton 等）
   - NVIDIA CUDA 库（nvidia-cublas-cu12, nvidia-cudnn-cu12, nvidia-nccl-cu12 等）
@@ -30,6 +32,9 @@
 
 ### 并发流水线修复
 - **修复修复线程无法正常退出的问题**：当图片没有检测到文本框时，修复线程卡住导致界面无响应
+
+### 几何计算修复
+- **修复 Shapely TopologyException 错误**：在 text_mask_utils.py 中添加几何体错误处理，当多边形交集计算失败时自动使用 buffer(0) 修复无效几何体，避免因文本框形状异常导致的 "side location conflict" 错误和程序崩溃
 
 ## 🐛 修复
 
