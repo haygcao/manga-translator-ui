@@ -8,6 +8,7 @@ permission checks into translation endpoints.
 import logging
 from typing import Optional
 from fastapi import Request, HTTPException
+from enum import Enum
 
 from manga_translator import Config
 from manga_translator.server.core.middleware import (
@@ -173,6 +174,20 @@ def filter_disabled_parameters(config: Config, username: str, permission_service
             if hasattr(config, section):
                 section_obj = getattr(config, section)
                 if hasattr(section_obj, key) and default_value is not None:
+                    # 获取目标属性的类型注解
+                    field_type = None
+                    if hasattr(section_obj.__class__, '__annotations__'):
+                        field_type = section_obj.__class__.__annotations__.get(key)
+                    
+                    # 如果目标类型是枚举，且当前值是字符串，则转换为枚举
+                    if field_type and isinstance(field_type, type) and issubclass(field_type, Enum):
+                        if isinstance(default_value, str):
+                            # 尝试通过字符串值找到对应的枚举成员
+                            try:
+                                default_value = field_type(default_value)
+                            except (ValueError, KeyError):
+                                logger.warning(f"Failed to convert '{default_value}' to {field_type.__name__}, using as-is")
+                    
                     setattr(section_obj, key, default_value)
     
     except Exception as e:
