@@ -2953,7 +2953,7 @@ class MangaTranslator:
                     continue  # 跳过渲染，继续下一批次
 
                 # 标准流程：渲染并保存
-                for ctx, config in translated_contexts:
+                for idx, (ctx, config) in enumerate(translated_contexts):
                     await asyncio.sleep(0)  # 检查是否被取消
                     self._check_cancelled()  # 检查取消标志
                     try:
@@ -2980,6 +2980,23 @@ class MangaTranslator:
                             self._save_text_to_file(ctx.image_name, ctx, config)
 
                         results.append(ctx)
+                        
+                        # ✅ 渲染完一张立即清理这张图片的中间数据（不等整个批次完成）
+                        if hasattr(ctx, 'img_rgb') and ctx.img_rgb is not None:
+                            del ctx.img_rgb
+                            ctx.img_rgb = None
+                        if hasattr(ctx, 'img_inpainted') and ctx.img_inpainted is not None:
+                            del ctx.img_inpainted
+                            ctx.img_inpainted = None
+                        if hasattr(ctx, 'img_colorized') and ctx.img_colorized is not None:
+                            del ctx.img_colorized
+                            ctx.img_colorized = None
+                        
+                        # 每渲染3张图片就强制垃圾回收一次
+                        if (idx + 1) % 3 == 0:
+                            import gc
+                            gc.collect()
+                            
                     except Exception as e:
                         logger.error(f"Error rendering image in batch: {e}")
                         results.append(ctx)
