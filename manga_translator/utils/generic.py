@@ -1110,7 +1110,7 @@ def det_rearrange_forward(
     dbnet_batch_forward: Callable[[np.ndarray, str], Tuple[np.ndarray, np.ndarray]], 
     tgt_size: int = 1280, 
     max_batch_size: int = 4, 
-    device='cuda', verbose=False):
+    device='cuda', verbose=False, result_path_fn=None):
     '''
     Rearrange image to square batches before feeding into network if following conditions are satisfied: \n
     1. Extreme aspect ratio
@@ -1168,7 +1168,11 @@ def det_rearrange_forward(
             if verbose:
                 import logging
                 logger = logging.getLogger('manga_translator')
-                imwrite_unicode(f'result/rearrange_{ii}.png', p[..., ::-1], logger)
+                if result_path_fn:
+                    debug_path = result_path_fn(f'rearrange_{ii}.png')
+                else:
+                    debug_path = f'result/rearrange_{ii}.png'
+                imwrite_unicode(debug_path, p[..., ::-1], logger)
         return batches, down_scale_ratio, pad_size
 
     h, w = img.shape[:2]
@@ -1186,7 +1190,10 @@ def det_rearrange_forward(
         return None, None
 
     if verbose:
-        print(f'Input image will be rearranged to square batches before fed into network.\n Rearranged batches will be saved to result/rearrange_%d.png')
+        if result_path_fn:
+            print(f'Input image will be rearranged to square batches before fed into network.\n Rearranged batches will be saved to result/{result_path_fn("rearrange_*.png")}')
+        else:
+            print(f'Input image will be rearranged to square batches before fed into network.\n Rearranged batches will be saved to result/rearrange_%d.png')
 
     if transpose:
         img = einops.rearrange(img, 'h w c -> w h c')

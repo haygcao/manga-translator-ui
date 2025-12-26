@@ -266,7 +266,7 @@ class ExportService:
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
-                    self.logger.info("GPU显存已清理")
+                    # self.logger.info("GPU显存已清理")
             except Exception:
                 pass
     

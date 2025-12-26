@@ -368,7 +368,14 @@ def run_server(args):
     proc = prepare(args)
     print("Nonce: "+nonce)
     try:
-        uvicorn.run(app, host=args.host, port=args.port)
+        # 增加超时配置以支持批量翻译（30分钟）
+        uvicorn.run(
+            app, 
+            host=args.host, 
+            port=args.port,
+            timeout_keep_alive=1800,  # 保持连接30分钟
+            timeout_graceful_shutdown=30  # 优雅关闭超时30秒
+        )
     except Exception:
         if proc:
             proc.terminate()

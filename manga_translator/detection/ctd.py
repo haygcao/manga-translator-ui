@@ -134,13 +134,13 @@ class ComicTextDetector(OfflineDetector):
 
     @torch.no_grad()
     async def _infer(self, image: np.ndarray, detect_size: int, text_threshold: float, box_threshold: float,
-                     unclip_ratio: float, verbose: bool = False):
+                     unclip_ratio: float, verbose: bool = False, result_path_fn=None):
 
         # keep_undetected_mask = False
         # refine_mode = REFINEMASK_INPAINT
 
         im_h, im_w = image.shape[:2]
-        lines_map, mask = det_rearrange_forward(image, self.det_batch_forward_ctd, self.input_size[0], 4, self.device, verbose)
+        lines_map, mask = det_rearrange_forward(image, self.det_batch_forward_ctd, self.input_size[0], 4, self.device, verbose, result_path_fn)
         # blks = []
         # resize_ratio = [1, 1]
         if lines_map is None:

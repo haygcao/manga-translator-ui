@@ -2829,7 +2829,7 @@ class TranslationWorker(QObject):
             # 任务处理完成，不输出日志
 
         except asyncio.CancelledError:
-            self.log_received.emit("--- 任务已取消")
+            pass  # self.log_received.emit("--- 任务已取消")
         except Exception as e:
             import traceback
             error_msg = f"An error occurred in the asyncio runner: {str(e)}\n{traceback.format_exc()}"

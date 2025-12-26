@@ -38,7 +38,8 @@ async def prepare(detector_key: Detector):
 
 async def dispatch(detector_key: Detector, image: np.ndarray, detect_size: int, text_threshold: float, box_threshold: float, unclip_ratio: float,
                    invert: bool, gamma_correct: bool, rotate: bool, auto_rotate: bool = False, device: str = 'cpu', verbose: bool = False,
-                   use_yolo_obb: bool = False, yolo_obb_conf: float = 0.4, yolo_obb_iou: float = 0.6, yolo_obb_overlap_threshold: float = 0.1, min_box_area_ratio: float = 0.0009):
+                   use_yolo_obb: bool = False, yolo_obb_conf: float = 0.4, yolo_obb_iou: float = 0.6, yolo_obb_overlap_threshold: float = 0.1, min_box_area_ratio: float = 0.0009,
+                   result_path_fn=None):
     """
     检测调度函数，支持混合检测模式
     
@@ -47,12 +48,13 @@ async def dispatch(detector_key: Detector, image: np.ndarray, detect_size: int, 
         yolo_obb_conf: YOLO OBB检测器的置信度阈值
         yolo_obb_iou: YOLO OBB检测器的IoU阈值（交叉比）
         min_box_area_ratio: 最小检测框面积占比（相对图片总像素）
+        result_path_fn: 结果路径生成函数（用于保存调试图）
     """
     # 主检测器检测
     detector = get_detector(detector_key)
     if isinstance(detector, OfflineDetector):
         await detector.load(device)
-    main_textlines, mask, raw_image = await detector.detect(image, detect_size, text_threshold, box_threshold, unclip_ratio, invert, gamma_correct, rotate, auto_rotate, verbose, min_box_area_ratio)
+    main_textlines, mask, raw_image = await detector.detect(image, detect_size, text_threshold, box_threshold, unclip_ratio, invert, gamma_correct, rotate, auto_rotate, verbose, min_box_area_ratio, result_path_fn)
     
     # 如果不启用YOLO OBB，直接返回主检测器结果
     if not use_yolo_obb:
@@ -66,7 +68,7 @@ async def dispatch(detector_key: Detector, image: np.ndarray, detect_size: int, 
         # YOLO OBB检测（使用yolo_obb_conf作为text_threshold）
         yolo_textlines, _, _ = await yolo_detector.detect(
             image, detect_size, yolo_obb_conf, box_threshold, unclip_ratio,
-            invert, gamma_correct, rotate, auto_rotate, verbose, min_box_area_ratio
+            invert, gamma_correct, rotate, auto_rotate, verbose, min_box_area_ratio, result_path_fn
         )
         
         # 智能合并：YOLO框可以替换过小的主检测器框，或添加新框

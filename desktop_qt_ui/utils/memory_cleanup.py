@@ -128,12 +128,12 @@ def full_memory_cleanup(log_callback=None):
         'physical_memory_released': False
     }
     
-    log("--- [CLEANUP] 开始完整内存清理...")
+    # log("--- [CLEANUP] 开始完整内存清理...")
     
     # 1. 清理模型缓存
     result['caches_cleared'] = cleanup_all_model_caches()
-    if result['caches_cleared'] > 0:
-        log(f"--- [CLEANUP] 已清理 {result['caches_cleared']} 个模型缓存")
+    # if result['caches_cleared'] > 0:
+    #     log(f"--- [CLEANUP] 已清理 {result['caches_cleared']} 个模型缓存")
     
     # 2. 强制垃圾回收（多次执行确保彻底清理）
     gc.collect()
@@ -142,14 +142,14 @@ def full_memory_cleanup(log_callback=None):
     
     # 3. 清理GPU显存
     result['gpu_cleared'] = cleanup_gpu_memory()
-    if result['gpu_cleared']:
-        log("--- [CLEANUP] GPU显存已清理")
+    # if result['gpu_cleared']:
+    #     log("--- [CLEANUP] GPU显存已清理")
     
     # 4. 释放物理内存
     result['physical_memory_released'] = cleanup_physical_memory()
-    if result['physical_memory_released']:
-        log("--- [CLEANUP] 物理内存已释放")
+    # if result['physical_memory_released']:
+    #     log("--- [CLEANUP] 物理内存已释放")
     
-    log("--- [CLEANUP] 内存清理完成")
+    # log("--- [CLEANUP] 内存清理完成")
     
     return result

@@ -10,7 +10,7 @@ from ..utils import InfererModule, ModelWrapper, Quadrilateral
 class CommonDetector(InfererModule):
 
     async def detect(self, image: np.ndarray, detect_size: int, text_threshold: float, box_threshold: float, unclip_ratio: float,
-                     invert: bool, gamma_correct: bool, rotate: bool, auto_rotate: bool = False, verbose: bool = False, min_box_area_ratio: float = 0.0009):
+                     invert: bool, gamma_correct: bool, rotate: bool, auto_rotate: bool = False, verbose: bool = False, min_box_area_ratio: float = 0.0009, result_path_fn=None):
         '''
         Returns textblock list and text mask.
         '''
@@ -41,7 +41,7 @@ class CommonDetector(InfererModule):
         # cv2.waitKey(0)
 
         # Run detection
-        textlines, raw_mask, mask = await self._detect(image, detect_size, text_threshold, box_threshold, unclip_ratio, verbose)
+        textlines, raw_mask, mask = await self._detect(image, detect_size, text_threshold, box_threshold, unclip_ratio, verbose, result_path_fn)
         # 面积过滤已移至文本行合并后进行（基于合并后的大框）
 
         # Remove filters
@@ -57,7 +57,7 @@ class CommonDetector(InfererModule):
             if majority_orientation == 'h':
                 self.logger.info('Rerunning detection with 90° rotation')
                 return await self.detect(orig_image, detect_size, text_threshold, box_threshold, unclip_ratio, invert, gamma_correct,
-                                         rotate=(not rotate), auto_rotate=False, verbose=verbose)
+                                         rotate=(not rotate), auto_rotate=False, verbose=verbose, result_path_fn=result_path_fn)
         if rotate:
             textlines, raw_mask, mask = self._remove_rotation(textlines, raw_mask, mask, img_w, img_h)
 
@@ -65,7 +65,7 @@ class CommonDetector(InfererModule):
 
     @abstractmethod
     async def _detect(self, image: np.ndarray, detect_size: int, text_threshold: float, box_threshold: float,
-                      unclip_ratio: float, verbose: bool = False) -> Tuple[List[Quadrilateral], np.ndarray, np.ndarray]:
+                      unclip_ratio: float, verbose: bool = False, result_path_fn=None) -> Tuple[List[Quadrilateral], np.ndarray, np.ndarray]:
         pass
 
     def _add_border(self, image: np.ndarray, target_side_length: int):
@@ -155,5 +155,5 @@ class OfflineDetector(CommonDetector, ModelWrapper):
 
     @abstractmethod
     async def _infer(self, image: np.ndarray, detect_size: int, text_threshold: float, box_threshold: float,
-                       unclip_ratio: float, verbose: bool = False):
+                       unclip_ratio: float, verbose: bool = False, result_path_fn=None):
         pass
