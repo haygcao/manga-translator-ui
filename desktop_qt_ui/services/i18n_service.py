@@ -187,6 +187,8 @@ class I18nManager:
                 "Translation Progress": "翻译进度",
                 "Translation Complete": "翻译完成",
                 "Translation Failed": "翻译失败",
+                "Task Completed": "任务完成",
+                "Translation completed, {count} files saved.\n\nOpen results in editor?": "翻译完成，已保存 {count} 个文件。\n\n是否在编辑器中打开结果？",
                 
                 # 文件操作
                 "Add Files": "添加文件",

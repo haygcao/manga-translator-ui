@@ -120,7 +120,7 @@ class ExportService:
         导出后端渲染的图片
         
         Args:
-            image: 当前图片
+            image: 当前图片（仅用于获取尺寸和模式信息）
             regions_data: 区域数据
             config: 配置字典
             output_path: 输出路径
@@ -141,10 +141,20 @@ class ExportService:
         if progress_callback:
             progress_callback("开始导出渲染图片...")
         
+        # 复制图像数据，避免外部关闭影响
+        try:
+            image_copy = image.copy()
+        except Exception as e:
+            error_msg = f"复制图像失败: {e}"
+            self.logger.error(error_msg)
+            if error_callback:
+                error_callback(error_msg)
+            return
+        
         # 在后台线程中执行导出
         export_thread = threading.Thread(
             target=self._perform_backend_render_export,
-            args=(image, regions_data, config, output_path, mask, progress_callback, success_callback, error_callback),
+            args=(image_copy, regions_data, config, output_path, mask, progress_callback, success_callback, error_callback),
             daemon=True
         )
         export_thread.start()
@@ -158,106 +168,85 @@ class ExportService:
         """在后台线程中执行后端渲染导出"""
         import gc
         import os
+        
+        temp_dir = None
+        rendered_image = None
+        
         try:
+            self.logger.info(f"开始导出图片到: {output_path}")
+            
             if progress_callback:
                 progress_callback("准备导出环境...")
 
+            # 验证输出路径
+            output_dir = os.path.dirname(output_path)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+
             # 创建临时目录
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # 保存当前图片到临时文件
-                temp_image_path = os.path.join(temp_dir, "temp_image.png")
-                image.save(temp_image_path)
-                
-                # 保存区域数据到JSON文件，使用load_text模式期望的文件名格式
-                base_name = os.path.splitext(os.path.basename(temp_image_path))[0]
-                regions_json_path = os.path.join(temp_dir, f"{base_name}_translations.json")
-                self._save_regions_data(regions_data, regions_json_path, mask, config)
-                
-                if progress_callback:
-                    progress_callback("初始化翻译引擎...")
-                
-                # 准备翻译器参数
-                translator_params = self._prepare_translator_params(config)
-                
-                # 创建翻译器实例并执行渲染
-                rendered_text_layer = self._execute_backend_render(
-                    temp_image_path, regions_json_path, translator_params, config, progress_callback
-                )
-                
-                if rendered_text_layer:
-                    # 后端返回的 ctx.result 已经是完整的渲染结果（inpainted背景 + 文字）
-                    # 直接使用，不需要再合成到原图上
-                    final_image = rendered_text_layer
-                    rendered_text_layer = None  # 避免后续释放
-
-                    # --- Safer saving logic ---
-                    temp_output_path = output_path + ".tmp"
-
-                    try:
-                        # Handle image saving, applying quality settings for supported formats
-                        output_lower = output_path.lower()
-
-                        if output_lower.endswith(('.jpg', '.jpeg')):
-                            self.logger.info("Output is JPEG, converting from RGBA to RGB...")
-                            temp_img = final_image.convert('RGB')
-                            save_quality = config.get('cli', {}).get('save_quality', 95)
-                            self.logger.info(f"Saving JPEG with quality: {save_quality}")
-                            temp_img.save(temp_output_path, format='JPEG', quality=save_quality)
-                            temp_img.close()  # 释放转换后的图像
-                        elif output_lower.endswith('.webp'):
-                            save_quality = config.get('cli', {}).get('save_quality', 95)
-                            self.logger.info(f"Saving WEBP with quality: {save_quality}")
-                            final_image.save(temp_output_path, format='WEBP', quality=save_quality)
-                        else:
-                            # For other formats like PNG, save directly
-                            final_image.save(temp_output_path, format='PNG')
-
-                        # 确保文件已写入磁盘
-                        if not os.path.exists(temp_output_path):
-                            raise Exception(f"临时文件未成功创建: {temp_output_path}")
-
-                        # 释放 final_image（只在保存成功后）
-                        try:
-                            final_image.close()
-                        except:
-                            pass
-
-                        # If save is successful, rename the temp file to the final output path
-                        os.replace(temp_output_path, output_path)
-                        self.logger.info(f"Successfully saved and replaced file at: {output_path}")
-
-                    except Exception as e:
-                        self.logger.error(f"Failed to save image to {output_path}: {e}")
-                        # 确保释放图像
-                        try:
-                            if 'final_image' in locals() and final_image:
-                                final_image.close()
-                        except:
-                            pass
-                        # Re-raise the exception to be caught by the main try-except block
-                        raise
-                    finally:
-                        # Clean up the temporary file if it still exists
-                        if os.path.exists(temp_output_path):
-                            os.remove(temp_output_path)
-                    
-                    if success_callback:
-                        success_callback(f"图片已导出到: {output_path}")
-
-                    self.logger.info(f"图片已成功导出到: {output_path}")
-                else:
-                    if error_callback:
-                        error_callback("导出失败: 没有生成结果图片")
+            temp_dir = tempfile.mkdtemp()
+            
+            # 保存当前图片到临时文件
+            temp_image_path = os.path.join(temp_dir, "temp_image.png")
+            image.save(temp_image_path)
+            
+            # 保存区域数据到JSON文件
+            base_name = os.path.splitext(os.path.basename(temp_image_path))[0]
+            regions_json_path = os.path.join(temp_dir, f"{base_name}_translations.json")
+            self._save_regions_data(regions_data, regions_json_path, mask, config)
+            
+            if progress_callback:
+                progress_callback("初始化翻译引擎...")
+            
+            # 准备翻译器参数
+            translator_params = self._prepare_translator_params(config)
+            
+            # 执行后端渲染
+            rendered_image = self._execute_backend_render(
+                temp_image_path, regions_json_path, translator_params, config, progress_callback
+            )
+            
+            if not rendered_image:
+                raise Exception("后端渲染没有生成结果")
+            
+            # 保存渲染结果
+            self._save_rendered_image(rendered_image, output_path, config)
+            
+            if success_callback:
+                success_callback(f"图片已导出到: {output_path}")
+            
+            self.logger.info(f"图片已成功导出到: {output_path}")
 
         except Exception as e:
-            self.logger.error(f"后端渲染导出失败: {e}")
+            error_msg = f"后端渲染导出失败: {e}"
+            self.logger.error(error_msg)
             import traceback
-            traceback.print_exc()
-
+            self.logger.error(traceback.format_exc())
             if error_callback:
-                error_callback(f"后端渲染导出失败: {e}")
+                error_callback(error_msg)
+        
         finally:
-            # 强制执行垃圾回收，释放内存
+            # 清理资源
+            try:
+                if rendered_image:
+                    rendered_image.close()
+            except:
+                pass
+            
+            try:
+                if image:
+                    image.close()
+            except:
+                pass
+            
+            try:
+                if temp_dir and os.path.exists(temp_dir):
+                    import shutil
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+            except:
+                pass
+            
+            # 强制垃圾回收
             gc.collect()
             
             # 清理GPU显存
@@ -265,9 +254,7 @@ class ExportService:
                 import torch
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                    # self.logger.info("GPU显存已清理")
-            except Exception:
+            except:
                 pass
     
     def _save_regions_data_with_path(self, regions_data: List[Dict[str, Any]], json_path: str, image_path: str, mask: Optional[np.ndarray] = None, config: Optional[Dict[str, Any]] = None):
@@ -453,6 +440,53 @@ class ExportService:
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(formatted_data, f, indent=2, ensure_ascii=False, cls=CustomJSONEncoder)
     
+    def _save_rendered_image(self, image: Image.Image, output_path: str, config: Dict[str, Any]):
+        """
+        保存渲染后的图像到文件
+        
+        Args:
+            image: 要保存的图像
+            output_path: 输出路径
+            config: 配置字典
+        """
+        temp_output_path = output_path + ".tmp"
+        
+        try:
+            output_lower = output_path.lower()
+            save_quality = config.get('cli', {}).get('save_quality', 95)
+            
+            if output_lower.endswith(('.jpg', '.jpeg')):
+                # JPEG格式：转换为RGB
+                rgb_image = image.convert('RGB')
+                rgb_image.save(temp_output_path, format='JPEG', quality=save_quality)
+                rgb_image.close()
+                
+            elif output_lower.endswith('.webp'):
+                # WEBP格式
+                image.save(temp_output_path, format='WEBP', quality=save_quality)
+                
+            else:
+                # PNG或其他格式
+                image.save(temp_output_path, format='PNG')
+            
+            # 确保文件已写入
+            if not os.path.exists(temp_output_path):
+                raise Exception(f"临时文件未成功创建: {temp_output_path}")
+            
+            # 原子性替换
+            os.replace(temp_output_path, output_path)
+            self.logger.info(f"图片已保存: {output_path}")
+            
+        except Exception as e:
+            self.logger.error(f"保存图片失败: {e}")
+            # 清理临时文件
+            if os.path.exists(temp_output_path):
+                try:
+                    os.remove(temp_output_path)
+                except:
+                    pass
+            raise
+    
     def _prepare_translator_params(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """准备翻译器参数"""
         translator_params = {}
@@ -542,18 +576,20 @@ class ExportService:
             render_cfg = RenderConfig(**render_config)
 
             # 创建翻译器配置，设置为none以跳过翻译
-            from manga_translator.config import TranslatorConfig, UpscaleConfig, ColorizerConfig
+            from manga_translator.config import TranslatorConfig, UpscaleConfig, ColorizerConfig, InpainterConfig
             translator_cfg = TranslatorConfig(translator='none')
             
-            # 从config中提取upscale和colorizer配置
+            # 从config中提取upscale、colorizer和inpainter配置
             upscale_config = config.get('upscale', {})
             colorizer_config = config.get('colorizer', {})
+            inpainter_config = config.get('inpainter', {})
             upscale_cfg = UpscaleConfig(**upscale_config) if upscale_config else UpscaleConfig()
             colorizer_cfg = ColorizerConfig(**colorizer_config) if colorizer_config else ColorizerConfig()
+            inpainter_cfg = InpainterConfig(**inpainter_config) if inpainter_config else InpainterConfig()
             
-            self.logger.info(f"Creating Config with upscale_ratio={upscale_cfg.upscale_ratio}, colorizer={colorizer_cfg.colorizer}")
+            self.logger.info(f"Creating Config with upscale_ratio={upscale_cfg.upscale_ratio}, colorizer={colorizer_cfg.colorizer}, inpainting_size={inpainter_cfg.inpainting_size}")
 
-            cfg = Config(render=render_cfg, translator=translator_cfg, upscale=upscale_cfg, colorizer=colorizer_cfg)
+            cfg = Config(render=render_cfg, translator=translator_cfg, upscale=upscale_cfg, colorizer=colorizer_cfg, inpainter=inpainter_cfg)
 
             if progress_callback:
                 progress_callback("执行后端渲染...")
@@ -583,13 +619,26 @@ class ExportService:
                 if ctx.result is not None:
                     # ctx.result is already a PIL Image object, no conversion needed.
                     # 复制图像以避免 "Operation on closed image" 错误
-                    result_image = ctx.result.copy()
+                    try:
+                        result_image = ctx.result.copy()
+                    except Exception as copy_error:
+                        self.logger.error(f"复制结果图像失败: {copy_error}, ctx.result状态: closed={getattr(ctx.result, 'closed', 'N/A')}, mode={getattr(ctx.result, 'mode', 'N/A')}")
+                        raise
+                    
                     # 关闭原始结果图像
-                    ctx.result.close()
+                    try:
+                        ctx.result.close()
+                    except Exception as close_error:
+                        self.logger.error(f"关闭ctx.result失败: {close_error}")
+                    
                     # 关闭输入图像以释放内存
                     if image:
-                        image.close()
-                        image = None
+                        try:
+                            image.close()
+                            image = None
+                        except Exception as close_error:
+                            self.logger.error(f"关闭输入图像失败: {close_error}")
+                    
                     return result_image
                 else:
                     # 详细记录失败原因
@@ -601,16 +650,27 @@ class ExportService:
                     self.logger.error(error_msg)
                     return None
 
+            except Exception as translate_error:
+                self.logger.error(f"translator.translate执行失败: {translate_error}")
+                self.logger.error(f"错误类型: {type(translate_error).__name__}")
+                import traceback
+                self.logger.error(f"完整堆栈:\n{traceback.format_exc()}")
+                raise
             finally:
                 loop.close()
 
         except Exception as e:
-            self.logger.error(f"执行后端渲染时出错: {e}")
+            self.logger.error(f"执行后端渲染时出错: {type(e).__name__}: {e}")
+            import traceback
+            self.logger.error(f"完整堆栈:\n{traceback.format_exc()}")
             raise
         finally:
             # 确保输入图像被关闭
             if image:
-                image.close()
+                try:
+                    image.close()
+                except Exception as close_error:
+                    self.logger.error(f"finally块中关闭输入图像失败: {close_error}")
     
     def export_regions_json(self, regions_data: List[Dict[str, Any]], output_path: str, config: Optional[Dict[str, Any]] = None) -> bool:
         """导出区域数据为JSON文件"""

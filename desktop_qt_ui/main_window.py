@@ -362,14 +362,9 @@ class MainWindow(QMainWindow):
         Asks the user if they want to open the results in the editor.
         """
         try:
-            self.logger.info(f"on_task_completed called with {len(saved_files) if saved_files else 0} files")
-            
             if not saved_files:
-                self.logger.info("No saved files, returning")
                 return
 
-            self.logger.info("About to show QMessageBox")
-            
             # 创建自定义消息框，避免图片过多导致闪退
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle(self._t('Task Completed'))

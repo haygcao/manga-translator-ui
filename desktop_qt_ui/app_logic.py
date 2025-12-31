@@ -121,11 +121,25 @@ class MainAppLogic(QObject):
     @pyqtSlot(dict)
     def on_file_completed(self, result):
         """处理单个文件处理完成的信号并保存"""
-        if not result.get('success') or not result.get('image_data'):
+        if not result.get('success'):
             self.logger.error(f"Skipping save for failed item: {result.get('original_path')}")
             return
 
         try:
+            # 检查是否是批量模式（后端已保存，有 output_path 但没有 image_data）
+            if result.get('output_path') and not result.get('image_data'):
+                # 批量模式：文件已由后端保存
+                final_output_path = result['output_path']
+                self.saved_files_count += 1
+                self.saved_files_list.append(final_output_path)
+                self.logger.info(self._t("log_file_saved_successfully", path=final_output_path))
+                self.task_file_completed.emit({'path': final_output_path})
+                return
+            
+            # 顺序模式：需要前端保存
+            if not result.get('image_data'):
+                self.logger.error(f"No image_data for: {result.get('original_path')}")
+                return
             config = self.config_service.get_config()
             output_format = config.cli.format
             save_quality = config.cli.save_quality
@@ -1517,10 +1531,13 @@ class MainAppLogic(QObject):
                 else:
                     for result in results:
                         if result.get('success'):
-                            # In batch mode, image_data is None because the backend already saved the file.
-                            # We just need to acknowledge it.
-                            if result.get('image_data') is None:
-                                # 构造翻译后的图片路径
+                            # 检查是否有 output_path（批量模式下后端已保存）
+                            if result.get('output_path'):
+                                # 批量模式：直接使用后端保存的路径
+                                translated_file = result.get('output_path')
+                                saved_files.append(translated_file)
+                            elif result.get('image_data') is None:
+                                # 兼容旧代码：构造翻译后的图片路径
                                 original_path = result.get('original_path')
                                 source_folder = self.file_to_folder_map.get(original_path)
 
@@ -2678,16 +2695,19 @@ class TranslationWorker(QObject):
                             self.log_received.emit(ctx.translation_error)
                         elif hasattr(ctx, 'success') and ctx.success:
                             # 优先检查success标志（因为result可能被清理了）
-                            results.append({'success': True, 'original_path': ctx.image_name, 'image_data': None})
+                            # 计算后端保存的文件路径
+                            output_path = self._calculate_output_path(ctx.image_name, save_info)
+                            results.append({'success': True, 'original_path': ctx.image_name, 'image_data': None, 'output_path': output_path})
                             success_count += 1
                         elif ctx.result:
-                            results.append({'success': True, 'original_path': ctx.image_name, 'image_data': None})
+                            output_path = self._calculate_output_path(ctx.image_name, save_info)
+                            results.append({'success': True, 'original_path': ctx.image_name, 'image_data': None, 'output_path': output_path})
                             success_count += 1
                         else:
                             results.append({'success': False, 'original_path': ctx.image_name, 'error': '翻译结果为空'})
                             failed_count += 1
                     else:
-                        results.append({'succes000000000000000000000000000000000000000000s': False, 'original_path': 'Unknown', 'error': 'Batch translation returned no context'})
+                        results.append({'success': False, 'original_path': 'Unknown', 'error': 'Batch translation returned no context'})
                         failed_count += 1
 
                 if failed_count > 0:
@@ -2728,13 +2748,22 @@ class TranslationWorker(QObject):
                         image.name = file_path
 
                         ctx = await translator.translate(image, config, image_name=image.name, save_info=save_info)
-
-                        if ctx and ctx.result:
-                            self.file_processed.emit({'success': True, 'original_path': file_path, 'image_data': ctx.result})
+                        
+                        # 检查翻译是否成功（批量模式下 ctx.result 可能为 None，但文件已由后端保存）
+                        if ctx and ctx.success:
+                            # 计算后端保存的文件路径
+                            output_path = self._calculate_output_path(file_path, save_info)
+                            self.file_processed.emit({
+                                'success': True, 
+                                'original_path': file_path, 
+                                'image_data': ctx.result,  # 可能为 None（批量模式）
+                                'output_path': output_path  # 后端保存的路径
+                            })
                             success_count += 1
                             self.log_received.emit(f"✅ [{current_num}/{total_files}] 完成：{os.path.basename(file_path)}")
                         else:
-                            self.file_processed.emit({'success': False, 'original_path': file_path, 'error': 'Translation returned no result or image'})
+                            error_msg = getattr(ctx, 'translation_error', 'Translation returned no result') if ctx else 'Translation failed'
+                            self.file_processed.emit({'success': False, 'original_path': file_path, 'error': error_msg})
                             self.log_received.emit(f"❌ [{current_num}/{total_files}] 失败：{os.path.basename(file_path)}")
 
                     except Exception as e:
@@ -2776,6 +2805,10 @@ class TranslationWorker(QObject):
                     # 确保卸载所有模型
                     if hasattr(translator, '_detector_cleanup_task') and translator._detector_cleanup_task:
                         translator._detector_cleanup_task.cancel()
+                        try:
+                            await translator._detector_cleanup_task
+                        except asyncio.CancelledError:
+                            pass
                     del translator
                 if 'results' in locals():
                     del results
@@ -2898,11 +2931,11 @@ class FileScannerRunnable(QRunnable):
         # ✅ 创建信号对象用于线程安全通信
         self.signals = WorkerSignals()
         if finished_callback:
-            self.signals.finished.connect(lambda args: finished_callback(*args))
+            self.signals.finished.connect(lambda args: finished_callback(*args), type=Qt.ConnectionType.QueuedConnection)
         if error_callback:
-            self.signals.error.connect(error_callback)
+            self.signals.error.connect(error_callback, type=Qt.ConnectionType.QueuedConnection)
         if progress_callback:
-            self.signals.progress.connect(progress_callback)
+            self.signals.progress.connect(progress_callback, type=Qt.ConnectionType.QueuedConnection)
     
     def run(self):
         """在线程池中执行"""
@@ -3037,16 +3070,16 @@ class TranslationRunnable(QRunnable):
         # ✅ 创建信号对象用于线程安全通信
         self.signals = WorkerSignals()
         if finished_callback:
-            self.signals.finished.connect(lambda args: finished_callback(*args))
+            self.signals.finished.connect(lambda args: finished_callback(*args), type=Qt.ConnectionType.QueuedConnection)
         if error_callback:
-            self.signals.error.connect(error_callback)
+            self.signals.error.connect(error_callback, type=Qt.ConnectionType.QueuedConnection)
             
         if progress_callback:
-            self.signals.translation_progress.connect(progress_callback)
+            self.signals.translation_progress.connect(progress_callback, type=Qt.ConnectionType.QueuedConnection)
         if log_callback:
-            self.signals.log.connect(log_callback)
+            self.signals.log.connect(log_callback, type=Qt.ConnectionType.QueuedConnection)
         if file_processed_callback:
-            self.signals.file_processed.connect(file_processed_callback)
+            self.signals.file_processed.connect(file_processed_callback, type=Qt.ConnectionType.QueuedConnection)
     
     def stop(self):
         """停止任务"""
@@ -3095,16 +3128,22 @@ class TranslationRunnable(QRunnable):
             )
             worker._is_running = self._is_running
             
+            # 用于接收 worker 的 finished 信号
+            results = []
+            def on_worker_finished(worker_results):
+                results.extend(worker_results)
+            
             # 连接信号到回调
             worker.log_received.connect(lambda msg: self._emit_log(msg))
             worker.progress.connect(lambda c, t, m: self._emit_progress(c, t, m))
             worker.file_processed.connect(lambda d: self._emit_file_processed(d))
+            worker.finished.connect(on_worker_finished)
             
             self._current_task = loop.create_task(worker._do_processing())
             loop.run_until_complete(self._current_task)
             
             # 任务完成，发送结果
-            self._emit_finished([])
+            self._emit_finished(results)
 
         except asyncio.CancelledError:
             pass

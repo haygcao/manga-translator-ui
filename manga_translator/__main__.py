@@ -11,7 +11,8 @@ import logging
 import warnings
 
 # 在 PyTorch 初始化前设置显存优化，允许使用共享显存
-os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+# expandable_segments 可以减少显存碎片，避免 OOM 错误
+os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 
 # 隐藏第三方库的警告
 warnings.filterwarnings('ignore', message='.*Triton.*')
