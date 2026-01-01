@@ -2560,6 +2560,48 @@ class TranslationWorker(QObject):
             # 检查是否启用并发模式
             batch_concurrent = self.config_dict.get('cli', {}).get('batch_concurrent', False)
             
+            # 检查是否有不兼容并行的特殊模式
+            load_text = self.config_dict.get('cli', {}).get('load_text', False)
+            template = self.config_dict.get('cli', {}).get('template', False)
+            save_text = self.config_dict.get('cli', {}).get('save_text', False)
+            generate_and_export = self.config_dict.get('cli', {}).get('generate_and_export', False)
+            colorize_only = self.config_dict.get('cli', {}).get('colorize_only', False)
+            upscale_only = self.config_dict.get('cli', {}).get('upscale_only', False)
+            inpaint_only = self.config_dict.get('cli', {}).get('inpaint_only', False)
+            replace_translation = self.config_dict.get('cli', {}).get('replace_translation', False)
+            
+            is_template_save_mode = template and save_text
+            has_incompatible_mode = (
+                load_text or 
+                is_template_save_mode or 
+                generate_and_export or 
+                colorize_only or 
+                upscale_only or 
+                inpaint_only or
+                replace_translation
+            )
+            
+            # 如果有不兼容模式，强制禁用并行
+            if batch_concurrent and has_incompatible_mode:
+                incompatible_modes = []
+                if load_text:
+                    incompatible_modes.append("导入翻译")
+                if is_template_save_mode:
+                    incompatible_modes.append("导出原文")
+                if generate_and_export:
+                    incompatible_modes.append("导出翻译")
+                if colorize_only:
+                    incompatible_modes.append("仅上色")
+                if upscale_only:
+                    incompatible_modes.append("仅超分")
+                if inpaint_only:
+                    incompatible_modes.append("仅修复")
+                if replace_translation:
+                    incompatible_modes.append("替换翻译")
+                
+                self.log_received.emit(f"⚠️  并发流水线已禁用：当前模式 [{', '.join(incompatible_modes)}] 不支持并发处理")
+                batch_concurrent = False
+            
             if is_hq or (len(self.files) > 0 and batch_size > 1):
                 self.log_received.emit(f"--- 开始批量处理 ({'高质量模式' if is_hq else '批量模式'})")
 
