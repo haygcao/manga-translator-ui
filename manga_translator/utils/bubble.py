@@ -244,7 +244,10 @@ def is_bubble_advanced(img: np.ndarray, x: int, y: int, text_w: int, text_h: int
     Args:
         img: RGB image
         x, y, text_w, text_h: Text region coordinates
-        threshold: 0-1, higher = more strict (0.3=loose, 0.5=medium, 0.7=strict)
+        threshold: 0-1
+            - 0.5: Default (white_threshold=0.90, checkset=[3.2, 2.9])
+            - <0.5: More loose (lower white_threshold, lower checkset)
+            - >0.5: More strict (higher white_threshold, higher checkset)
     
     Returns:
         True if it's a bubble (should keep), False if non-bubble (should ignore)
@@ -266,16 +269,18 @@ def is_bubble_advanced(img: np.ndarray, x: int, y: int, text_w: int, text_h: int
     x, y, text_w, text_h = clear_outerwhite(x, y, text_w, text_h, new_mask_thresh)
     
     # Adjust white threshold based on input threshold
+    # 0.5 is the default from old version (0.90)
     # threshold 0.3 -> white_threshold 0.85 (loose)
-    # threshold 0.5 -> white_threshold 0.90 (medium)
+    # threshold 0.5 -> white_threshold 0.90 (default)
     # threshold 0.7 -> white_threshold 0.95 (strict)
-    white_threshold = 0.85 + (threshold * 0.15)
+    white_threshold = 0.90 + (threshold - 0.5) * 0.25
     
     # Adjust checkset based on threshold
+    # 0.5 is the default from old version ([3.2, 2.9])
     # threshold 0.3 -> [2.8, 2.5] (loose)
-    # threshold 0.5 -> [3.2, 2.9] (medium)
+    # threshold 0.5 -> [3.2, 2.9] (default)
     # threshold 0.7 -> [3.6, 3.3] (strict)
-    base_check = 3.2 + (threshold - 0.5) * 0.8
+    base_check = 3.2 + (threshold - 0.5) * 2.0
     checkset = [base_check, base_check - 0.3]
     
     # sd add to 10
