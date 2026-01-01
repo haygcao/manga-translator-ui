@@ -183,6 +183,49 @@ async def translate_files(input_paths, output_dir, config_service, verbose=False
     
     config_dict['cli'] = cli_config
     
+    # 检查是否有不兼容并行的特殊模式
+    load_text = cli_config.get('load_text', False)
+    template = cli_config.get('template', False)
+    save_text = cli_config.get('save_text', False)
+    generate_and_export = cli_config.get('generate_and_export', False)
+    colorize_only = cli_config.get('colorize_only', False)
+    upscale_only = cli_config.get('upscale_only', False)
+    inpaint_only = cli_config.get('inpaint_only', False)
+    replace_translation = cli_config.get('replace_translation', False)
+    
+    is_template_save_mode = template and save_text
+    has_incompatible_mode = (
+        load_text or 
+        is_template_save_mode or 
+        generate_and_export or 
+        colorize_only or 
+        upscale_only or 
+        inpaint_only or
+        replace_translation
+    )
+    
+    # 如果有不兼容模式，强制禁用并行
+    if cli_config.get('batch_concurrent', False) and has_incompatible_mode:
+        incompatible_modes = []
+        if load_text:
+            incompatible_modes.append("导入翻译")
+        if is_template_save_mode:
+            incompatible_modes.append("导出原文")
+        if generate_and_export:
+            incompatible_modes.append("导出翻译")
+        if colorize_only:
+            incompatible_modes.append("仅上色")
+        if upscale_only:
+            incompatible_modes.append("仅超分")
+        if inpaint_only:
+            incompatible_modes.append("仅修复")
+        if replace_translation:
+            incompatible_modes.append("替换翻译")
+        
+        print(f"⚠️  并发流水线已禁用：当前模式 [{', '.join(incompatible_modes)}] 不支持并发处理")
+        cli_config['batch_concurrent'] = False
+        config_dict['cli'] = cli_config
+    
     print(f"\n{'='*60}")
     print(f"翻译器: {config_dict['translator']['translator']}")
     print(f"目标语言: {config_dict['translator']['target_lang']}")
