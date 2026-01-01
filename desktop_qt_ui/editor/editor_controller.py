@@ -1525,7 +1525,8 @@ class EditorController(QObject):
 
 
                 # 获取区域数据
-                region_data = self.model._regions[region_index]
+                regions = self.model.get_regions()
+                region_data = regions[region_index]
                 lines = region_data.get('lines', [])
 
                 if active_polygon_index >= 0 and active_polygon_index < len(lines):
@@ -1586,8 +1587,9 @@ class EditorController(QObject):
             from editor.commands import DeleteRegionCommand
 
             for region_index in regions_to_delete:
-                if 0 <= region_index < len(self.model._regions):
-                    region_data = self.model._regions[region_index]
+                regions = self.model.get_regions()
+                if 0 <= region_index < len(regions):
+                    region_data = regions[region_index]
                     command = DeleteRegionCommand(
                         model=self.model,
                         region_index=region_index,
@@ -1679,7 +1681,7 @@ class EditorController(QObject):
         self.execute_command(command)
 
         # 选中新粘贴的区域
-        new_index = len(self.model._regions) - 1
+        new_index = len(self.model.get_regions()) - 1
         self.model.set_selection([new_index])
 
     def _update_undo_redo_buttons(self):
