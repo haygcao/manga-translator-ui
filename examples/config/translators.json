@@ -139,5 +139,20 @@
     "validation_rules": {
       "OPENAI_API_KEY": "^sk-[a-zA-Z0-9]{48}$"
     }
+  },
+  "openai_hq": {
+    "name": "openai_hq",
+    "display_name": "高质量翻译 OpenAI",
+    "required_env_vars": [],
+    "optional_env_vars": ["OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_API_BASE"],
+    "validation_rules": {
+      "OPENAI_API_KEY": "^sk-[a-zA-Z0-9]{48}$"
+    }
+  },
+  "gemini_hq": {
+    "name": "gemini_hq",
+    "display_name": "高质量翻译 Gemini",
+    "required_env_vars": [],
+    "optional_env_vars": ["GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_API_BASE"]
   }
 }
