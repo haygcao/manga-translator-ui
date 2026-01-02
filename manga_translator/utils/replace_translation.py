@@ -28,10 +28,105 @@ from typing import Optional, List, Tuple, Dict, Any
 from PIL import Image
 
 from .textblock import TextBlock
-from .generic import Context, dump_image
+from .generic import Context, dump_image, imwrite_unicode
 from .path_manager import TRANSLATED_IMAGES_SUBDIR, get_work_dir
 
 logger = logging.getLogger(__name__)
+
+
+def get_text_to_img_solid_ink(mask_final, cn_text_img, origin_img, mengban=8, pan=150):
+    """
+    超清锐利版文字合成函数
+    核心逻辑：使用 Lanczos4 插值 + 色阶压缩 (Levels)，最大程度还原源图的锐利度。
+    
+    Args:
+        mask_final: 蒙版图像
+        cn_text_img: 翻译图（要提取文字的图）
+        origin_img: 生肉图（底图）
+        mengban: 蒙版膨胀核大小
+        pan: 白场阈值偏移
+    
+    Returns:
+        合成后的图像
+    """
+    # --- 1. 基础校验 ---
+    if mask_final is None or cn_text_img is None or origin_img is None:
+        raise ValueError("输入图片为空")
+
+    h, w = origin_img.shape[:2]
+
+    # --- 2. 缩放 ---
+    # 蒙版使用最近邻插值，保持边缘清晰
+    if mask_final.shape[:2] != (h, w):
+        mask_final = cv2.resize(mask_final, (w, h), interpolation=cv2.INTER_NEAREST)
+    
+    # 文字使用线性插值，边缘更柔和自然
+    if cn_text_img.shape[:2] != (h, w):
+        cn_text_img = cv2.resize(cn_text_img, (w, h), interpolation=cv2.INTER_LINEAR)
+    
+    # --- 3. 准备蒙版区域 ---
+    if len(mask_final.shape) == 3:
+        mask_gray = cv2.cvtColor(mask_final, cv2.COLOR_BGR2GRAY)
+    else:
+        mask_gray = mask_final
+    _, mask_binary = cv2.threshold(mask_gray, 127, 255, cv2.THRESH_BINARY)
+    
+    # 擦除区 (涂白用)
+    kernel_erase = np.ones((mengban, mengban), np.uint8)
+    mask_erase = cv2.dilate(mask_binary, kernel_erase, iterations=3)
+    
+    # 安全区 (限制文字范围)
+    kernel_safe = np.ones((10, 10), np.uint8)
+    mask_safe_zone = cv2.dilate(mask_binary, kernel_safe, iterations=15)
+
+    # --- 4. 文字图色阶增强 ---
+    # 像 PS 的色阶工具：设定黑场和白场，中间线性拉伸
+    if len(cn_text_img.shape) == 3:
+        text_gray = cv2.cvtColor(cn_text_img, cv2.COLOR_BGR2GRAY)
+    else:
+        text_gray = cn_text_img
+
+    # 参数设置
+    in_black = 90   # 黑场阈值：调大字会变粗变黑，调小字会变细
+    in_white = max(in_black + 50, pan + 30) # 白场阈值：清洗背景
+    if in_white > 255: 
+        in_white = 255
+    
+    # 构建查找表 (LUT) 进行快速色阶映射
+    lut = np.zeros(256, dtype=np.uint8)
+    for i in range(256):
+        if i <= in_black:
+            val = 0 # 纯黑
+        elif i >= in_white:
+            val = 255 # 纯白
+        else:
+            # 线性拉伸中间的灰度
+            val = int((i - in_black) / (in_white - in_black) * 255)
+        lut[i] = val
+        
+    # 应用色阶调整 -> 得到锐利且带有抗锯齿的文字图
+    text_enhanced_gray = cv2.LUT(text_gray, lut)
+    
+    # 转回 BGR 方便合并
+    text_enhanced_bgr = cv2.cvtColor(text_enhanced_gray, cv2.COLOR_GRAY2BGR)
+
+    # --- 5. 执行合成 ---
+    result_img = origin_img.copy()
+    
+    # 5.1 涂白底图
+    result_img[mask_erase == 255] = [255, 255, 255]
+    
+    # 5.2 正片叠底 (Bitwise And)
+    # 只有在安全区内才进行融合
+    roi_bg = result_img[mask_safe_zone == 255]
+    roi_text = text_enhanced_bgr[mask_safe_zone == 255]
+    
+    # 融合：白底(255) & 文字 -> 文字
+    fused = cv2.bitwise_and(roi_bg, roi_text)
+    
+    result_img[mask_safe_zone == 255] = fused
+
+    return result_img
 
 
 async def translate_batch_replace_translation(translator, images_with_configs: List[tuple], save_info: dict = None, global_offset: int = 0, global_total: int = None) -> List[Context]:
@@ -232,11 +327,17 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                     
                 except Exception as e:
                     logger.warning(f"    [DEBUG] Failed to generate debug image: {e}")
-                    import traceback
                     traceback.print_exc()
             
             # === 步骤5: 修复生肉图 ===
             logger.info(f"  [4/4] 修复生肉图...")
+            
+            # 检查是否有需要修复的区域
+            if not inpaint_regions:
+                logger.warning(f"  [跳过] 没有需要修复的区域")
+                raw_ctx.success = False
+                results.append(raw_ctx)
+                continue
             
             # 临时替换 text_regions 为修复区域
             original_regions = raw_ctx.text_regions
@@ -259,15 +360,13 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
             # === 步骤6: 渲染或粘贴 ===
             # 检查是否启用直接粘贴模式
             if config.render.enable_template_alignment:
-                logger.info(f"  [5/5] 直接粘贴模式 - 从翻译图裁剪区域并粘贴到修复后的生肉图")
+                logger.info(f"  [5/5] 直接粘贴模式 - 使用高级图像合成算法")
                 
-                # 使用修复后的图像作为基础，从翻译图粘贴文字
-                result_img = paste_regions_from_translated_image(
-                    raw_ctx.img_inpainted,  # 使用修复后的图像
-                    translated_ctx.img_rgb,
-                    raw_regions_filtered,
-                    scaled_trans_regions,
-                    matches
+                # 使用高级图像合成算法
+                result_img = get_text_to_img_solid_ink(
+                    raw_ctx.mask,           # 蒙版
+                    translated_ctx.img_rgb, # 翻译图
+                    raw_ctx.img_inpainted   # 修复后的生肉图
                 )
                 
                 # 使用 dump_image 将结果转换为 PIL Image
@@ -763,81 +862,6 @@ def calculate_template_alignment_offset(raw_img: np.ndarray,
         return (0, 0)
 
 
-def paste_regions_from_translated_image(raw_img: np.ndarray,
-                                        translated_img: np.ndarray,
-                                        raw_regions: List[TextBlock],
-                                        translated_regions: List[TextBlock],
-                                        matches: List[Tuple[int, int, float]]) -> np.ndarray:
-    """
-    根据匹配的区域，从翻译图裁剪并粘贴到生肉图
-    
-    Args:
-        raw_img: 生肉图（BGR格式）
-        translated_img: 翻译图（BGR格式）
-        raw_regions: 生肉图区域列表
-        translated_regions: 翻译图区域列表（已缩放到生肉图尺寸）
-        matches: 匹配结果 [(raw_idx, trans_idx, overlap), ...]
-        
-    Returns:
-        合成后的图像（BGR格式）
-    """
-    try:
-        logger.info(f"    [粘贴] 开始从翻译图粘贴 {len(matches)} 个区域...")
-        
-        # 确保图像是BGR格式
-        if len(translated_img.shape) == 2:
-            translated_img = cv2.cvtColor(translated_img, cv2.COLOR_GRAY2BGR)
-        if len(raw_img.shape) == 2:
-            raw_img = cv2.cvtColor(raw_img, cv2.COLOR_GRAY2BGR)
-        
-        zh, zw = translated_img.shape[:2]
-        rh, rw = raw_img.shape[:2]
-        
-        # 如果尺寸不一致，缩放翻译图到生肉图尺寸
-        if zh != rh or zw != rw:
-            logger.info(f"    [粘贴] 缩放翻译图: {zw}x{zh} -> {rw}x{rh}")
-            translated_img = cv2.resize(translated_img, (rw, rh), interpolation=cv2.INTER_AREA)
-            zh, zw = rh, rw
-        
-        # 复制生肉图作为结果
-        result = raw_img.copy()
-        
-        # 遍历每个匹配的区域
-        for raw_idx, trans_idx, overlap in matches:
-            trans_region = translated_regions[trans_idx]
-            
-            # 获取翻译区域的外接矩形
-            x, y, w, h = get_bounding_rect(trans_region)
-            x, y, w, h = int(x), int(y), int(w), int(h)
-            
-            # 确保坐标在图像范围内
-            x = max(0, min(x, zw - 1))
-            y = max(0, min(y, zh - 1))
-            w = min(w, zw - x)
-            h = min(h, zh - y)
-            
-            if w <= 0 or h <= 0:
-                logger.warning(f"    [粘贴] 跳过无效区域 T{trans_idx}: w={w}, h={h}")
-                continue
-            
-            # 从翻译图裁剪这个区域
-            trans_patch = translated_img[y:y+h, x:x+w].copy()
-            
-            # 粘贴到生肉图的相同位置
-            result[y:y+h, x:x+w] = trans_patch
-            
-            logger.debug(f"    [粘贴] 区域 T{trans_idx}: ({x},{y}) {w}x{h}")
-        
-        logger.info(f"    [粘贴] 完成，共粘贴 {len(matches)} 个区域")
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"    [粘贴] 粘贴失败: {e}")
-        traceback.print_exc()
-        return raw_img.copy()
-
-
 # 导出的函数和类
 __all__ = [
     'ReplaceTranslationResult',
@@ -848,5 +872,5 @@ __all__ = [
     'match_regions',
     'create_matched_regions',
     'filter_raw_regions_for_inpainting',
-    'paste_regions_from_translated_image',
+    'get_text_to_img_solid_ink',
 ]
