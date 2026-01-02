@@ -3,8 +3,16 @@
 解决Qt控件（如QComboBox、QSpinBox等）捕获滚轮事件导致页面无法滚动的问题
 """
 
-from PyQt6.QtCore import QEvent, QObject
+from PyQt6.QtCore import QEvent, QObject, Qt
 from PyQt6.QtWidgets import QComboBox, QSpinBox, QDoubleSpinBox
+
+
+class NoWheelComboBox(QComboBox):
+    """禁用滚轮事件的下拉框"""
+    
+    def wheelEvent(self, event):
+        """完全忽略滚轮事件"""
+        event.ignore()
 
 
 class WheelEventFilter(QObject):
@@ -16,15 +24,14 @@ class WheelEventFilter(QObject):
     def eventFilter(self, obj, event):
         """
         过滤事件
-        如果是滚轮事件且控件未获得焦点，则忽略该事件，让其传递给父控件
+        完全阻止下拉菜单响应滚轮事件
         """
         if event.type() == QEvent.Type.Wheel:
             # 检查是否是需要特殊处理的控件
             if isinstance(obj, (QComboBox, QSpinBox, QDoubleSpinBox)):
-                # 如果控件没有焦点，则忽略滚轮事件
-                if not obj.hasFocus():
-                    event.ignore()
-                    return True
+                # 完全忽略滚轮事件，无论是否有焦点
+                event.ignore()
+                return True
         
         # 继续正常处理其他事件
         return super().eventFilter(obj, event)

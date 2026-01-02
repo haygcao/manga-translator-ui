@@ -5,7 +5,6 @@ from functools import partial
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -23,6 +22,7 @@ from PyQt6.QtWidgets import (
 from services import get_config_service, get_i18n_manager
 from widgets.file_list_view import FileListView
 from utils.resource_helper import resource_path
+from utils.wheel_filter import NoWheelComboBox as QComboBox
 
 
 class MainView(QWidget):
@@ -688,7 +688,6 @@ class MainView(QWidget):
         self.workflow_mode_label = QLabel(self._t("Translation Workflow Mode:"))
         left_layout.addWidget(self.workflow_mode_label)
 
-        from PyQt6.QtWidgets import QComboBox
         self.workflow_mode_combo = QComboBox()
         self.workflow_mode_combo.addItems([
             self._t("Normal Translation"),
