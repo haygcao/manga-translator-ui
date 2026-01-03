@@ -503,6 +503,7 @@ class OCR(nn.Module):
         self.max_len = max_len
         self.dictionary = dictionary
         self.dict_size = len(dictionary)
+        self.use_gpu = False  # 初始化 use_gpu 标志
         self.backbone = ResNet_FeatureExtractor(3, 320)
         encoder = nn.TransformerEncoderLayer(320, 4, dropout = 0.0)
         decoder = nn.TransformerDecoderLayer(320, 4, dropout = 0.0)
