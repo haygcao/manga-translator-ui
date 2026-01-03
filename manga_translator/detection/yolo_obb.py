@@ -33,7 +33,7 @@ class YOLOOBBDetector(OfflineDetector):
         
         # 类别列表（不包括other）
         self.classes = ['balloon', 'qipao', 'shuqing', 'changfangtiao', 'hengxie']
-        self.input_size = 640
+        self.input_size = 1280  # 输入图像分辨率
         self.using_cuda = False  # 初始化标志
     
     async def _load(self, device: str):
