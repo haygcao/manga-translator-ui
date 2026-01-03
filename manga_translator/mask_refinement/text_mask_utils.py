@@ -168,8 +168,9 @@ def _find_safe_split_points(textlines: List[Quadrilateral], img_height: int, img
         return []
     
     # 均匀选择切割点
-    step = len(gaps) // (target_chunks - 1)
-    return [gaps[i * step] for i in range(1, target_chunks)][:target_chunks - 1]
+    step = max(1, len(gaps) // (target_chunks - 1))
+    selected_indices = [min(i * step, len(gaps) - 1) for i in range(1, target_chunks)]
+    return [gaps[idx] for idx in selected_indices][:target_chunks - 1]
 
 
 def _process_chunk(img_chunk: np.ndarray, mask_chunk: np.ndarray, textlines_chunk: List[Quadrilateral], 
