@@ -101,17 +101,6 @@ def load_req_file(requirements_file: str) -> List[str]:
         return list(map(lambda x: str(Requirement(x)), valid_reqs))
 
 
-def check_package_integrity(package_name: str) -> bool:
-    """检查包的完整性（是否可以正常导入）"""
-    try:
-        # 尝试导入包来检查是否损坏
-        __import__(package_name.replace('-', '_'))
-        return True
-    except (ImportError, OSError, Exception):
-        # 导入失败，包可能损坏
-        return False
-
-
 def _yield_reqs_to_install(req: Requirement, current_extra: str = ''):
     """检查需要安装的依赖"""
     if req.marker and not req.marker.evaluate({'extra': current_extra}):
@@ -125,16 +114,10 @@ def _yield_reqs_to_install(req: Requirement, current_extra: str = ''):
         # 对于 PyTorch 等包，移除本地版本标识符（如 +cu128）进行比较
         # 例如：2.9.1+cu128 -> 2.9.1
         version_base = version_str.split('+')[0]
-        
+
         # 先用基础版本号检查
         if req.specifier.contains(version_base, prereleases=True):
-            # 版本匹配，检查包完整性
-            if not check_package_integrity(req.name):
-                # 包损坏，需要重新安装
-                yield req
-                return
-            
-            # 版本匹配且完整，检查子依赖
+            # 版本匹配，检查子依赖
             for child_req in (importlib_metadata.metadata(req.name).get_all('Requires-Dist') or []):
                 child_req_obj = Requirement(child_req)
                 need_check, ext = False, None
@@ -152,7 +135,7 @@ def _yield_reqs_to_install(req: Requirement, current_extra: str = ''):
                 installed_version = Version(version_base)
                 # 检查 specifier 中是否有精确版本要求（==）
                 has_exact_match = any(spec.operator == '==' for spec in req.specifier)
-                
+
                 if has_exact_match:
                     # 有精确版本要求，检查已安装版本是否更新
                     # 提取要求的版本号
@@ -160,14 +143,10 @@ def _yield_reqs_to_install(req: Requirement, current_extra: str = ''):
                         if spec.operator == '==':
                             required_version = Version(spec.version)
                             if installed_version >= required_version:
-                                # 已安装版本更新或相等，检查完整性
-                                if not check_package_integrity(req.name):
-                                    # 包损坏，需要重新安装
-                                    yield req
-                                # 版本满足且完整，认为满足
+                                # 已安装版本更新或相等，认为满足
                                 return
                             break
-                
+
                 # 其他情况，版本不匹配，需要安装
                 yield req
             except Exception:
