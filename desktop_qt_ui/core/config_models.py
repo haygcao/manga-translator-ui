@@ -120,6 +120,7 @@ class AppSection(BaseModel):
     theme: str = "light"  # 主题：light, dark, gray
     ui_language: str = "auto"  # UI语言：auto(自动检测), zh_CN, en_US, ja_JP, ko_KR 等
     current_preset: str = "默认"  # 当前使用的预设名称
+    unload_models_after_translation: bool = False  # 翻译完成后卸载模型（释放内存更彻底，但下次使用需要重新加载）
 
 class AppSettings(BaseModel):
     app: AppSection = Field(default_factory=AppSection)

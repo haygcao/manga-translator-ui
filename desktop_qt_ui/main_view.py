@@ -67,7 +67,8 @@ class MainView(QWidget):
         main_splitter.setSizes([300, 980]) # 设置初始比例
         main_splitter.setHandleWidth(6) # 设置分隔条宽度
 
-        self._create_dynamic_settings()
+        # 不在这里调用 _create_dynamic_settings，等待 app_logic.initialize 发送 config_loaded 信号
+        # self._create_dynamic_settings()  # 删除这行，避免重复创建
 
         # Connect signals for button state management
         self.controller.state_manager.is_translating_changed.connect(self.on_translation_state_changed, type=Qt.ConnectionType.QueuedConnection)
@@ -141,6 +142,7 @@ class MainView(QWidget):
             "upscale": self.tab_frames["Advanced Settings_right"],
             "colorizer": self.tab_frames["Advanced Settings_right"],
             "ocr": self.tab_frames["Options_left"],
+            "app": self.tab_frames["Options_right"],  # 应用设置显示在Options右侧
             "global": self.tab_frames["Options_right"],
         }
 
@@ -160,6 +162,36 @@ class MainView(QWidget):
         """
         Called after all incremental updates are done. Sets up dependent UI like .env section.
         """
+        # 在 CLI 配置区域最上面添加"翻译完成后卸载模型"复选框
+        cli_panel = self.tab_frames.get("Basic Settings_right")
+        if cli_panel:
+            cli_layout = cli_panel.layout()
+            if cli_layout and isinstance(cli_layout, QFormLayout):
+                # 创建复选框
+                unload_models_checkbox = QCheckBox()
+                unload_models_checkbox.setObjectName("app.unload_models_after_translation")
+                
+                # 从配置中读取初始状态
+                config = self.config_service.get_config()
+                unload_models_checkbox.setChecked(config.app.unload_models_after_translation)
+                
+                # 连接信号
+                unload_models_checkbox.stateChanged.connect(
+                    lambda state: self.controller.update_single_config(
+                        'app.unload_models_after_translation', 
+                        bool(state)
+                    )
+                )
+                
+                # 创建标签
+                label_text = self._t("unload_models_after_translation")
+                if not label_text or label_text == "unload_models_after_translation":
+                    label_text = "翻译完成后卸载模型"
+                unload_models_label = QLabel(f"{label_text}:")
+                
+                # 插入到最上面（索引0）
+                cli_layout.insertRow(0, unload_models_label, unload_models_checkbox)
+        
         translator_combo = self.findChild(QComboBox, "translator.translator")
         if translator_combo:
             parent_layout = translator_combo.parent().layout()
@@ -417,7 +449,9 @@ class MainView(QWidget):
             # gimp_font 已废弃，使用 font_path 代替
             # translator.attempts 隐藏，始终与 cli.attempts 同步
             # replace_translation 和 replace_translation_mode 通过工作流模式下拉框控制
-            if full_key in ["cli.load_text", "cli.template", "cli.generate_and_export", "cli.colorize_only", "cli.upscale_only", "cli.inpaint_only", "cli.replace_translation", "cli.replace_translation_mode", "upscale.realcugan_model", "render.gimp_font", "translator.attempts"]:
+            # app 配置组的字段：last_open_dir, last_output_path, favorite_folders, theme, ui_language, current_preset 是内部状态，不显示在UI中
+            # app.unload_models_after_translation 在 _finalize_settings_ui 中手动创建
+            if full_key in ["cli.load_text", "cli.template", "cli.generate_and_export", "cli.colorize_only", "cli.upscale_only", "cli.inpaint_only", "cli.replace_translation", "cli.replace_translation_mode", "upscale.realcugan_model", "render.gimp_font", "translator.attempts", "app.last_open_dir", "app.last_output_path", "app.favorite_folders", "app.theme", "app.ui_language", "app.current_preset", "app.unload_models_after_translation"]:
                 continue
 
             label_text = key

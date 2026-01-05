@@ -1975,7 +1975,9 @@ class TranslationWorker(QObject):
         # 使用统一的内存清理模块
         try:
             from desktop_qt_ui.utils.memory_cleanup import full_memory_cleanup
-            full_memory_cleanup(log_callback=lambda msg: self.log_received.emit(msg))
+            # 使用配置中的卸载模型开关
+            unload_models = self.config_dict.get('app', {}).get('unload_models_after_translation', False)
+            full_memory_cleanup(log_callback=lambda msg: self.log_received.emit(msg), unload_models=unload_models)
         except Exception as e:
             self.log_received.emit(f"--- [CLEANUP] Warning: Failed to cleanup: {e}")
 
@@ -2862,7 +2864,9 @@ class TranslationWorker(QObject):
                     del images_with_configs
                 
                 from desktop_qt_ui.utils.memory_cleanup import full_memory_cleanup
-                full_memory_cleanup(log_callback=lambda msg: self.log_received.emit(msg))
+                # 使用配置中的卸载模型开关
+                unload_models = self.config_dict.get('app', {}).get('unload_models_after_translation', False)
+                full_memory_cleanup(log_callback=lambda msg: self.log_received.emit(msg), unload_models=unload_models)
             except Exception as e:
                 self.log_received.emit(f"--- [CLEANUP] Warning: 内存清理时出错: {e}")
 
@@ -3132,7 +3136,8 @@ class TranslationRunnable(QRunnable):
         
         try:
             from desktop_qt_ui.utils.memory_cleanup import full_memory_cleanup
-            full_memory_cleanup(log_callback=lambda msg: self._emit_log(msg))
+            # 使用配置中的卸载模型开关（这里没有config_dict，默认使用False）
+            full_memory_cleanup(log_callback=lambda msg: self._emit_log(msg), unload_models=False)
         except Exception as e:
             self._emit_log(f"--- [CLEANUP] 清理失败: {e}")
     

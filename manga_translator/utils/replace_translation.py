@@ -758,18 +758,19 @@ def match_regions(raw_regions: List[TextBlock],
             if overlap >= iou_threshold:
                 matched_raws.append((raw_idx, overlap))
         
-        # 如果这个翻译框有匹配的生肉框，保留它
+        # 如果这个翻译框有匹配的生肉框，保留所有匹配
         if matched_raws:
-            # 选择重叠率最高的生肉框作为代表
-            best_raw_idx, best_overlap = max(matched_raws, key=lambda x: x[1])
-            matches.append((best_raw_idx, trans_idx, best_overlap))
+            # 为每个匹配的生肉框都创建一个匹配记录
+            # 这样可以确保所有匹配的生肉框都会被修复
+            for raw_idx, overlap in matched_raws:
+                matches.append((raw_idx, trans_idx, overlap))
             
             # 如果有多个生肉框匹配到这个翻译框，记录日志
             if len(matched_raws) > 1:
                 raw_indices = [r for r, _ in matched_raws]
                 trans_text = translated_regions[trans_idx].text if hasattr(translated_regions[trans_idx], 'text') else ''
                 logger.info(f"    [多对一] T{trans_idx} (文本=\"{trans_text[:20] if trans_text else ''}...\") "
-                          f"被 {len(matched_raws)} 个生肉框匹配: {raw_indices}")
+                          f"匹配了 {len(matched_raws)} 个生肉框: {raw_indices}，都会被修复")
     
     # 统计未匹配的区域
     matched_trans = set(t for _, t, _ in matches)
@@ -818,6 +819,7 @@ def create_matched_regions(raw_regions: List[TextBlock],
     创建匹配后的区域列表 - 简化版
     
     直接使用翻译框的所有数据（框、文本、样式）
+    注意：一个翻译框可能匹配多个生肉框，但只添加一次到渲染列表
     
     Args:
         raw_regions: 生肉图区域（用于记录哪些被匹配了）
@@ -831,26 +833,33 @@ def create_matched_regions(raw_regions: List[TextBlock],
     
     matched_regions = []
     matched_raw_indices = set()
+    added_trans_indices = set()  # 记录已添加的翻译框，避免重复
     
     for raw_idx, trans_idx, overlap in matches:
+        # 记录生肉框索引（用于修复）
+        matched_raw_indices.add(raw_idx)
+        
+        # 只添加翻译框一次（避免重复渲染）
+        if trans_idx in added_trans_indices:
+            continue
+        added_trans_indices.add(trans_idx)
+        
         # 直接使用翻译框的数据
         region = copy.deepcopy(translated_regions[trans_idx])
         
         # 关键修复：从 texts 数组重建带 [BR] 的 translation 字段
         # 因为渲染器使用 translation 字段来渲染文本，并且需要 [BR] 来换行
-        if region.texts and len(region.texts) > 1:
-            # 多行文本，用 [BR] 连接
+        if region.texts and len(region.texts) > 0:
+            # 有 texts 数组，用 [BR] 连接（即使只有一行也保持一致）
             region.translation = "[BR]".join(region.texts)
         elif region.text:
-            # 单行文本，直接使用
+            # 没有 texts 数组，使用 text 字段
             region.translation = region.text
+        else:
+            # 都没有，使用空字符串
+            region.translation = ""
         
         matched_regions.append(region)
-        matched_raw_indices.add(raw_idx)
-    
-    return matched_regions, matched_raw_indices
-    
-    return matched_regions, matched_raw_indices
     
     return matched_regions, matched_raw_indices
 

@@ -31,10 +31,7 @@ async def dispatch(text_regions: List[TextBlock], raw_image: np.ndarray, raw_mas
     if ignore_bubble <= 0 or ignore_bubble > 1:
         return final_mask
 
-    # bubble
-    kernel_size = int(max(final_mask.shape) * 0.025)  # 选择一个合适的核大小
-    kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    final_mask = cv2.dilate(final_mask, kernel, iterations=1)  # 根据需要调整迭代次数
+    # 先检测并移除非气泡区域，再进行膨胀
     # border
     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for cnt in contours:

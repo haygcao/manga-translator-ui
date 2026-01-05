@@ -463,7 +463,7 @@ async def batch_images(req: Request, data: BatchTranslateRequest):
         
         # 检查用户是否有离线翻译权限
         from manga_translator.server.core.middleware import get_services
-        _, permission_service, _ = get_services()
+        _, _, permission_service = get_services()
         allow_offline = permission_service.check_offline_translation_permission(username)
         
         # 如果允许离线翻译，创建一个永不断开的 Request 包装器

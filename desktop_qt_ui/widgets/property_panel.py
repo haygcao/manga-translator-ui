@@ -587,7 +587,8 @@ class PropertyPanel(QWidget):
         ocr_config = config.ocr
         translator_config = config.translator
 
-        # OCR
+        # OCR - 阻止信号避免触发不必要的配置更新
+        self.ocr_model_combo.blockSignals(True)
         ocr_options = self.app_logic.get_options_for_key('ocr')
         if ocr_options:
             self.ocr_model_combo.clear()
@@ -595,8 +596,10 @@ class PropertyPanel(QWidget):
             current_ocr = ocr_config.ocr
             if current_ocr in ocr_options:
                 self.ocr_model_combo.setCurrentText(current_ocr)
+        self.ocr_model_combo.blockSignals(False)
 
-        # Translator
+        # Translator - 阻止信号避免触发不必要的配置更新
+        self.translator_combo.blockSignals(True)
         translator_map = self.app_logic.get_display_mapping('translator')
         if translator_map:
             self.translator_display_to_key = {v: k for k, v in translator_map.items()}
@@ -606,8 +609,10 @@ class PropertyPanel(QWidget):
             current_translator_display = translator_map.get(current_translator_key)
             if current_translator_display:
                 self.translator_combo.setCurrentText(current_translator_display)
+        self.translator_combo.blockSignals(False)
 
-        # Target Language
+        # Target Language - 阻止信号避免触发不必要的配置更新
+        self.target_language_combo.blockSignals(True)
         lang_map = self.app_logic.get_display_mapping('target_lang')
         if lang_map:
             self.lang_name_to_code = {v: k for k, v in lang_map.items()}
@@ -617,6 +622,7 @@ class PropertyPanel(QWidget):
             current_lang_display = lang_map.get(current_lang_key)
             if current_lang_display:
                 self.target_language_combo.setCurrentText(current_lang_display)
+        self.target_language_combo.blockSignals(False)
 
         # Alignment
         alignment_map = self.app_logic.get_display_mapping('alignment')
@@ -1297,19 +1303,16 @@ class PropertyPanel(QWidget):
 
     def _on_ocr_model_change(self, text):
         """OCR模型变化时保存配置"""
-        print(f"OCR Model changed to: {text}")
         self.app_logic.update_single_config('ocr.ocr', text)
 
     def _on_translator_change(self, display_name):
         """翻译器变化时保存配置"""
         translator_key = self.translator_display_to_key.get(display_name, display_name)
-        print(f"Translator changed to: {translator_key}")
         self.app_logic.update_single_config('translator.translator', translator_key)
 
     def _on_target_language_change(self, display_name):
         """目标语言变化时保存配置"""
         lang_code = self.lang_name_to_code.get(display_name, "CHS")
-        print(f"Target language changed to: {lang_code}")
         self.app_logic.update_single_config('translator.target_lang', lang_code)
         # 同时更新翻译服务的目标语言
         self.app_logic.translation_service.set_target_language(lang_code)

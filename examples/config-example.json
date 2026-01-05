@@ -5,7 +5,8 @@
     "favorite_folders": null,
     "theme": "light",
     "ui_language": "auto",
-    "current_preset": "默认"
+    "current_preset": "默认",
+    "unload_models_after_translation": false
   },
   "filter_text_enabled": false,
   "kernel_size": 3,
@@ -84,7 +85,7 @@
   "upscale": {
     "upscaler": "mangajanai",
     "upscale_ratio": null,
-    "realcugan_model": "2x-denoise3x-pro",
+    "realcugan_model": "2x-conservative",
     "tile_size": 600,
     "revert_upscaling": false
   },

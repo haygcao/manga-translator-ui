@@ -98,6 +98,7 @@ task_queue = TaskQueue()
 
 async def wait_in_queue(task: QueueElement | BatchQueueElement, notify: NotifyType):
     """Will get task position report it. If its in the range of translators then it will try to aquire an instance(blockig) and sent a task to it. when done the item will be removed from the queue and result will be returned"""
+    global result
     while True:
         queue_pos = task_queue.get_pos(task)
         if queue_pos is None:

@@ -43,8 +43,12 @@ def init_middleware_services(
     logger.info("Middleware services initialized")
 
 
-def get_services():
-    """获取服务实例（用于依赖注入）"""
+def get_services() -> tuple[AccountService, SessionService, PermissionService]:
+    """获取服务实例（用于依赖注入）
+    
+    Returns:
+        tuple: (account_service, session_service, permission_service)
+    """
     if not _account_service or not _session_service or not _permission_service:
         raise RuntimeError("Middleware services not initialized")
     return _account_service, _session_service, _permission_service
