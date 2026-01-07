@@ -532,6 +532,32 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                     
                     logger.info(f"    步骤5: 双边滤波优化完成")
                     
+                    # 步骤5.5: 最终过滤 - 去掉 ≤10像素的小区域
+                    logger.info(f"    步骤5.5: 最终过滤 - 去掉小区域")
+                    
+                    # 连通组件分析
+                    num_labels_final, labels_final = cv2.connectedComponents(filtered_mask)
+                    
+                    # 只保留面积 >10 的连通组件
+                    final_filtered_mask = np.zeros((h, w), dtype=np.uint8)
+                    removed_count = 0
+                    kept_count = 0
+                    
+                    for label_id in range(1, num_labels_final):
+                        component = (labels_final == label_id).astype(np.uint8) * 255
+                        area = np.count_nonzero(component)
+                        
+                        if area > 10:
+                            # 面积足够，保留
+                            final_filtered_mask = cv2.bitwise_or(final_filtered_mask, component)
+                            kept_count += 1
+                        else:
+                            # 面积太小，丢弃
+                            removed_count += 1
+                    
+                    logger.info(f"    步骤5.5: 移除 {removed_count} 个 ≤10像素的小区域，保留 {kept_count} 个区域")
+                    filtered_mask = final_filtered_mask
+                    
                     # 步骤6: 最终膨胀（可选，通过mask_dilation_offset控制）
                     # mask_dilation_offset: 膨胀距离（像素数），设为0则跳过膨胀
                     mask_dilation_offset = config.mask_dilation_offset if hasattr(config, 'mask_dilation_offset') else 0
