@@ -9,6 +9,7 @@
 [![模型](https://img.shields.io/badge/%E6%A8%A1%E5%9E%8B-YSG-orange)](https://github.com/lhj5426/YSG)
 [![OCR](https://img.shields.io/badge/OCR-PaddleOCR-blue)](https://github.com/PaddlePaddle/PaddleOCR)
 [![OCR](https://img.shields.io/badge/OCR-MangaOCR-blue)](https://github.com/kha-white/manga-ocr)
+[![OCR](https://img.shields.io/badge/OCR-PaddleOCR--VL-blue)](https://github.com/jzhang533/PaddleOCR-VL-For-Manga)
 [![许可证](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-GPL--3.0-red)](LICENSE)
 
 </div>
@@ -306,6 +307,7 @@ python -m manga_translator --help
 - [lhj5426/YSG](https://github.com/lhj5426/YSG) - 提供模型支持
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 提供 OCR 模型支持
 - [kha-white/manga-ocr](https://github.com/kha-white/manga-ocr) - MangaOCR 模型支持
+- [jzhang533/PaddleOCR-VL-For-Manga](https://github.com/jzhang533/PaddleOCR-VL-For-Manga) - 提供 PaddleOCR-VL-For-Manga 模型支持
 - 所有贡献者和用户的支持
 
 ---

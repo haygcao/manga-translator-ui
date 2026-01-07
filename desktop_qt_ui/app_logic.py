@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -68,8 +69,8 @@ class MainAppLogic(QObject):
         self.i18n = get_i18n_manager()
         self.preset_service = get_preset_service()
 
-        # ✅ 使用线程池替代QThread，避免线程管理问题
-        self.thread_pool = QThreadPool.globalInstance()
+        # ✅ 使用普通线程替代线程池
+        self.current_thread = None  # 当前运行的线程
         self.current_worker = None  # 当前运行的worker
         self.current_task_id = 0  # 任务ID，用于区分不同的翻译任务
         self.saved_files_count = 0
@@ -1391,7 +1392,12 @@ class MainAppLogic(QObject):
         )
         
         self.current_worker = scanner_worker
-        self.thread_pool.start(scanner_worker)
+        
+        # 使用普通线程启动
+        thread = threading.Thread(target=scanner_worker.run, daemon=True)
+        self.current_thread = thread
+        thread.start()
+        
         self._ui_log("文件扫描任务已启动")
 
     def on_scanning_finished(self, resolved_files, file_map, archive_map, excluded):
@@ -1461,7 +1467,12 @@ class MainAppLogic(QObject):
         )
         
         self.current_worker = translation_worker
-        self.thread_pool.start(translation_worker)
+        
+        # 使用普通线程启动
+        thread = threading.Thread(target=translation_worker.run, daemon=True)
+        self.current_thread = thread
+        thread.start()
+        
         self._ui_log(f"翻译任务已启动 (任务ID: {task_id})")
         self.state_manager.set_translating(True)
         self.state_manager.set_status_message("正在翻译...")
@@ -1491,14 +1502,14 @@ class MainAppLogic(QObject):
             self._ui_log("一个任务已经在运行中。", "WARNING")
             return
         
-        # ✅ 等待线程池中的旧任务完全结束（防止ONNX Runtime冲突）
-        if self.current_worker is not None:
+        # ✅ 等待旧线程完全结束（防止ONNX Runtime冲突）
+        if self.current_thread is not None and self.current_thread.is_alive():
             self._ui_log("等待上一个任务完全结束...")
-            if not self.thread_pool.waitForDone(3000):  # 等待最多3秒
+            self.current_thread.join(timeout=3.0)  # 最多等3秒
+            if self.current_thread.is_alive():
                 self._ui_log("上一个任务未能在3秒内结束，强制继续", "WARNING")
+            self.current_thread = None
             self.current_worker = None
-        
-        # ✅ 线程池会自动管理任务，无需检查旧线程
 
         # 检查输出目录是否合法 (提前检查)
         output_path = self.config_service.get_config().app.last_output_path
@@ -1701,23 +1712,44 @@ class MainAppLogic(QObject):
             # 通知worker停止
             self.current_worker.stop()
             
-            # ✅ 延迟更新状态，确保任务完全停止后才允许新任务启动
-            from PyQt6.QtCore import QTimer
-            def delayed_cleanup():
-                self.state_manager.set_translating(False)
-                self.state_manager.set_status_message("任务已停止")
-                if hasattr(self, 'main_view') and self.main_view:
-                    self.main_view.reset_progress()
-                self._cleanup_after_task()
+            # ✅ 在后台线程中等待任务真正结束
+            def wait_for_thread_finish():
+                if self.current_thread and self.current_thread.is_alive():
+                    self._ui_log("等待翻译进程结束...")
+                    self.current_thread.join(timeout=5.0)  # 最多等5秒
+                    if self.current_thread.is_alive():
+                        self._ui_log("翻译进程未能在5秒内结束", "WARNING")
+                    else:
+                        self._ui_log("翻译进程已结束")
+                
+                # 在主线程中更新UI
+                from PyQt6.QtCore import QMetaObject, Qt
+                QMetaObject.invokeMethod(
+                    self,
+                    "_finish_stop_task",
+                    Qt.ConnectionType.QueuedConnection
+                )
             
-            # 等待1秒后才设置为可启动状态（给ONNX Runtime足够的清理时间）
-            QTimer.singleShot(1000, delayed_cleanup)
+            # 在后台线程中等待
+            wait_thread = threading.Thread(target=wait_for_thread_finish, daemon=True)
+            wait_thread.start()
             
             return True
         
         self._ui_log("请求停止任务，但没有正在运行的任务", "WARNING")
         self.state_manager.set_translating(False)
         return False
+    
+    @pyqtSlot()
+    def _finish_stop_task(self):
+        """在主线程中完成停止任务的清理工作"""
+        self.state_manager.set_translating(False)
+        self.state_manager.set_status_message("任务已停止")
+        if hasattr(self, 'main_view') and self.main_view:
+            self.main_view.reset_progress()
+        self._cleanup_after_task()
+        self.current_thread = None
+        self.current_worker = None
     # endregion
 
     # region 应用生命周期
@@ -1762,12 +1794,15 @@ class MainAppLogic(QObject):
                     except Exception as e:
                         self._ui_log(f"停止worker时出错: {e}", "WARNING")
                 
-                # ✅ 等待线程池中的任务完成（最多5秒）
-                if not self.thread_pool.waitForDone(5000):
-                    self._ui_log("线程池5秒内未完成所有任务", "WARNING")
-                else:
-                    self._ui_log("所有任务已正常停止")
+                # ✅ 等待线程完成（最多5秒）
+                if self.current_thread and self.current_thread.is_alive():
+                    self.current_thread.join(timeout=5.0)
+                    if self.current_thread.is_alive():
+                        self._ui_log("线程5秒内未完成任务", "WARNING")
+                    else:
+                        self._ui_log("所有任务已正常停止")
                 
+                self.current_thread = None
                 self.current_worker = None
                 self.state_manager.set_translating(False)
             
