@@ -360,8 +360,12 @@ def run_pip_requirements(requirements_file, desc=None):
         use_primary = is_pytorch_package(pkg_display) and primary_index_url
         if use_primary:
             print(f"    (使用 PyTorch 源: {primary_index_url})")
+            # PyTorch 相关包忽略版本锁定，安装最新版以保证版本一致性
+            pkg_to_install = pkg_display
+        else:
+            pkg_to_install = pkg
         
-        cmd = build_pip_command(f'install "{pkg}"', mirror, use_primary_index=use_primary)
+        cmd = build_pip_command(f'install "{pkg_to_install}"', mirror, use_primary_index=use_primary)
         
         try:
             result = subprocess.run(cmd, shell=True, env=os.environ)
@@ -1616,11 +1620,12 @@ def update_dependencies_selective(args, missing_packages):
         try:
             # 检查是否是 PyTorch 相关包
             if is_pytorch_package(pkg_name) and primary_index_url:
-                # 使用 PyTorch 源安装
+                # 使用 PyTorch 源安装，忽略版本锁定安装最新版
                 print(f"    (使用 PyTorch 源)")
                 parsed = urllib.parse.urlparse(primary_index_url)
                 trusted_host = f'--trusted-host {parsed.hostname}' if parsed.hostname else ''
-                cmd = f'"{python}" -m pip install "{pkg}" --index-url {primary_index_url} {trusted_host} --prefer-binary --disable-pip-version-check'
+                # 只用包名，不带版本号
+                cmd = f'"{python}" -m pip install "{pkg_name}" --index-url {primary_index_url} {trusted_host} --prefer-binary --disable-pip-version-check'
                 result = subprocess.run(cmd, shell=True, env=os.environ)
                 if result.returncode != 0:
                     raise RuntimeError(f"安装失败，返回码: {result.returncode}")
