@@ -75,6 +75,7 @@ accelerate>=1.12.0
 # bitsandbytes==0.45.0
 uvicorn==0.35.0
 websockets==14.2
+anyio>=4.8.0
 xformers  # 从 https://download.pytorch.org/whl/cu128 下载
 torchsummary
 open_clip_torch==3.1.0
@@ -92,5 +93,4 @@ py7zr==0.22.0
 bcrypt==4.2.1
 cryptography==44.0.0
 APScheduler==3.10.4
-anyio
 pytest-anyio==0.0.0

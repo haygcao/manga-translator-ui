@@ -87,7 +87,7 @@ websockets==14.2
 
 # xformers 不支持 macOS，已移除
 # xformers - CUDA only, not needed for MPS
-
+anyio>=4.8.0
 google-genai==1.57.0
 torchsummary
 open_clip_torch==3.1.0
@@ -104,5 +104,4 @@ py7zr==0.22.0
 bcrypt==4.2.1
 cryptography==44.0.0
 APScheduler==3.10.4
-anyio
 pytest-anyio==0.0.0

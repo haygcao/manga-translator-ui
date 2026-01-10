@@ -116,6 +116,7 @@ tqdm==4.67.1
 unidic_lite==1.0.8
 uvicorn==0.35.0
 websockets==14.2
+anyio>=4.8.0
 # xformers - AMD ROCm 支持有限,暂不包含
 google-genai==1.57.0
 # pydensecrf - 预编译 wheel 文件 (Python 3.12 Windows)
@@ -141,5 +142,4 @@ py7zr==0.22.0
 bcrypt==4.2.1
 cryptography==44.0.0
 APScheduler==3.10.4
-anyio
 pytest-anyio==0.0.0
