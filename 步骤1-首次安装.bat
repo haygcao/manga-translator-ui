@@ -487,6 +487,16 @@ if exist ".git" (
                 if !ERRORLEVEL! == 0 (
                     echo [OK] 代码已更新到最新版本
                     echo.
+                    echo 正在清理 macOS 脚本和 Git 配置文件...
+                    if exist "macOS_1_首次安装.sh" del /f /q "macOS_1_首次安装.sh" >nul 2>&1
+                    if exist "macOS_2_启动Qt界面.sh" del /f /q "macOS_2_启动Qt界面.sh" >nul 2>&1
+                    if exist "macOS_3_检查更新并启动.sh" del /f /q "macOS_3_检查更新并启动.sh" >nul 2>&1
+                    if exist "macOS_4_更新维护.sh" del /f /q "macOS_4_更新维护.sh" >nul 2>&1
+                    if exist ".gitattributes" del /f /q ".gitattributes" >nul 2>&1
+                    if exist ".gitignore" del /f /q ".gitignore" >nul 2>&1
+                    if exist "LICENSE.txt" del /f /q "LICENSE.txt" >nul 2>&1
+                    echo [OK] macOS 脚本和 Git 配置文件已清理
+                    echo.
                     goto :create_venv
                 ) else (
                     echo [WARNING] 同步失败,尝试使用 main 分支...
@@ -494,6 +504,16 @@ if exist ".git" (
                     "%GIT%" reset --hard origin/main
                     if !ERRORLEVEL! == 0 (
                         echo [OK] 代码已更新到最新版本
+                        echo.
+                        echo 正在清理 macOS 脚本和 Git 配置文件...
+                        if exist "macOS_1_首次安装.sh" del /f /q "macOS_1_首次安装.sh" >nul 2>&1
+                        if exist "macOS_2_启动Qt界面.sh" del /f /q "macOS_2_启动Qt界面.sh" >nul 2>&1
+                        if exist "macOS_3_检查更新并启动.sh" del /f /q "macOS_3_检查更新并启动.sh" >nul 2>&1
+                        if exist "macOS_4_更新维护.sh" del /f /q "macOS_4_更新维护.sh" >nul 2>&1
+                        if exist ".gitattributes" del /f /q ".gitattributes" >nul 2>&1
+                        if exist ".gitignore" del /f /q ".gitignore" >nul 2>&1
+                        if exist "LICENSE.txt" del /f /q "LICENSE.txt" >nul 2>&1
+                        echo [OK] macOS 脚本和 Git 配置文件已清理
                         echo.
                         goto :create_venv
                     ) else (
@@ -677,6 +697,17 @@ if exist "%TEMP_DIR%\.gitignore" (
     copy /Y "%TEMP_DIR%\.gitignore" . >nul
     if !ERRORLEVEL! neq 0 echo [ERROR] 复制.gitignore失败
 )
+
+echo.
+echo 正在清理 macOS 脚本和 Git 配置文件...
+if exist "macOS_1_首次安装.sh" del /f /q "macOS_1_首次安装.sh" >nul 2>&1
+if exist "macOS_2_启动Qt界面.sh" del /f /q "macOS_2_启动Qt界面.sh" >nul 2>&1
+if exist "macOS_3_检查更新并启动.sh" del /f /q "macOS_3_检查更新并启动.sh" >nul 2>&1
+if exist "macOS_4_更新维护.sh" del /f /q "macOS_4_更新维护.sh" >nul 2>&1
+if exist ".gitattributes" del /f /q ".gitattributes" >nul 2>&1
+if exist ".gitignore" del /f /q ".gitignore" >nul 2>&1
+if exist "LICENSE.txt" del /f /q "LICENSE.txt" >nul 2>&1
+echo [OK] macOS 脚本和 Git 配置文件已清理
 
 echo.
 echo 正在清理临时目录...
