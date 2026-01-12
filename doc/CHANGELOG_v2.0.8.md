@@ -9,6 +9,14 @@
   - 使用自定义 HTTP 客户端，配置合理的超时时间
   - 避免因请求头不完整导致的 403/429 错误
 - 修复 `packaging/launch.py` 中 `continue` 语法错误（不在循环内）
+- 修复 ONNX 修复模型缺少日志输出的问题：
+  - 为 ONNX 版本的 Lama MPE 和 Lama Large 修复模型添加 `Inpainting resolution` 日志
+  - 现在 ONNX 和 PyTorch 版本的日志输出保持一致
+- 修复日志输出缓冲导致的卡住问题：
+  - 设置 `PYTHONUNBUFFERED=1` 环境变量禁用输出缓冲
+  - 启用行缓冲模式，每行自动刷新
+  - 每次日志输出后强制刷新 stdout
+  - 解决命令行日志需要敲回车才更新的问题
 
 ## 🔧 优化
 
