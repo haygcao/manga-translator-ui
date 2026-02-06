@@ -1,5 +1,4 @@
-
-from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSlot, QTimer
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget
 
@@ -36,6 +35,9 @@ class MainWindow(QMainWindow):
         self.move(x, y)
         
         # 窗口图标已在 main.py 中设置，这里不需要重复设置
+        
+        # 当前应用的主题（用于逻辑判断）
+        self.current_applied_theme = "light"
 
         self._setup_logic_and_models()
         self._setup_ui()
@@ -43,6 +45,14 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
         self.app_logic.initialize()
+        
+        # 检查是否需要启动系统主题监听
+        config = self.config_service.get_config()
+        if config.app.theme == "system":
+            self.last_system_theme = self._detect_windows_theme()
+            self.theme_check_timer = QTimer(self)
+            self.theme_check_timer.timeout.connect(self._check_system_theme_change)
+            self.theme_check_timer.start(5000)  # 每5秒检查一次
     
     def _t(self, key: str, **kwargs) -> str:
         """翻译辅助方法"""
@@ -87,9 +97,11 @@ class MainWindow(QMainWindow):
         self.light_theme_action = QAction(self._t("Light"), self)
         self.dark_theme_action = QAction(self._t("Dark"), self)
         self.gray_theme_action = QAction(self._t("Gray"), self)
+        self.system_theme_action = QAction(self._t("Follow System"), self)
         theme_menu.addAction(self.light_theme_action)
         theme_menu.addAction(self.dark_theme_action)
         theme_menu.addAction(self.gray_theme_action)
+        theme_menu.addAction(self.system_theme_action)
         
         # 语言菜单（顶级菜单）
         language_menu = menu_bar.addMenu(self._t("&Language"))
@@ -127,8 +139,23 @@ class MainWindow(QMainWindow):
     
     def _apply_theme(self, theme: str):
         """应用指定的主题"""
+        
+        # 处理系统主题逻辑：如果是 'system'，则解析为实际主题
+        if theme == 'system':
+            sys_theme = self._detect_windows_theme()
+            if sys_theme == 'dark':
+                self._apply_theme('dark')
+            else:
+                config = self.config_service.get_config()
+                # 使用用户偏好（light 或 gray）
+                self._apply_theme(config.app.theme_user_preference)
+            return
+
         import os
         import sys
+        
+        # 记录当前实际应用的主题
+        self.current_applied_theme = theme
         
         # 主题文件映射
         theme_files = {
@@ -168,16 +195,86 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"Error loading stylesheet: {e}")
     
+    def _detect_windows_theme(self) -> str:
+        """检测Windows系统主题（深色/浅色）
+        返回: 'dark' 或 'light'
+        """
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+            )
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            winreg.CloseKey(key)
+            return "light" if value == 1 else "dark"
+        except Exception as e:
+            # 默认返回浅色（或记录日志）
+            # self.logger.warning(f"无法检测系统主题: {e}")
+            return "light"
+
+    def _check_system_theme_change(self):
+        """检查系统主题是否变化"""
+        config = self.config_service.get_config()
+        if config.app.theme != "system":
+            # 如果用户切换到其他主题，停止监听
+            if hasattr(self, 'theme_check_timer'):
+                self.theme_check_timer.stop()
+            return
+        
+        current_system_theme = self._detect_windows_theme()
+        if current_system_theme != self.last_system_theme:
+            self.logger.info(f"系统主题变化: {self.last_system_theme} -> {current_system_theme}")
+            
+            if current_system_theme == "dark":
+                # 系统切换到深色
+                if self.current_applied_theme != "dark":
+                    # 保存用户偏好（浅色或灰色）
+                    config.app.theme_user_preference = self.current_applied_theme
+                    self.config_service.save_config_file()
+                    self.logger.info(f"保存用户偏好: {self.current_applied_theme}")
+                # 切换到深色主题
+                self._apply_theme("dark")
+            else:
+                # 系统切换到浅色
+                # 恢复用户偏好
+                user_pref = config.app.theme_user_preference
+                self._apply_theme(user_pref)
+                self.logger.info(f"恢复用户偏好: {user_pref}")
+            
+            self.last_system_theme = current_system_theme
+
     def _change_theme(self, theme: str):
         """切换主题并保存到配置"""
         from services import get_config_service
-        
-        # 应用主题
-        self._apply_theme(theme)
-        
-        # 保存到配置（使用统一的配置管理服务）
         config_service = get_config_service()
         config = config_service.get_config()
+        
+        if theme == "system":
+            # 应用主题（逻辑主题）
+            self._apply_theme("system")
+            
+            # 启动监听
+            self.last_system_theme = self._detect_windows_theme()
+            if not hasattr(self, 'theme_check_timer'):
+                self.theme_check_timer = QTimer(self)
+                self.theme_check_timer.timeout.connect(self._check_system_theme_change)
+            
+            if not self.theme_check_timer.isActive():
+                self.theme_check_timer.start(1000)
+        else:
+            # 停止监听
+            if hasattr(self, 'theme_check_timer'):
+                self.theme_check_timer.stop()
+                
+            # 应用主题
+            self._apply_theme(theme)
+            
+            # 如果是浅色或灰色，更新用户偏好
+            if theme in ['light', 'gray']:
+                config.app.theme_user_preference = theme
+        
+        # 保存到配置
         config.app.theme = theme
         config_service.set_config(config)
         
@@ -223,6 +320,7 @@ class MainWindow(QMainWindow):
         self.light_theme_action.triggered.connect(lambda: self._change_theme("light"))
         self.dark_theme_action.triggered.connect(lambda: self._change_theme("dark"))
         self.gray_theme_action.triggered.connect(lambda: self._change_theme("gray"))
+        self.system_theme_action.triggered.connect(lambda: self._change_theme("system"))
 
     @pyqtSlot(str)
     def on_file_selected_from_main_list(self, file_path: str):
@@ -333,9 +431,11 @@ class MainWindow(QMainWindow):
         self.light_theme_action = QAction(self._t("Light"), self)
         self.dark_theme_action = QAction(self._t("Dark"), self)
         self.gray_theme_action = QAction(self._t("Gray"), self)
+        self.system_theme_action = QAction(self._t("Follow System"), self)
         theme_menu.addAction(self.light_theme_action)
         theme_menu.addAction(self.dark_theme_action)
         theme_menu.addAction(self.gray_theme_action)
+        theme_menu.addAction(self.system_theme_action)
         
         # 语言菜单
         language_menu = menu_bar.addMenu(self._t("&Language"))
@@ -354,6 +454,7 @@ class MainWindow(QMainWindow):
         self.light_theme_action.triggered.connect(lambda: self._change_theme("light"))
         self.dark_theme_action.triggered.connect(lambda: self._change_theme("dark"))
         self.gray_theme_action.triggered.connect(lambda: self._change_theme("gray"))
+        self.system_theme_action.triggered.connect(lambda: self._change_theme("system"))
     
     @pyqtSlot(list)
     def on_task_completed(self, saved_files: list):

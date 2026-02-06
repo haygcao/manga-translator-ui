@@ -119,7 +119,8 @@ class AppSection(BaseModel):
     last_open_dir: str = '.'
     last_output_path: str = ""
     favorite_folders: Optional[List[str]] = None
-    theme: str = "light"  # 主题：light, dark, gray
+    theme: str = "light"  # 主题：light, dark, gray, system
+    theme_user_preference: str = "light"
     ui_language: str = "auto"  # UI语言：auto(自动检测), zh_CN, en_US, ja_JP, ko_KR 等
     current_preset: str = "默认"  # 当前使用的预设名称
     unload_models_after_translation: bool = False  # 翻译完成后卸载模型（释放内存更彻底，但下次使用需要重新加载）

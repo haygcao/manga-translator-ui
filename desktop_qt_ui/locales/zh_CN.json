@@ -12,6 +12,7 @@
   "Light": "浅色",
   "Dark": "深色",
   "Gray": "灰色",
+  "Follow System": "跟随系统",
   "&Language": "&语言",
   "Task Completed": "任务完成",
   "Translation completed, {count} files saved.\n\nOpen results in editor?": "翻译完成，成功保存 {count} 个文件。\n\n是否在编辑器中打开结果？",
