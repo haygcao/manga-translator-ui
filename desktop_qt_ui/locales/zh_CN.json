@@ -644,6 +644,8 @@
   "Testing API connection, please wait...": "正在测试API连接，请稍候...",
   "API connection test successful!": "API连接测试成功！",
   "API connection test failed": "API连接测试失败",
+  "Please check your API key and address.": "请检查 API 密钥和地址是否正确。",
+  "Address format example": "地址格式示例",
   "Fetching models, please wait...": "正在获取模型列表，请稍候...",
   "Failed to get models": "获取模型列表失败",
   "No models available": "没有可用的模型",

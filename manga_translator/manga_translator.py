@@ -509,6 +509,18 @@ class MangaTranslator:
             except Exception as e:
                 logger.warning(f"Failed to override region settings from config: {e}")
 
+        # 对竖排区域的 translation 应用 auto_add_horizontal_tags
+        # 确保竖排内横排标记 <H> 写入 JSON
+        if config and hasattr(config, 'render') and getattr(config.render, 'auto_rotate_symbols', False):
+            from .rendering.text_render import auto_add_horizontal_tags
+            for region in regions_data:
+                direction = region.get('direction', '')
+                is_vertical = direction in ('v', 'vertical')
+                if 'horizontal' in region:
+                    is_vertical = not region['horizontal']
+                if is_vertical and region.get('translation'):
+                    region['translation'] = auto_add_horizontal_tags(region['translation'])
+
         # 获取图片尺寸（优先使用保存的尺寸，兼容并发模式）
         if hasattr(ctx, 'original_size') and ctx.original_size:
             original_width, original_height = ctx.original_size
@@ -795,18 +807,7 @@ class MangaTranslator:
                         except (ValueError, TypeError):
                              pass
                 
-                # 处理 stroke_color_type（新参数）
-                # 如果有 stroke_color_type，根据它设置 bg_color 和 adjust_bg_color
-                if 'stroke_color_type' in region_data:
-                    stroke_color_type = region_data.get('stroke_color_type')
-                    if stroke_color_type == "white":
-                        region_data['bg_color'] = (255, 255, 255)
-                        region_data['adjust_bg_color'] = False  # 禁用自动调整
-                    elif stroke_color_type == "black":
-                        region_data['bg_color'] = (0, 0, 0)
-                        region_data['adjust_bg_color'] = False  # 禁用自动调整
-                    # stroke_color_type 会被传递给 TextBlock 构造函数
-                
+
                 # 描边宽度 - stroke_width 优先级高于 default_stroke_width
                 # 用户在编辑器中设置的 stroke_width 应该覆盖原始的 default_stroke_width
                 if 'stroke_width' in region_data:
@@ -828,6 +829,8 @@ class MangaTranslator:
                         continue
                     region_data['lines'] = lines_arr
                 
+                # 导入翻译模式：颜色已由用户确认，不需要自动调整描边颜色
+                region_data['adjust_bg_color'] = False
                 region = TextBlock(**region_data)
                 regions.append(region)
             except Exception as e:
@@ -2137,15 +2140,7 @@ class MangaTranslator:
         # 更新context中的文本区域列表（使用过滤后的）
         ctx.text_regions = new_text_regions
 
-        # --- Save JSON after all post-processing (including punctuation replacement and filtering) ---
-        if self.save_text or self.text_output_file:
-            if hasattr(ctx, 'image_name') and ctx.image_name:
-                # 使用ctx中保存的config，如果没有则使用当前config参数
-                config_to_use = getattr(ctx, 'config', config) if hasattr(ctx, 'config') else config
-                self._save_text_to_file(ctx.image_name, ctx, config_to_use)
-                logger.info(f"Translations saved to JSON for {ctx.image_name} (after post-processing).")
-            else:
-                logger.warning("Could not save translation file, image_name not in context.")
+        # JSON保存已移到渲染后（resize_regions_to_font_size会插入BR），这里不再保存
 
         return new_text_regions
 
@@ -2167,17 +2162,17 @@ class MangaTranslator:
         return await dispatch_inpainting(config.inpainter.inpainter, ctx.img_rgb, ctx.mask, config.inpainter, config.inpainter.inpainting_size, self.device,
                                          self.verbose)
 
-    async def _run_text_rendering(self, config: Config, ctx: Context):
+    async def _run_text_rendering(self, config: Config, ctx: Context, skip_font_scaling: bool = False):
         # ✅ 检查停止标志
         await asyncio.sleep(0)
         self._check_cancelled()
-        
+
         current_time = time.time()
         self._model_usage_timestamps[("rendering", config.render.renderer)] = current_time
-        
+
         # 优先使用配置文件中的 font_path，如果没有则使用命令行参数
         font_path = config.render.font_path or self.font_path
-        
+
         if config.render.renderer == Renderer.none:
             output = ctx.img_inpainted
         # manga2eng currently only supports horizontal left to right rendering
@@ -2189,7 +2184,7 @@ class MangaTranslator:
         else:
             # Request debug image for balloon_fill mode when verbose
             need_debug_img = self.verbose and config.render.layout_mode == 'balloon_fill'
-            result = await dispatch_rendering(ctx.img_inpainted, ctx.text_regions, font_path, config, ctx.img_rgb, return_debug_img=need_debug_img)
+            result = await dispatch_rendering(ctx.img_inpainted, ctx.text_regions, font_path, config, ctx.img_rgb, return_debug_img=need_debug_img, skip_font_scaling=skip_font_scaling)
             
             # Handle debug image if returned
             if need_debug_img and isinstance(result, tuple):
@@ -2714,6 +2709,8 @@ class MangaTranslator:
                                     
                                     for region in ctx.text_regions:
                                         region.lines = region.lines * upscale_ratio
+                                        if hasattr(region, '_center_override') and region._center_override is not None:
+                                            region._center_override = region._center_override * upscale_ratio
                                         if hasattr(region, 'font_size') and region.font_size:
                                             region.font_size = int(region.font_size * upscale_ratio)
                             
@@ -2733,9 +2730,9 @@ class MangaTranslator:
                                 await self._report_progress('inpainting')
                                 ctx.img_inpainted = await self._run_inpainting(config, ctx)
                                 
-                                # Rendering
+                                # Rendering - 加载JSON模式跳过字体缩放算法
                                 await self._report_progress('rendering')
-                                ctx.img_rendered = await self._run_text_rendering(config, ctx)
+                                ctx.img_rendered = await self._run_text_rendering(config, ctx, skip_font_scaling=True)
                                 
                                 await self._report_progress('finished', True)
                                 ctx.result = dump_image(ctx.input, ctx.img_rendered, ctx.img_alpha)
@@ -2839,6 +2836,17 @@ class MangaTranslator:
                                     logger.error(f"Error during mask-generation in template mode:\n{traceback.format_exc()}")
                                     ctx.mask = ctx.mask_raw  # 回退到原始蒙版
 
+                            # 调用智能缩放算法计算最终字体大小（保存到region.font_size）
+                            if ctx.text_regions and len(ctx.text_regions) > 0:
+                                try:
+                                    from manga_translator.rendering import resize_regions_to_font_size
+                                    img_for_calc = ctx.img_rgb if hasattr(ctx, 'img_rgb') and ctx.img_rgb is not None else ctx.input
+                                    if img_for_calc is not None:
+                                        resize_regions_to_font_size(img_for_calc, ctx.text_regions, config, img_for_calc)
+                                        logger.debug("Calculated final font sizes for export")
+                                except Exception as e:
+                                    logger.warning(f"Failed to calculate font sizes for export: {e}")
+
                             # 保存JSON文件
                             self._save_text_to_file(ctx.image_name, ctx, config)
                             try:
@@ -2887,6 +2895,17 @@ class MangaTranslator:
                                 except Exception as _e:
                                     logger.error(f"Error during mask-generation in generate_and_export mode:\n{traceback.format_exc()}")
                                     ctx.mask = ctx.mask_raw  # 回退到原始蒙版
+
+                            # 调用智能缩放算法计算最终字体大小（保存到region.font_size）
+                            if ctx.text_regions and len(ctx.text_regions) > 0:
+                                try:
+                                    from manga_translator.rendering import resize_regions_to_font_size
+                                    img_for_calc = ctx.img_rgb if hasattr(ctx, 'img_rgb') and ctx.img_rgb is not None else ctx.input
+                                    if img_for_calc is not None:
+                                        resize_regions_to_font_size(img_for_calc, ctx.text_regions, config, img_for_calc)
+                                        logger.debug("Calculated final font sizes for export")
+                                except Exception as e:
+                                    logger.warning(f"Failed to calculate font sizes for export: {e}")
 
                             self._save_text_to_file(ctx.image_name, ctx, config)
                             try:

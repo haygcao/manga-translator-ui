@@ -252,3 +252,6 @@ CLAUDE.md
 
 # Cherry Studio (外部项目)
 cherry-studio-main/
+
+# Local temp history
+.tmp_history/

@@ -1309,10 +1309,13 @@ class MainView(QWidget):
                     self._t("API connection test successful!")
                 )
             else:
+                # 简化错误信息，隐藏技术细节
+                friendly_message = self._t("Please check your API key and address.")
+                friendly_message += f"\n\n{self._t('Address format example')}: https://api.openai.com/v1"
                 QMessageBox.critical(
                     self,
                     self._t("Error"),
-                    f"{self._t('API connection test failed')}: {message}"
+                    f"{self._t('API connection test failed')}\n\n{friendly_message}"
                 )
         
         test_thread = TestThread()

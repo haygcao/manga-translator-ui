@@ -361,20 +361,24 @@ def handle_white_frame_edit(
     action_type: str,  # 'white_frame_corner_edit' or 'white_frame_edge_edit'
     handle_index: int,
     mouse_x: float,
-    mouse_y: float
-) -> DesktopUIGeometry:
+    mouse_y: float,
+    white_frame_model_rect: List[float] = None,  # [left, top, right, bottom] 模型坐标，可选
+    start_mouse_x: float = None,
+    start_mouse_y: float = None,
+) -> Optional[Dict[str, Any]]:
     """
     处理白框编辑 - 在世界坐标系中进行边编辑
+    white_frame_model_rect: 如果提供，使用这个作为白框起始位置（模型坐标），否则从源区域边界+padding计算
     """
     center = geometry.center
     angle = geometry.angle
     original_lines = geometry.lines
     padding = 40
 
-    # 1. 计算蓝框在模型坐标系中的边界
+    # 1. 计算源区域在模型坐标系中的边界（仅用于白框初始值）
     all_vertices_model = [vertex for poly in original_lines for vertex in poly]
     if not all_vertices_model:
-        return geometry
+        return None
 
     model_min_x = min(v[0] for v in all_vertices_model)
     model_max_x = max(v[0] for v in all_vertices_model)
@@ -382,424 +386,113 @@ def handle_white_frame_edit(
     model_max_y = max(v[1] for v in all_vertices_model)
 
     # 2. 构建原始白框(模型坐标,轴对齐)
-    old_white_frame_model = [
-        [model_min_x - padding, model_min_y - padding],  # 左上
-        [model_max_x + padding, model_min_y - padding],  # 右上
-        [model_max_x + padding, model_max_y + padding],  # 右下
-        [model_min_x - padding, model_max_y + padding],  # 左下
-    ]
+    if white_frame_model_rect is not None:
+        wl, wt, wr, wb = white_frame_model_rect
+        old_white_frame_model = [
+            [wl, wt],  # 左上
+            [wr, wt],  # 右上
+            [wr, wb],  # 右下
+            [wl, wb],  # 左下
+        ]
+    else:
+        old_white_frame_model = [
+            [model_min_x - padding, model_min_y - padding],  # 左上
+            [model_max_x + padding, model_min_y - padding],  # 右上
+            [model_max_x + padding, model_max_y + padding],  # 右下
+            [model_min_x - padding, model_max_y + padding],  # 左下
+        ]
 
     # 3. 将白框转换到世界坐标系
-    old_white_frame_world = []
     if angle != 0:
-        for p in old_white_frame_model:
-            world_p = rotate_point(p[0], p[1], angle, center[0], center[1])
-            old_white_frame_world.append(world_p)
+        old_white_frame_world = [
+            rotate_point(p[0], p[1], angle, center[0], center[1]) for p in old_white_frame_model
+        ]
     else:
         old_white_frame_world = old_white_frame_model[:]
 
     # 4. 根据拖动类型计算新的白框(世界坐标)
     if action_type == 'white_frame_edge_edit':
         edge_idx = handle_index
-        # 获取被拖动的边的两个顶点(世界坐标)
         v1_world = old_white_frame_world[edge_idx]
         v2_world = old_white_frame_world[(edge_idx + 1) % 4]
 
-        # 计算边的方向向量和法线向量
         edge_vec_x = v2_world[0] - v1_world[0]
         edge_vec_y = v2_world[1] - v1_world[1]
-
-        # 法线向量(垂直于边,指向外侧)
         normal_x = edge_vec_y
         normal_y = -edge_vec_x
 
         norm_len = math.hypot(normal_x, normal_y)
         if norm_len < 1e-9:
-            return geometry
+            return None
 
-        # 单位法线向量
         unit_normal_x = normal_x / norm_len
         unit_normal_y = normal_y / norm_len
 
-        # 计算边的中点
         edge_center_x = (v1_world[0] + v2_world[0]) / 2
         edge_center_y = (v1_world[1] + v2_world[1]) / 2
-
-        # 计算鼠标相对于边中点的偏移
         mouse_offset_x = mouse_x - edge_center_x
         mouse_offset_y = mouse_y - edge_center_y
-
-        # 投影到法线方向
         projection_dist = mouse_offset_x * unit_normal_x + mouse_offset_y * unit_normal_y
+        if start_mouse_x is not None and start_mouse_y is not None:
+            start_offset_x = start_mouse_x - edge_center_x
+            start_offset_y = start_mouse_y - edge_center_y
+            start_projection = start_offset_x * unit_normal_x + start_offset_y * unit_normal_y
+            projection_dist -= start_projection
 
-        # 移动边
-        new_v1_world = [v1_world[0] + projection_dist * unit_normal_x, v1_world[1] + projection_dist * unit_normal_y]
-        new_v2_world = [v2_world[0] + projection_dist * unit_normal_x, v2_world[1] + projection_dist * unit_normal_y]
+        new_v1_world = [
+            v1_world[0] + projection_dist * unit_normal_x,
+            v1_world[1] + projection_dist * unit_normal_y,
+        ]
+        new_v2_world = [
+            v2_world[0] + projection_dist * unit_normal_x,
+            v2_world[1] + projection_dist * unit_normal_y,
+        ]
 
-        # 构建新白框(世界坐标)
         new_white_frame_world = old_white_frame_world[:]
         new_white_frame_world[edge_idx] = new_v1_world
         new_white_frame_world[(edge_idx + 1) % 4] = new_v2_world
-
     else:  # white_frame_corner_edit
         corner_idx = handle_index
-        # 将鼠标位置转换到模型坐标系
         if angle != 0:
             mouse_model_x, mouse_model_y = rotate_point(mouse_x, mouse_y, -angle, center[0], center[1])
         else:
             mouse_model_x, mouse_model_y = mouse_x, mouse_y
 
-        # 使用对角作为锚点(模型坐标)
         anchor_corner_idx = (corner_idx + 2) % 4
         anchor_point_model = old_white_frame_model[anchor_corner_idx]
-
-        # 构建新白框(模型坐标)
         new_white_frame_model = [
             [min(anchor_point_model[0], mouse_model_x), min(anchor_point_model[1], mouse_model_y)],
             [max(anchor_point_model[0], mouse_model_x), min(anchor_point_model[1], mouse_model_y)],
             [max(anchor_point_model[0], mouse_model_x), max(anchor_point_model[1], mouse_model_y)],
-            [min(anchor_point_model[0], mouse_model_x), max(anchor_point_model[1], mouse_model_y)]
+            [min(anchor_point_model[0], mouse_model_x), max(anchor_point_model[1], mouse_model_y)],
         ]
 
-        # 转换到世界坐标系
-        new_white_frame_world = []
         if angle != 0:
-            for p in new_white_frame_model:
-                world_p = rotate_point(p[0], p[1], angle, center[0], center[1])
-                new_white_frame_world.append(world_p)
+            new_white_frame_world = [
+                rotate_point(p[0], p[1], angle, center[0], center[1]) for p in new_white_frame_model
+            ]
         else:
             new_white_frame_world = new_white_frame_model[:]
 
-    # 5. 将新白框转换回模型坐标系
-    new_white_frame_model = []
+    # 5. 新白框世界坐标 -> 模型坐标（保持区域中心不变）
     if angle != 0:
-        for p in new_white_frame_world:
-            model_p = rotate_point(p[0], p[1], -angle, center[0], center[1])
-            new_white_frame_model.append(model_p)
+        new_white_frame_model = [
+            rotate_point(p[0], p[1], -angle, center[0], center[1]) for p in new_white_frame_world
+        ]
     else:
         new_white_frame_model = new_white_frame_world[:]
 
-    # 6. 计算新白框的边界(模型坐标)
-    new_white_model_min_x = min(p[0] for p in new_white_frame_model)
-    new_white_model_max_x = max(p[0] for p in new_white_frame_model)
-    new_white_model_min_y = min(p[1] for p in new_white_frame_model)
-    new_white_model_max_y = max(p[1] for p in new_white_frame_model)
+    wf_min_x = min(p[0] for p in new_white_frame_model)
+    wf_max_x = max(p[0] for p in new_white_frame_model)
+    wf_min_y = min(p[1] for p in new_white_frame_model)
+    wf_max_y = max(p[1] for p in new_white_frame_model)
 
-    # 7. 计算新蓝框的边界(模型坐标,去掉padding)
-    new_model_min_x = new_white_model_min_x + padding
-    new_model_max_x = new_white_model_max_x - padding
-    new_model_min_y = new_white_model_min_y + padding
-    new_model_max_y = new_white_model_max_y - padding
+    return {
+        'white_frame_rect_local': [
+            wf_min_x - center[0],
+            wf_min_y - center[1],
+            wf_max_x - center[0],
+            wf_max_y - center[1],
+        ]
+    }
 
-    # 8. 计算缩放比例(模型坐标)
-    old_model_width = model_max_x - model_min_x
-    old_model_height = model_max_y - model_min_y
-    new_model_width = new_model_max_x - new_model_min_x
-    new_model_height = new_model_max_y - new_model_min_y
-
-    scale_x = new_model_width / old_model_width if old_model_width > 0 else 1.0
-    scale_y = new_model_height / old_model_height if old_model_height > 0 else 1.0
-
-    # 9. 确定锚点(对边或对角)
-    if action_type == 'white_frame_edge_edit':
-        edge_idx = handle_index
-        # 边编辑: 对边作为锚点
-        if edge_idx == 0:  # 上边 -> 下边作为锚点
-            anchor_y = model_max_y
-            anchor_x = None
-        elif edge_idx == 1:  # 右边 -> 左边作为锚点
-            anchor_x = model_min_x
-            anchor_y = None
-        elif edge_idx == 2:  # 下边 -> 上边作为锚点
-            anchor_y = model_min_y
-            anchor_x = None
-        else:  # edge_idx == 3, 左边 -> 右边作为锚点
-            anchor_x = model_max_x
-            anchor_y = None
-    else:  # corner_edit
-        corner_idx = handle_index
-        # 角编辑: 对角作为锚点
-        if corner_idx == 0:  # 左上 -> 右下作为锚点
-            anchor_x = model_max_x
-            anchor_y = model_max_y
-        elif corner_idx == 1:  # 右上 -> 左下作为锚点
-            anchor_x = model_min_x
-            anchor_y = model_max_y
-        elif corner_idx == 2:  # 右下 -> 左上作为锚点
-            anchor_x = model_min_x
-            anchor_y = model_min_y
-        else:  # corner_idx == 3, 左下 -> 右上作为锚点
-            anchor_x = model_max_x
-            anchor_y = model_min_y
-
-    # 10. 缩放每个矩形(以锚点为基准)
-    new_lines_model = []
-    for poly_model in original_lines:
-        transformed_poly = []
-        for p in poly_model:
-            # 根据锚点计算新位置
-            if anchor_x is not None:
-                # x 方向有锚点
-                rel_x = p[0] - anchor_x
-                new_x = anchor_x + rel_x * scale_x
-            else:
-                # x 方向没有锚点,保持相对位置
-                rel_x = (p[0] - model_min_x) / (model_max_x - model_min_x) if (model_max_x - model_min_x) > 0 else 0.5
-                new_x = new_model_min_x + rel_x * (new_model_max_x - new_model_min_x)
-
-            if anchor_y is not None:
-                # y 方向有锚点
-                rel_y = p[1] - anchor_y
-                new_y = anchor_y + rel_y * scale_y
-            else:
-                # y 方向没有锚点,保持相对位置
-                rel_y = (p[1] - model_min_y) / (model_max_y - model_min_y) if (model_max_y - model_min_y) > 0 else 0.5
-                new_y = new_model_min_y + rel_y * (new_model_max_y - new_model_min_y)
-
-            transformed_poly.append([new_x, new_y])
-        new_lines_model.append(transformed_poly)
-
-    # 11. 计算新的中心点(模型坐标)
-    all_new_vertices_model = [vertex for poly in new_lines_model for vertex in poly]
-    new_model_center_x, new_model_center_y = get_polygon_center(all_new_vertices_model)
-
-    # 12. 将新的模型中心转换到世界坐标系
-    if angle != 0:
-        final_center_x, final_center_y = rotate_point(new_model_center_x, new_model_center_y, angle, center[0], center[1])
-    else:
-        final_center_x, final_center_y = new_model_center_x, new_model_center_y
-
-    # 13. 将 lines 转换到新的模型坐标系(以新中心为旋转中心)
-    final_lines_model = []
-    for poly_model in new_lines_model:
-        # 先转换到世界坐标
-        poly_world = [rotate_point(p[0], p[1], angle, center[0], center[1]) for p in poly_model]
-        # 再转换回新的模型坐标系
-        poly_new_model = [rotate_point(p[0], p[1], -angle, final_center_x, final_center_y) for p in poly_world]
-        final_lines_model.append(poly_new_model)
-
-    # 12. 返回新的几何
-    return DesktopUIGeometry({
-        'lines': final_lines_model,
-        'center': [float(final_center_x), float(final_center_y)],
-        'angle': angle
-    })
-
-# === desktop-ui 的蓝框编辑逻辑 ===
-
-def handle_vertex_edit(
-    geometry: DesktopUIGeometry,
-    poly_index: int,
-    vertex_index: int,
-    mouse_x: float,
-    mouse_y: float
-) -> DesktopUIGeometry:
-    """
-    完全按照 desktop-ui 的顶点编辑逻辑
-    """
-    center = geometry.center
-    angle = geometry.angle
-    original_lines = geometry.lines
-    
-    # 第一步：将所有现有矩形转换为世界坐标
-    all_world_polygons = []
-    for poly_model in original_lines:
-        if angle != 0:
-            poly_world = [rotate_point(p[0], p[1], angle, center[0], center[1]) for p in poly_model]
-        else:
-            poly_world = poly_model[:]
-        all_world_polygons.append(poly_world)
-    
-    # 第二步：只修改被编辑的矩形的世界坐标
-    original_poly_world = all_world_polygons[poly_index]
-    
-    # 获取对角点作为锚点
-    anchor_idx = (vertex_index + 2) % 4
-    anchor_point = original_poly_world[anchor_idx]
-    
-    # 获取原矩形的两条邻边向量（保持这些方向不变）
-    adj1_idx = (vertex_index - 1 + 4) % 4
-    adj2_idx = (vertex_index + 1) % 4
-    
-    edge1_vec = (original_poly_world[adj1_idx][0] - anchor_point[0], 
-                original_poly_world[adj1_idx][1] - anchor_point[1])
-    edge2_vec = (original_poly_world[adj2_idx][0] - anchor_point[0], 
-                original_poly_world[adj2_idx][1] - anchor_point[1])
-    
-    # 计算鼠标拖拽向量
-    drag_vec = (mouse_x - anchor_point[0], mouse_y - anchor_point[1])
-    
-    # 将拖拽向量投影到两个边方向上，保持矩形的斜率
-    edge1_len_sq = edge1_vec[0]**2 + edge1_vec[1]**2
-    edge2_len_sq = edge2_vec[0]**2 + edge2_vec[1]**2
-    
-    if edge1_len_sq > 0 and edge2_len_sq > 0:
-        # 计算投影长度
-        proj1 = (drag_vec[0] * edge1_vec[0] + drag_vec[1] * edge1_vec[1]) / edge1_len_sq
-        proj2 = (drag_vec[0] * edge2_vec[0] + drag_vec[1] * edge2_vec[1]) / edge2_len_sq
-        
-        # 构建新的矩形，保持边的方向不变
-        new_adj1 = [anchor_point[0] + proj1 * edge1_vec[0], 
-                    anchor_point[1] + proj1 * edge1_vec[1]]
-        new_adj2 = [anchor_point[0] + proj2 * edge2_vec[0], 
-                    anchor_point[1] + proj2 * edge2_vec[1]]
-        new_drag = [anchor_point[0] + proj1 * edge1_vec[0] + proj2 * edge2_vec[0], 
-                   anchor_point[1] + proj1 * edge1_vec[1] + proj2 * edge2_vec[1]]
-        
-        # 按顶点索引顺序构建新多边形
-        new_poly_world = [None] * 4
-        new_poly_world[anchor_idx] = anchor_point
-        new_poly_world[adj1_idx] = new_adj1
-        new_poly_world[adj2_idx] = new_adj2
-        new_poly_world[vertex_index] = new_drag
-    else:
-        # 备用方案
-        new_poly_world = original_poly_world
-
-    # 用新编辑的矩形替换对应的世界坐标矩形
-    all_world_polygons[poly_index] = new_poly_world
-
-    # 第三步：先计算新的世界坐标的中心点
-    all_vertices_world = [vertex for poly in all_world_polygons for vertex in poly]
-    if not all_vertices_world:
-        return geometry
-
-    # 计算世界坐标的边界框中心作为新的center
-    world_x_coords = [v[0] for v in all_vertices_world]
-    world_y_coords = [v[1] for v in all_vertices_world]
-    new_center_x = (min(world_x_coords) + max(world_x_coords)) / 2
-    new_center_y = (min(world_y_coords) + max(world_y_coords)) / 2
-
-    # 第四步：用新的center反旋转到model坐标
-    new_lines_model = []
-    for poly_world in all_world_polygons:
-        if angle != 0:
-            poly_model = [
-                rotate_point(p[0], p[1], -angle, new_center_x, new_center_y)
-                for p in poly_world
-            ]
-        else:
-            poly_model = poly_world
-        # 确保数据类型一致性
-        poly_model = [[float(p[0]), float(p[1])] for p in poly_model]
-        new_lines_model.append(poly_model)
-
-    # 返回新的几何对象
-    new_geometry = DesktopUIGeometry({
-        'lines': new_lines_model,
-        'center': [float(new_center_x), float(new_center_y)],
-        'angle': angle
-    })
-
-    return new_geometry
-
-def handle_edge_edit(
-    geometry: DesktopUIGeometry,
-    poly_index: int,
-    edge_index: int,
-    mouse_x: float,
-    mouse_y: float
-) -> DesktopUIGeometry:
-    """
-    完全按照 desktop-ui 的边编辑逻辑
-    """
-    center = geometry.center
-    angle = geometry.angle
-    original_lines = geometry.lines
-    
-    # 第一步：将所有现有矩形转换为世界坐标
-    all_world_polygons = []
-    for poly_model in original_lines:
-        if angle != 0:
-            poly_world = [rotate_point(p[0], p[1], angle, center[0], center[1]) for p in poly_model]
-        else:
-            poly_world = poly_model[:]
-        all_world_polygons.append(poly_world)
-    
-    # 第二步：边编辑逻辑
-    original_poly_model = original_lines[poly_index]
-    
-    # 将原始矩形转换为世界坐标
-    if angle != 0:
-        original_poly_world = [rotate_point(p[0], p[1], angle, center[0], center[1]) for p in original_poly_model]
-    else:
-        original_poly_world = original_poly_model[:]
-    
-    # 获取被拖拽边的两个顶点
-    edge_p1 = original_poly_world[edge_index]
-    edge_p2 = original_poly_world[(edge_index + 1) % 4]
-    
-    # 获取对边的两个顶点
-    opposite_edge_idx = (edge_index + 2) % 4
-    opposite_p1 = original_poly_world[opposite_edge_idx]
-    opposite_p2 = original_poly_world[(opposite_edge_idx + 1) % 4]
-    
-    # 计算边的方向向量和长度
-    edge_vec = (edge_p2[0] - edge_p1[0], edge_p2[1] - edge_p1[1])
-    edge_length = math.hypot(edge_vec[0], edge_vec[1])
-    if edge_length > 0:
-        edge_unit = (edge_vec[0] / edge_length, edge_vec[1] / edge_length)
-    else:
-        edge_unit = (1, 0)
-    
-    # 计算垂直于边的法向量
-    edge_normal = (-edge_unit[1], edge_unit[0])
-    
-    # 计算鼠标到被拖拽边的投影距离
-    edge_center = ((edge_p1[0] + edge_p2[0]) / 2, (edge_p1[1] + edge_p2[1]) / 2)
-    to_mouse = (mouse_x - edge_center[0], mouse_y - edge_center[1])
-    projection_distance = to_mouse[0] * edge_normal[0] + to_mouse[1] * edge_normal[1]
-    
-    # 构建新的矩形：对边保持不变，被拖拽边移动到新位置
-    new_edge_p1 = (
-        edge_p1[0] + projection_distance * edge_normal[0],
-        edge_p1[1] + projection_distance * edge_normal[1]
-    )
-    new_edge_p2 = (
-        edge_p2[0] + projection_distance * edge_normal[0],
-        edge_p2[1] + projection_distance * edge_normal[1]
-    )
-    
-    # 构建完整的新矩形顶点
-    new_poly_world = [None] * 4
-    new_poly_world[edge_index] = new_edge_p1
-    new_poly_world[(edge_index + 1) % 4] = new_edge_p2
-    new_poly_world[opposite_edge_idx] = opposite_p1
-    new_poly_world[(opposite_edge_idx + 1) % 4] = opposite_p2
-
-    # 用新编辑的矩形替换对应的世界坐标矩形
-    all_world_polygons[poly_index] = new_poly_world
-
-    # 第三步：先计算新的世界坐标的中心点
-    all_vertices_world = [vertex for poly in all_world_polygons for vertex in poly]
-    if not all_vertices_world:
-        return geometry
-
-    # 计算世界坐标的边界框中心作为新的center
-    world_x_coords = [v[0] for v in all_vertices_world]
-    world_y_coords = [v[1] for v in all_vertices_world]
-    new_center_x = (min(world_x_coords) + max(world_x_coords)) / 2
-    new_center_y = (min(world_y_coords) + max(world_y_coords)) / 2
-
-    # 第四步：用新的center反旋转到model坐标
-    new_lines_model = []
-    for poly_world in all_world_polygons:
-        if angle != 0:
-            poly_model = [
-                rotate_point(p[0], p[1], -angle, new_center_x, new_center_y)
-                for p in poly_world
-            ]
-        else:
-            poly_model = poly_world
-        # 确保数据类型一致性
-        poly_model = [[float(p[0]), float(p[1])] for p in poly_model]
-        new_lines_model.append(poly_model)
-
-    # 返回新的几何对象
-    new_geometry = DesktopUIGeometry({
-        'lines': new_lines_model,
-        'center': [float(new_center_x), float(new_center_y)],
-        'angle': angle
-    })
-
-    return new_geometry

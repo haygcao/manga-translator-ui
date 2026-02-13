@@ -561,6 +561,8 @@
   "Testing API connection, please wait...": "API接続をテスト中、お待ちください...",
   "API connection test successful!": "API接続テスト成功！",
   "API connection test failed": "API接続テスト失敗",
+  "Please check your API key and address.": "APIキーとアドレスを確認してください。",
+  "Address format example": "アドレス形式の例",
   "Fetching models, please wait...": "モデルリストを取得中、お待ちください...",
   "Failed to get models": "モデルリストの取得に失敗しました",
   "No models available": "利用可能なモデルがありません",

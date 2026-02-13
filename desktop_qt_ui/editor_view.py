@@ -236,7 +236,6 @@ class EditorView(QWidget):
         self.toolbar.edit_file_requested.connect(self.controller.edit_source_file)
         self.toolbar.undo_requested.connect(self.controller.undo)
         self.toolbar.redo_requested.connect(self.controller.redo)
-        self.toolbar.edit_geometry_requested.connect(self.controller.set_geometry_edit_mode)
         self.toolbar.zoom_in_requested.connect(self.graphics_view.zoom_in)
         self.toolbar.zoom_out_requested.connect(self.graphics_view.zoom_out)
         self.toolbar.fit_window_requested.connect(self.graphics_view.fit_to_window)
@@ -248,7 +247,6 @@ class EditorView(QWidget):
 
         # --- Graphics View to Controller ---
         self.graphics_view.region_geometry_changed.connect(self.controller.update_region_geometry)
-        self.graphics_view.geometry_added.connect(self.controller.add_geometry_to_region)
 
         # --- Property Panel (Left Panel) to Controller ---
         self.property_panel.translated_text_modified.connect(self.controller.update_translated_text)
@@ -257,6 +255,8 @@ class EditorView(QWidget):
         self.property_panel.translation_requested.connect(self.controller.run_translation_for_selection)
         self.property_panel.font_size_changed.connect(self.controller.update_font_size)
         self.property_panel.font_color_changed.connect(self.controller.update_font_color)
+        self.property_panel.stroke_color_changed.connect(self.controller.update_stroke_color)
+        self.property_panel.stroke_width_changed.connect(self.controller.update_stroke_width)
         self.property_panel.font_family_changed.connect(self.controller.update_font_family)
         self.property_panel.alignment_changed.connect(self.controller.update_alignment)
         self.property_panel.direction_changed.connect(self.controller.update_direction)

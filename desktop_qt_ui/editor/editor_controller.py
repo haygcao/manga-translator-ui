@@ -748,7 +748,6 @@ class EditorController(QObject):
                 return
 
             # JSON 中保存的已经是优化后的蒙版，直接使用
-            self.logger.info("使用已优化的蒙版")
             raw_mask_2d = cv2.cvtColor(raw_mask, cv2.COLOR_BGR2GRAY) if len(raw_mask.shape) == 3 else raw_mask
             refined_mask = np.ascontiguousarray(raw_mask_2d, dtype=np.uint8)
 
@@ -1059,20 +1058,6 @@ class EditorController(QObject):
         """Sets the active tool in the model (e.g., 'pen', 'eraser')."""
         self.model.set_active_tool(tool)
 
-    @pyqtSlot(bool)
-    def set_geometry_edit_mode(self, enabled: bool):
-        """Slot to enable or disable the geometry edit mode."""
-        if enabled:
-            selected_indices = self.model.get_selection()
-            if len(selected_indices) != 1:
-                self.logger.warning("Geometry edit mode requires a single region to be selected.")
-                if self.view:
-                    self.view.toolbar.edit_geometry_button.setChecked(False)
-                return
-            self.set_active_tool('geometry_edit')
-        else:
-            self.set_active_tool('select')
-
     @pyqtSlot(int)
     def set_brush_size(self, size: int):
         """Sets the brush size in the model."""
@@ -1123,7 +1108,22 @@ class EditorController(QObject):
     @pyqtSlot(int, int)
     def update_font_size(self, region_index: int, size: int):
         old_region_data = self._get_region_by_index(region_index)
-        if not old_region_data or old_region_data.get('font_size') == size:
+        if not old_region_data:
+            return
+
+        # 以当前画布几何为准，避免属性面板改字号时把白框回滚到旧状态。
+        try:
+            gv = getattr(self.view, 'graphics_view', None) if self.view else None
+            if gv and hasattr(gv, '_region_items') and 0 <= region_index < len(gv._region_items):
+                item = gv._region_items[region_index]
+                if item is not None and hasattr(item, 'geo'):
+                    geo_patch = item.geo.to_region_data_patch()
+                    old_region_data = old_region_data.copy()
+                    old_region_data.update(geo_patch)
+        except Exception:
+            pass
+
+        if old_region_data.get('font_size') == size:
             return
 
         new_region_data = old_region_data.copy()
@@ -1134,85 +1134,6 @@ class EditorController(QObject):
             old_data=old_region_data,
             new_data=new_region_data,
             description=f"Update Font Size Region {region_index}"
-        )
-        self.execute_command(command)
-
-    def scale_region(self, region_index: int, scale_factor: float):
-        """等比例缩放整个文本框（包括框的大小和字体）"""
-        from .desktop_ui_geometry import get_polygon_center
-        
-        old_region_data = self._get_region_by_index(region_index)
-        if not old_region_data:
-            return
-
-        new_region_data = copy.deepcopy(old_region_data)
-        
-        # 缩放字体大小
-        old_font_size = old_region_data.get('font_size', 20)
-        new_font_size = max(8, min(200, int(old_font_size * scale_factor)))
-        new_region_data['font_size'] = new_font_size
-        
-        # 缩放 lines（文本框的边界）
-        if 'lines' in new_region_data and new_region_data['lines']:
-            # 计算当前 lines 的中心点（边界框中心）
-            all_points = []
-            for line in new_region_data['lines']:
-                all_points.extend(line)
-            
-            if all_points:
-                center_x, center_y = get_polygon_center(all_points)
-                
-                # 以中心点为基准缩放
-                scaled_lines = []
-                for line in new_region_data['lines']:
-                    scaled_line = []
-                    for point in line:
-                        px, py = point[0], point[1]
-                        # 相对于中心点的偏移
-                        offset_x = px - center_x
-                        offset_y = py - center_y
-                        # 缩放偏移
-                        new_offset_x = offset_x * scale_factor
-                        new_offset_y = offset_y * scale_factor
-                        # 加回中心点
-                        new_px = center_x + new_offset_x
-                        new_py = center_y + new_offset_y
-                        scaled_line.append([new_px, new_py])
-                    scaled_lines.append(scaled_line)
-                new_region_data['lines'] = scaled_lines
-        
-        # 缩放 polygons（如果存在）
-        if 'polygons' in new_region_data and new_region_data['polygons']:
-            # 计算当前 polygons 的中心点（边界框中心）
-            all_points = []
-            for polygon in new_region_data['polygons']:
-                all_points.extend(polygon)
-            
-            if all_points:
-                center_x, center_y = get_polygon_center(all_points)
-                
-                # 以中心点为基准缩放
-                scaled_polygons = []
-                for polygon in new_region_data['polygons']:
-                    scaled_polygon = []
-                    for point in polygon:
-                        px, py = point[0], point[1]
-                        offset_x = px - center_x
-                        offset_y = py - center_y
-                        new_offset_x = offset_x * scale_factor
-                        new_offset_y = offset_y * scale_factor
-                        new_px = center_x + new_offset_x
-                        new_py = center_y + new_offset_y
-                        scaled_polygon.append([new_px, new_py])
-                    scaled_polygons.append(scaled_polygon)
-                new_region_data['polygons'] = scaled_polygons
-        
-        command = UpdateRegionCommand(
-            model=self.model,
-            region_index=region_index,
-            old_data=old_region_data,
-            new_data=new_region_data,
-            description=f"Scale Region {region_index}"
         )
         self.execute_command(command)
 
@@ -1232,7 +1153,44 @@ class EditorController(QObject):
             description=f"Update Font Color Region {region_index}"
         )
         self.execute_command(command)
-    
+
+    @pyqtSlot(int, str)
+    def update_stroke_color(self, region_index: int, hex_color: str):
+        from PyQt6.QtGui import QColor
+        c = QColor(hex_color)
+        new_bg_colors = [c.red(), c.green(), c.blue()]
+        old_region_data = self._get_region_by_index(region_index)
+        if not old_region_data or old_region_data.get('bg_colors') == new_bg_colors:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['bg_colors'] = new_bg_colors
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Stroke Color Region {region_index}"
+        )
+        self.execute_command(command)
+
+    @pyqtSlot(int, float)
+    def update_stroke_width(self, region_index: int, value: float):
+        old_region_data = self._get_region_by_index(region_index)
+        if not old_region_data or old_region_data.get('stroke_width') == value:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['stroke_width'] = value
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Stroke Width Region {region_index}"
+        )
+        self.execute_command(command)
+
     @pyqtSlot(int, str)
     def update_font_family(self, region_index: int, font_filename: str):
         """Update the font family for a specific region.
@@ -1349,75 +1307,6 @@ class EditorController(QObject):
         """重做操作 - 使用 Qt 的 QUndoStack"""
         self.history_service.redo()
         self._update_undo_redo_buttons()
-
-    @pyqtSlot(int, list)
-    def add_geometry_to_region(self, region_index: int, new_polygon_coords: list):
-        """Adds a new polygon (in image coordinates) to an existing region."""
-        
-        old_region_data = self._get_region_by_index(region_index)
-        if not old_region_data:
-            self.logger.error(f"Invalid region index {region_index} for adding geometry.")
-            return
-
-        new_region_data = old_region_data.copy()
-        
-        if 'lines' not in new_region_data or not new_region_data['lines']:
-            new_region_data['lines'] = []
-        
-        # 获取原始数据
-        old_angle = old_region_data.get('angle', 0)
-
-        # 如果没有 center,从 lines 计算
-        if 'center' in old_region_data:
-            old_center = old_region_data['center']
-        else:
-            old_lines = old_region_data.get('lines', [])
-            if old_lines:
-                all_pts = [pt for ln in old_lines for pt in ln]
-                old_cx, old_cy = get_polygon_center(all_pts)
-                old_center = [old_cx, old_cy]
-            else:
-                old_center = [0, 0]
-
-        # new_polygon_coords 是旋转后的世界坐标,需要反旋转回模型坐标
-        from .desktop_ui_geometry import rotate_point
-
-        # 反旋转: 使用 -angle 将世界坐标转换为模型坐标
-        new_polygon_model = []
-        for x, y in new_polygon_coords:
-            # 反旋转: 围绕 old_center 旋转 -old_angle
-            x_model, y_model = rotate_point(x, y, -old_angle, old_center[0], old_center[1])
-            new_polygon_model.append([x_model, y_model])
-
-        # 追加未旋转的模型坐标
-        lines_old = list(new_region_data.get('lines', []))
-        lines_new = lines_old + [new_polygon_model]
-
-        # 重新计算 center
-        all_pts = [pt for ln in lines_new for pt in ln]
-        new_cx, new_cy = get_polygon_center(all_pts)
-
-        # 将 lines 转换到新的模型坐标系(以新中心为旋转中心)
-        # 这样可以保证视觉位置不变
-        final_lines_model = []
-        for poly_model in lines_new:
-            # 先转换到世界坐标(旋转)
-            poly_world = [rotate_point(x, y, old_angle, old_center[0], old_center[1]) for x, y in poly_model]
-            # 再转换回新的模型坐标系(反旋转,使用新的 center)
-            poly_new_model = [rotate_point(x, y, -old_angle, new_cx, new_cy) for x, y in poly_world]
-            final_lines_model.append(poly_new_model)
-
-        new_region_data['lines'] = final_lines_model
-        new_region_data['center'] = [new_cx, new_cy]
-
-        command = UpdateRegionCommand(
-            model=self.model,
-            region_index=region_index,
-            old_data=old_region_data,
-            new_data=new_region_data,
-            description=f"Add Geometry to Region {region_index}"
-        )
-        self.execute_command(command)
 
     # --- 右键菜单相关方法 ---
     def ocr_regions(self, region_indices: list):
@@ -1610,10 +1499,6 @@ class EditorController(QObject):
 
     def enter_drawing_mode(self):
         """进入绘制模式以添加新文本框"""
-        # 如果当前在编辑形状模式下,先退出
-        if self.model.get_active_tool() == 'geometry_edit':
-            self.set_active_tool('select')
-
         # 清除当前选择
         self.model.set_selection([])
 
@@ -2120,13 +2005,6 @@ class EditorController(QObject):
         mode = mode_map.get(mode_text, "full")
         self.logger.info(f"Toolbar: Display mode changed to '{mode_text}' -> '{mode}'.")
         self.model.set_region_display_mode(mode)
-    
-    def set_green_box_visible(self, visible: bool):
-        """设置绿框（自动渲染区域）的可见性"""
-        if self.view and hasattr(self.view.graphics_view, '_region_items'):
-            for item in self.view.graphics_view._region_items:
-                if hasattr(item, 'set_green_box_visible'):
-                    item.set_green_box_visible(visible)
     
     def set_white_box_visible(self, visible: bool):
         """设置白框（手动调整边界）的可见性"""

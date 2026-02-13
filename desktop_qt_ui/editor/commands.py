@@ -31,8 +31,9 @@ class UpdateRegionCommand(QUndoCommand):
 
         # 更新区域数据
         regions[self._index] = data_to_apply
-        # set_regions 会自动同步到 resource_manager
-        self._model.set_regions(regions)
+        # set_regions_silent 只同步到 resource_manager，不 emit 信号
+        # 由下面的逻辑自行控制信号发射（避免双重 emit）
+        self._model.set_regions_silent(regions)
 
         # 如果 center 改变了,需要触发完全更新,重新创建 item
         # 否则只触发单个 item 更新

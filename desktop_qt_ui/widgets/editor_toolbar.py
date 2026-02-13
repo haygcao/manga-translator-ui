@@ -24,7 +24,6 @@ class EditorToolbar(QWidget):
     edit_file_requested = pyqtSignal()
     undo_requested = pyqtSignal()
     redo_requested = pyqtSignal()
-    edit_geometry_requested = pyqtSignal(bool)
     zoom_in_requested = pyqtSignal()
     zoom_out_requested = pyqtSignal()
     fit_window_requested = pyqtSignal()
@@ -83,12 +82,6 @@ class EditorToolbar(QWidget):
         self.redo_button.setEnabled(False)
         self.redo_button.setToolTip(self._t("Redo last undone operation") + " (Ctrl+Y)")
         layout.addWidget(self.redo_button)
-
-        self.edit_geometry_button = QToolButton()
-        self.edit_geometry_button.setText(self._t("Edit Shape"))
-        self.edit_geometry_button.setToolTip(self._t("Add new associated shape for selected text box"))
-        self.edit_geometry_button.setCheckable(True)
-        layout.addWidget(self.edit_geometry_button)
 
         layout.addWidget(self._create_separator())
 
@@ -183,7 +176,6 @@ class EditorToolbar(QWidget):
         self.edit_file_button.clicked.connect(self.edit_file_requested)
         self.undo_button.clicked.connect(self.undo_requested)
         self.redo_button.clicked.connect(self.redo_requested)
-        self.edit_geometry_button.toggled.connect(self.edit_geometry_requested)
         self.zoom_in_button.clicked.connect(self.zoom_in_requested)
         self.zoom_out_button.clicked.connect(self.zoom_out_requested)
         self.fit_window_button.clicked.connect(self.fit_window_requested)
@@ -228,8 +220,6 @@ class EditorToolbar(QWidget):
         self.undo_button.setToolTip(self._t("Undo last operation") + " (Ctrl+Z)")
         self.redo_button.setText(self._t("Redo"))
         self.redo_button.setToolTip(self._t("Redo last undone operation") + " (Ctrl+Y)")
-        self.edit_geometry_button.setText(self._t("Edit Shape"))
-        self.edit_geometry_button.setToolTip(self._t("Add new associated shape for selected text box"))
         self.zoom_out_button.setText(self._t("Zoom Out (-)"))
         self.zoom_in_button.setText(self._t("Zoom In (+)"))
         self.fit_window_button.setText(self._t("Fit to Window"))

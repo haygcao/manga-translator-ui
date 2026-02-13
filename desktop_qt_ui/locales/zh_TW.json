@@ -568,6 +568,8 @@
   "Testing API connection, please wait...": "正在測試API連接，請稍候...",
   "API connection test successful!": "API連接測試成功！",
   "API connection test failed": "API連接測試失敗",
+  "Please check your API key and address.": "請檢查 API 密鑰和地址是否正確。",
+  "Address format example": "地址格式示例",
   "Fetching models, please wait...": "正在獲取模型列表，請稍候...",
   "Failed to get models": "獲取模型列表失敗",
   "No models available": "沒有可用的模型",

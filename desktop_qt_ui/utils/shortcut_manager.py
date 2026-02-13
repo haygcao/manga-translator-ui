@@ -403,18 +403,20 @@ class EditorShortcutManager(ShortcutManager):
                     self.controller.set_brush_size(new_size)
                     return True  # 阻止事件继续传递
                 
-                # Ctrl + 滚轮：等比例缩放选中文本框（包括框的大小和字体）
+                # Ctrl + 滚轮：调整选中文本框的字体大小
                 elif modifiers == Qt.KeyboardModifier.ControlModifier:
                     selected_regions = self.editor_view.model.get_selection()
                     if selected_regions:
-                        # 有选中区域：缩放文本框
-                        # 尝试获取滚轮方向
                         angle_delta = event.angleDelta().y()
                         if angle_delta == 0:
                             angle_delta = event.pixelDelta().y()
-                        scale_factor = 1.05 if angle_delta > 0 else 1.0 / 1.05
                         for region_index in selected_regions:
-                            self.controller.scale_region(region_index, scale_factor)
+                            region_data = self.controller._get_region_by_index(region_index)
+                            if region_data:
+                                old_size = region_data.get('font_size', 20)
+                                delta = max(1, int(old_size * 0.05))
+                                new_size = max(1, old_size + (delta if angle_delta > 0 else -delta))
+                                self.controller.update_font_size(region_index, new_size)
                         return True  # 阻止事件继续传递
         
         # 其他事件继续传递

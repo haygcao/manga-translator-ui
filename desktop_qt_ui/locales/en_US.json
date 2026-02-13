@@ -644,6 +644,8 @@
   "Testing API connection, please wait...": "Testing API connection, please wait...",
   "API connection test successful!": "API connection test successful!",
   "API connection test failed": "API connection test failed",
+  "Please check your API key and address.": "Please check your API key and address.",
+  "Address format example": "Address format example",
   "Fetching models, please wait...": "Fetching models, please wait...",
   "Failed to get models": "Failed to get models",
   "No models available": "No models available",

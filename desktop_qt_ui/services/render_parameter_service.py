@@ -110,6 +110,7 @@ class RenderParameterService:
         config = self.config_service.get_config()
         render_fields = RenderParameters.__dataclass_fields__.keys()
         global_render_config = config.render.model_dump()
+        # 过滤掉 None 值，让 dataclass 默认值生效
         valid_global_config = {k: v for k, v in global_render_config.items() if k in render_fields}
         return RenderParameters(**valid_global_config)
 
@@ -265,15 +266,8 @@ class RenderParameterService:
                 elif 'fg_colors' in region_data and region_data['fg_colors']:
                     params.fg_color = tuple(region_data['fg_colors'])
 
-                # 描边颜色 - 优先使用 stroke_color_type
-                stroke_color_type = region_data.get('stroke_color_type')
-                if stroke_color_type:
-                    # 根据 stroke_color_type 设置 bg_colors
-                    if stroke_color_type == "white":
-                        params.bg_color = (255, 255, 255)
-                    else:  # black
-                        params.bg_color = (0, 0, 0)
-                elif 'bg_colors' in region_data and region_data['bg_colors']:
+                # 描边颜色
+                if 'bg_colors' in region_data and region_data['bg_colors']:
                     params.bg_color = tuple(region_data['bg_colors'])
                 elif 'bg_color' in region_data and region_data['bg_color']:
                     params.bg_color = tuple(region_data['bg_color'])
@@ -349,15 +343,8 @@ class RenderParameterService:
             elif 'fg_colors' in region_data and region_data['fg_colors']:
                 calculated_params.fg_color = tuple(region_data['fg_colors'])
 
-            # 描边颜色 - 优先使用 stroke_color_type
-            stroke_color_type = region_data.get('stroke_color_type')
-            if stroke_color_type:
-                # 根据 stroke_color_type 设置 bg_colors
-                if stroke_color_type == "white":
-                    calculated_params.bg_color = (255, 255, 255)
-                else:  # black
-                    calculated_params.bg_color = (0, 0, 0)
-            elif 'bg_colors' in region_data and region_data['bg_colors']:
+            # 描边颜色
+            if 'bg_colors' in region_data and region_data['bg_colors']:
                 calculated_params.bg_color = tuple(region_data['bg_colors'])
             elif 'bg_color' in region_data and region_data['bg_color']:
                 calculated_params.bg_color = tuple(region_data['bg_color'])
@@ -489,24 +476,9 @@ class RenderParameterService:
             '_generated_by': 'desktop-ui'
         }
         
-        # 处理描边颜色
-        # 如果有 stroke_color_type，传递给后端并设置对应的 bg_color
-        stroke_color_type = region_data.get('stroke_color_type') if region_data else None
-        
-        if stroke_color_type:
-            # 用户在编辑器中设置了描边颜色类型
-            backend_params['stroke_color_type'] = stroke_color_type
-            if stroke_color_type == "white":
-                backend_params['bg_color'] = (255, 255, 255)
-                backend_params['text_stroke_color'] = (255, 255, 255)
-            else:  # black
-                backend_params['bg_color'] = (0, 0, 0)
-                backend_params['text_stroke_color'] = (0, 0, 0)
-            backend_params['adjust_bg_color'] = False
-        else:
-            # 没有设置 stroke_color_type 时，使用 params.bg_color 作为描边颜色
-            backend_params['text_stroke_color'] = params.bg_color
-        
+        # 处理描边颜色 - 使用 params.bg_color 作为描边颜色
+        backend_params['text_stroke_color'] = params.bg_color
+
         # 覆盖 line_spacing 和 stroke_width（如果 region_data 中有的话）
         if region_data:
             if 'line_spacing' in region_data:

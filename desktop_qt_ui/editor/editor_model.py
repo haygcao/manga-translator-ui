@@ -70,6 +70,12 @@ class EditorModel(QObject):
             self.resource_manager.add_region(region_data)
         self.regions_changed.emit(regions)
 
+    def set_regions_silent(self, regions: List[Dict[str, Any]]):
+        """更新 regions 数据但不 emit 信号。由 command 自行控制信号发射。"""
+        self.resource_manager.clear_regions()
+        for region_data in regions:
+            self.resource_manager.add_region(region_data)
+
     def get_regions(self) -> List[Dict[str, Any]]:
         resources = self.resource_manager.get_all_regions()
         return [r.data for r in resources]

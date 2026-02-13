@@ -219,9 +219,10 @@ def auto_add_horizontal_tags(text: str) -> str:
     """自动为竖排文本中的短英文单词或连续符号添加<H>标签，使其横向显示。
 
     处理规则：
+    - 先按 [BR]/\n 等断句符分段，再逐段处理，避免 <H> 标签横跨断句边界
     - 多词英文词组（如 "Tek Tok"）：整体横排显示
     - 独立的短英文单词：添加<H>标签
-    - 符号（!?）2-4个：横排显示
+    - 符号（!?）2-3个：横排显示，4个以上不包裹
 
     渲染规则（在渲染时根据长度决定）：
     - 2个字符：横排显示
@@ -231,37 +232,48 @@ def auto_add_horizontal_tags(text: str) -> str:
     if '<H>' in text or '<h>' in text.lower():
         return text
 
-    # 步骤1：为多词英文词组添加<H>标签（至少2个单词，用空格分隔）
-    # 匹配：字母/数字 + 空格 + 字母/数字（可以重复多次）
-    # 注意：移除了点号(.)以避免匹配省略号
-    multi_word_pattern = r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+(?:\s+[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+)+'
-    text = re.sub(multi_word_pattern, r'<H>\g<0></H>', text)
+    # 按 BR 标记和换行符分段，保留分隔符
+    segment_pattern = r'(\[BR\]|【BR】|<br>|\n)'
+    segments = re.split(segment_pattern, text, flags=re.IGNORECASE)
 
-    # 步骤2：对剩余的独立英文单词添加<H>标签
-    # 匹配2个及以上字符，排除已经在<H>标签内的内容
-    # 注意：移除了点号(.)以避免匹配省略号
-    word_pattern = r'(?<![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-])([a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]{2,})(?![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-])'
+    result_parts = []
+    for segment in segments:
+        # 如果是分隔符本身，直接保留
+        if re.match(segment_pattern, segment, flags=re.IGNORECASE):
+            result_parts.append(segment)
+            continue
 
-    # 只替换不在<H>标签内的匹配
-    def replace_word(match):
-        # 检查匹配位置是否在<H>...</H>之间
-        start_pos = match.start()
-        # 简单检查：查找前面最近的<H>和</H>
-        text_before = text[:start_pos]
-        last_open = text_before.rfind('<H>')
-        last_close = text_before.rfind('</H>')
-        if last_open > last_close:
-            # 在<H>标签内，不替换
-            return match.group(0)
-        return f'<H>{match.group(1)}</H>'
+        # 对每个文本段分别应用标签处理
+        seg = segment
 
-    text = re.sub(word_pattern, replace_word, text)
+        # 步骤1：为多词英文词组添加<H>标签（至少2个单词，用空格分隔）
+        multi_word_pattern = r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+(?:\s+[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+)+'
+        seg = re.sub(multi_word_pattern, r'<H>\g<0></H>', seg)
 
-    # 步骤3：匹配符号（2-4个，同时支持半角和全角）
-    symbol_pattern = r'[!?！？]{2,4}'
-    text = re.sub(symbol_pattern, r'<H>\g<0></H>', text)
+        # 步骤2：对剩余的独立英文单词添加<H>标签
+        word_pattern = r'(?<![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-])([a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]{2,})(?![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-])'
 
-    return text
+        # 用闭包捕获当前 seg 的值
+        def _make_replace_word(current_seg):
+            def replace_word(match):
+                start_pos = match.start()
+                text_before = current_seg[:start_pos]
+                last_open = text_before.rfind('<H>')
+                last_close = text_before.rfind('</H>')
+                if last_open > last_close:
+                    return match.group(0)
+                return f'<H>{match.group(1)}</H>'
+            return replace_word
+
+        seg = re.sub(word_pattern, _make_replace_word(seg), seg)
+
+        # 步骤3：匹配符号（2-3个，同时支持半角和全角，4个以上不包裹）
+        symbol_pattern = r'[!?！？]{2,3}'
+        seg = re.sub(symbol_pattern, r'<H>\g<0></H>', seg)
+
+        result_parts.append(seg)
+
+    return ''.join(result_parts)
     
 def rotate_image(image, angle):
     if angle == 0:
@@ -768,48 +780,11 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
     # 竖排基本间距: 0.2
     spacing_x = int(font_size * 0.2 * (line_spacing or 1.0))
 
-    # Conditional wrapping logic based on disable_auto_wrap and region_count
-    # 检测文本中是否有BR标记或换行符
+    # 简化逻辑：有BR/换行符就按它换行，没有就不换行
+    # 无论哪种情况都使用无限高度，让换行完全由\n控制
     has_br = bool(re.search(r'(\[BR\]|【BR】|<br>|\n)', text, flags=re.IGNORECASE))
-    
-    effective_max_height = h
-    if config and config.render.disable_auto_wrap:
-        if has_br:
-            # 当AI断句开启且有BR标记时，使用无限高度，让文本按AI断句标记换行
-            effective_max_height = 99999
-            logger.debug(f"[VERTICAL DEBUG] AI断句开启且有BR标记，effective_max_height=99999, region_count={region_count}")
-        else:
-            # AI断句开启但没有BR标记，根据 layout_mode 回退
-            # 严格模式(strict)和智能缩放(smart_scaling)在单行时都强制不换行
-            if (config.render.layout_mode in ['smart_scaling', 'strict']) and region_count <= 1:
-                effective_max_height = 99999
-                logger.debug(f"[VERTICAL DEBUG] AI断句开启但无BR标记，单行Strict/SmartScaling，effective_max_height=99999, region_count={region_count}")
-            else:
-                # 回退到自动换行模式
-                effective_max_height = h
-                logger.debug(f"[VERTICAL DEBUG] AI断句开启但无BR标记，回退自动换行，effective_max_height={h}, region_count={region_count}")
-    elif config and config.render.layout_mode == 'smart_scaling':
-        # smart_scaling 模式下，检查是否有换行符
-        # 只在非AI断句模式下检测方向不匹配
-        force_wrap = should_force_wrap_for_mismatched_direction(config, logger)
-        
-        if has_br:
-            # 有换行符，使用传入的框高度
-            effective_max_height = h
-            logger.debug(f"[VERTICAL DEBUG] Smart scaling有换行符，effective_max_height={h}, region_count={region_count}")
-        else:
-            # 无换行符，单区域使用无限高度
-            if region_count <= 1 and not force_wrap:
-                effective_max_height = 99999
-                logger.debug(f"[VERTICAL DEBUG] Smart scaling单区域无换行符，effective_max_height=99999, region_count={region_count}")
-            else:
-                effective_max_height = h
-                if force_wrap:
-                    logger.debug(f"[VERTICAL DEBUG] Smart scaling强制换行模式，effective_max_height={h}, region_count={region_count}")
-                else:
-                    logger.debug(f"[VERTICAL DEBUG] Smart scaling多区域无换行符，effective_max_height={h}, region_count={region_count}")
-    else:
-        logger.debug(f"[VERTICAL DEBUG] 默认模式，effective_max_height={h}, region_count={region_count}")
+    effective_max_height = 99999  # 始终使用无限高度，换行由\n控制
+    logger.debug(f"[VERTICAL DEBUG] has_br={has_br}, effective_max_height=99999")
 
     # Use original font size for line breaking calculation
     line_text_list, line_height_list = calc_vertical(font_size, text, effective_max_height, config=config)
@@ -1091,6 +1066,55 @@ def get_char_offset_x(font_size: int, cdpt: str):
 
 def get_string_width(font_size: int, text: str):
     return sum([get_char_offset_x(font_size, c) for c in text])
+
+def get_char_offset_y(font_size: int, cdpt: str):
+    """获取单个字符的竖排高度（像素）"""
+    if cdpt == '＿':
+        return get_char_offset_y(font_size, '　')
+
+    cdpt_trans, _ = CJK_Compatibility_Forms_translate(cdpt, 1)
+    slot = get_char_glyph(cdpt_trans, font_size, 1)
+
+    char_offset_y = font_size  # 默认值
+
+    if hasattr(slot, 'metrics') and slot.metrics:
+        if hasattr(slot.metrics, 'vertAdvance') and slot.metrics.vertAdvance:
+            char_offset_y = slot.metrics.vertAdvance >> 6
+        elif hasattr(slot.metrics, 'height') and slot.metrics.height:
+            char_offset_y = slot.metrics.height >> 6
+
+    if char_offset_y == font_size and hasattr(slot, 'advance') and slot.advance:
+        if hasattr(slot.advance, 'y') and slot.advance.y:
+            char_offset_y = slot.advance.y >> 6
+
+    return char_offset_y
+
+def get_string_height(font_size: int, text: str):
+    """获取字符串的竖排总高度（像素），考虑<H>横排块"""
+    # 处理 BR 标记（不换行时当作连续文本）
+    text_clean = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '', text, flags=re.IGNORECASE)
+
+    total_height = 0
+
+    # 分割 <H> 块
+    parts = re.split(r'(<H>.*?</H>)', text_clean, flags=re.IGNORECASE | re.DOTALL)
+
+    for part in parts:
+        if not part:
+            continue
+
+        is_horizontal_block = part.lower().startswith('<h>') and part.lower().endswith('</h>')
+
+        if is_horizontal_block:
+            content = part[3:-4]
+            if content:
+                # 用精确的横排块高度计算
+                total_height += calc_horizontal_block_height(font_size, content)
+        else:
+            # 普通竖排字符
+            total_height += sum([get_char_offset_y(font_size, c) for c in part])
+
+    return total_height
 
 def calc_horizontal_cjk(font_size: int, text: str, max_width: int) -> Tuple[List[str], List[int]]:
     """
@@ -1392,7 +1416,7 @@ def calc_horizontal(font_size: int, text: str, max_width: int, max_height: int, 
             line_text += ''.join(current_syllables)
             if len(line_text) == 0:
                 continue
-            if j == 0 and i > 0 and line_text_list[-1][-1] == '-' and line_text[0] == '-':
+            if j == 0 and i > 0 and len(line_text_list[-1]) > 0 and line_text_list[-1][-1] == '-' and line_text[0] == '-':
                 line_text = line_text[1:]
                 line_width_list[i] -= hyphen_offset_x
             if j < len(line) - 1 and len(line_text) > 0:
@@ -1547,48 +1571,19 @@ def put_text_horizontal(font_size: int, text: str, width: int, height: int, alig
         stroke_ratio = config.render.stroke_width if (config and hasattr(config.render, 'stroke_width')) else 0.07
     else:
         stroke_ratio = stroke_width
-    
-    # 当AI断句开启时，统一处理换行符并使用无限宽度
-    if config and config.render.disable_auto_wrap:
-        # 统一处理所有类型的AI换行符
-        text = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
-        
-        has_newline = '\n' in text
-        if has_newline:
-            # 有AI换行符，使用无限宽度
-            width = 99999
-            logger.debug(f"[HORIZONTAL DEBUG] AI断句开启且有换行符，width=99999, region_count={region_count}")
-        else:
-            # 无换行符，检查是否单行严格/智能模式
-            if (config.render.layout_mode in ['smart_scaling', 'strict']) and region_count <= 1:
-                width = 99999
-                logger.debug(f"[HORIZONTAL DEBUG] AI断句开启但无换行符，单行Strict/SmartScaling，width=99999, region_count={region_count}")
-            else:
-                # 保持原宽度（允许自动换行）
-                logger.debug(f"[HORIZONTAL DEBUG] AI断句开启但无换行符，回退自动换行，width={width}, region_count={region_count}")
-                
-    elif layout_mode == 'smart_scaling':
-        # In smart_scaling mode, wrapping is conditional.
-        # It wraps only if manual line breaks ([BR] or \n) are present.
-        # Otherwise, it expands without wrapping.
-        # 统一处理所有类型的AI换行符
-        text = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
-        
-        # 只在非AI断句模式下检测方向不匹配
-        force_wrap = should_force_wrap_for_mismatched_direction(config, logger)
-        
-        if '\n' not in text and not force_wrap:
-            # No manual breaks found, so disable wrapping by setting a large width.
-            if region_count <= 1:
-                width = 99999
-                logger.debug(f"[HORIZONTAL DEBUG] Smart scaling单区域无换行符，width=99999, region_count={region_count}")
-            else:
-                logger.debug(f"[HORIZONTAL DEBUG] Smart scaling多区域无换行符，width={width}, region_count={region_count}")
-        else:
-            if force_wrap:
-                logger.debug(f"[HORIZONTAL DEBUG] Smart scaling强制换行模式，width={width}, region_count={region_count}")
-            else:
-                logger.debug(f"[HORIZONTAL DEBUG] Smart scaling有换行符，width={width}, region_count={region_count}, line_count={text.count(chr(10))+1}")
+
+    # 简化逻辑：统一处理BR标记，有BR就按它换行，没有就不换行
+    text = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
+
+    has_newline = '\n' in text
+    if has_newline:
+        # 有换行符，使用传入的宽度
+        logger.debug(f"[HORIZONTAL DEBUG] 有换行符，width={width}")
+    else:
+        # 无换行符，使用无限宽度（不自动换行）
+        width = 99999
+        logger.debug(f"[HORIZONTAL DEBUG] 无换行符，width=99999")
+
     bg_size = int(max(font_size * stroke_ratio, 1)) if bg is not None else 0
     # line_spacing 是基本间距的倍率
     # 横排基本间距: 0.01

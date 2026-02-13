@@ -4,7 +4,6 @@ from PyQt6.QtGui import QColor, QWheelEvent
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
-    QColorDialog,
     QComboBox,
     QFormLayout,
     QGroupBox,
@@ -16,13 +15,11 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QToolButton,
-    QMenu,
 )
-from PyQt6.QtGui import QAction
 
 from services import get_config_service, get_i18n_manager
 
+from .color_picker import ColorPickerWidget
 # from .collapsible_frame import CollapsibleFrame  # 不再使用折叠框
 from .syntax_highlighter import HorizontalTagHighlighter
 import logging
@@ -95,6 +92,8 @@ class PropertyPanel(QWidget):
     translation_requested = pyqtSignal()
     font_size_changed = pyqtSignal(int, int)
     font_color_changed = pyqtSignal(int, str)
+    stroke_color_changed = pyqtSignal(int, str)
+    stroke_width_changed = pyqtSignal(int, float)
     font_family_changed = pyqtSignal(int, str)  # New signal for font family
     alignment_changed = pyqtSignal(int, str)
     direction_changed = pyqtSignal(int, str)
@@ -113,13 +112,7 @@ class PropertyPanel(QWidget):
         self.app_logic = app_logic
         self.config_service = get_config_service()
         self.i18n = get_i18n_manager()
-        
-        # 颜色剪贴板
-        self._color_clipboard = None
-        
-        # 加载保存的常用颜色
-        self._load_saved_colors()
-        
+
         self._init_ui()
         self._connect_signals()
         self._connect_model_signals() # Connect to model signals
@@ -333,60 +326,33 @@ class PropertyPanel(QWidget):
         self.font_size_input = QLineEdit()
         font_size_layout.addWidget(self.font_size_input)
         self.font_size_slider = CustomSlider(Qt.Orientation.Horizontal)
-        self.font_size_slider.setRange(8, 72)
+        self.font_size_slider.setRange(8, 150)
         self.font_size_label = QLabel(self._t("Font Size:"))
         style_layout.addRow(self.font_size_label, font_size_layout)
         style_layout.addRow("", self.font_size_slider)
         
-        # Font color - 增强版颜色选择器
-        font_color_layout = QHBoxLayout()
-        
-        # 主颜色按钮
-        self.font_color_button = QPushButton()
-        self.font_color_button.setMinimumWidth(60)
-        self.font_color_button.setToolTip(self._t("Click to select color"))
-        font_color_layout.addWidget(self.font_color_button, 2)
-        
-        # RGB显示标签
-        self.font_color_rgb_label = QLabel("RGB: -")
-        self.font_color_rgb_label.setStyleSheet("font-size: 10px;")
-        self.font_color_rgb_label.setMinimumWidth(80)
-        font_color_layout.addWidget(self.font_color_rgb_label, 1)
-        
-        # 复制按钮
-        self.copy_color_button = QPushButton(self._t("Copy"))
-        self.copy_color_button.setToolTip(self._t("Copy current color"))
-        self.copy_color_button.setMaximumWidth(50)
-        font_color_layout.addWidget(self.copy_color_button)
-        
-        # 粘贴按钮
-        self.paste_color_button = QPushButton(self._t("Paste"))
-        self.paste_color_button.setToolTip(self._t("Paste copied color"))
-        self.paste_color_button.setMaximumWidth(50)
-        self.paste_color_button.setEnabled(False)
-        font_color_layout.addWidget(self.paste_color_button)
-        
-        # 保存/加载常用颜色按钮
-        self.saved_colors_button = QToolButton()
-        self.saved_colors_button.setText("★")
-        self.saved_colors_button.setToolTip(self._t("Saved colors menu"))
-        self.saved_colors_button.setMaximumWidth(30)
-        self.saved_colors_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        font_color_layout.addWidget(self.saved_colors_button)
-        
-        # 创建保存颜色的菜单
-        self._create_saved_colors_menu()
-        
+        # Font color
+        self.font_color_picker = ColorPickerWidget(
+            dialog_title="Select font color",
+            default_color="#000000",
+            config_key="saved_colors",
+            config_service=self.config_service,
+            i18n_func=self._t,
+        )
         self.font_color_label = QLabel(self._t("Font Color:"))
-        style_layout.addRow(self.font_color_label, font_color_layout)
-        
-        # Stroke color (描边颜色 - 黑白选择)
-        self.stroke_color_combo = QComboBox()
-        self.stroke_color_combo.addItem(self._t("White"), "white")
-        self.stroke_color_combo.addItem(self._t("Black"), "black")
+        style_layout.addRow(self.font_color_label, self.font_color_picker)
+
+        # Stroke color (描边颜色)
+        self.stroke_color_picker = ColorPickerWidget(
+            dialog_title="Select stroke color",
+            default_color="#ffffff",
+            config_key="saved_stroke_colors",
+            config_service=self.config_service,
+            i18n_func=self._t,
+        )
         self.stroke_color_label = QLabel(self._t("Stroke Color:"))
-        style_layout.addRow(self.stroke_color_label, self.stroke_color_combo)
-        
+        style_layout.addRow(self.stroke_color_label, self.stroke_color_picker)
+
         # Stroke width (描边宽度)
         from PyQt6.QtWidgets import QDoubleSpinBox
         stroke_width_layout = QHBoxLayout()
@@ -475,10 +441,8 @@ class PropertyPanel(QWidget):
         self.font_family_combo.currentIndexChanged.connect(self._on_font_family_changed)
         self.font_size_input.editingFinished.connect(self._on_font_size_editing_finished)
         self.font_size_slider.valueChanged.connect(self._on_font_size_slider_changed)
-        self.font_color_button.clicked.connect(self._on_font_color_clicked)
-        self.copy_color_button.clicked.connect(self._on_copy_color)
-        self.paste_color_button.clicked.connect(self._on_paste_color)
-        self.stroke_color_combo.currentIndexChanged.connect(self._on_stroke_color_changed)
+        self.font_color_picker.color_changed.connect(self._on_font_color_changed)
+        self.stroke_color_picker.color_changed.connect(self._on_stroke_color_changed)
         self.stroke_width_spinbox.valueChanged.connect(self._on_stroke_width_changed)
         self.line_spacing_spinbox.valueChanged.connect(self._on_line_spacing_changed)
         # 实时更新（textChanged）
@@ -624,6 +588,13 @@ class PropertyPanel(QWidget):
             self.font_color_label.setText(self._t("Font Color:"))
         if hasattr(self, 'stroke_color_label'):
             self.stroke_color_label.setText(self._t("Stroke Color:"))
+
+        # 刷新颜色选择器内部文本
+        if hasattr(self, 'font_color_picker'):
+            self.font_color_picker.refresh_ui_texts()
+        if hasattr(self, 'stroke_color_picker'):
+            self.stroke_color_picker.refresh_ui_texts()
+
         if hasattr(self, 'stroke_width_label'):
             self.stroke_width_label.setText(self._t("Stroke Width:"))
         if hasattr(self, 'line_spacing_label'):
@@ -687,13 +658,7 @@ class PropertyPanel(QWidget):
             # 恢复选中的索引
             self.font_family_combo.setCurrentIndex(current_index)
         
-        # 刷新描边颜色下拉框的选项
-        if hasattr(self, 'stroke_color_combo') and self.stroke_color_combo.count() == 2:
-            current_index = self.stroke_color_combo.currentIndex()
-            self.stroke_color_combo.setItemText(0, self._t("White"))
-            self.stroke_color_combo.setItemText(1, self._t("Black"))
-            self.stroke_color_combo.setCurrentIndex(current_index)
-        
+
         # 刷新下拉菜单（重新填充以使用新的翻译）
         self._refresh_combo_boxes()
     
@@ -831,9 +796,8 @@ class PropertyPanel(QWidget):
         self.stroke_width_spinbox.setValue(0.07)  # 重置为默认值
         self.line_spacing_spinbox.setValue(1.0)  # 重置为默认值
         default_color = self.config_service.get_config().render.font_color or "#000000"
-        self.font_color_button.setStyleSheet(f"background-color: {default_color};")
-        self._update_rgb_label(default_color)
-        self.stroke_color_combo.setCurrentIndex(0)  # 默认白色
+        self.font_color_picker.reset(default_color)
+        self.stroke_color_picker.reset("#ffffff")
         self.index_label.setText("-")
         self.bbox_label.setText("-")
         self.size_label.setText("-")
@@ -919,61 +883,18 @@ class PropertyPanel(QWidget):
         elif isinstance(fg_colors, (list, tuple)) and len(fg_colors) == 3:
              color_hex = f"#{int(fg_colors[0]):02x}{int(fg_colors[1]):02x}{int(fg_colors[2]):02x}"
 
-        self.font_color_button.setStyleSheet(f"background-color: {color_hex};")
-        self._update_rgb_label(color_hex)
-        
-        # 更新描边颜色下拉框 - 优先使用 stroke_color_type
-        stroke_color_type = region_data.get('stroke_color_type')
-        if stroke_color_type:
-            # 直接使用 stroke_color_type
-            if stroke_color_type == "white":
-                self.stroke_color_combo.setCurrentIndex(0)
-            else:  # black
-                self.stroke_color_combo.setCurrentIndex(1)
-        else:
-            # 如果没有 stroke_color_type，从 bg_colors 判断
-            bg_colors = region_data.get('bg_colors')
-            bg_color = region_data.get('bg_color')  # 也检查 bg_color 字段
-            
-            # 优先使用 bg_color（单个值），其次使用 bg_colors（数组）
-            if bg_color and isinstance(bg_color, (list, tuple)) and len(bg_color) == 3:
-                avg = sum(bg_color) / 3
-                if avg > 127:
-                    self.stroke_color_combo.setCurrentIndex(0)  # White
-                else:
-                    self.stroke_color_combo.setCurrentIndex(1)  # Black
-            elif isinstance(bg_colors, (list, tuple)) and len(bg_colors) == 3:
-                avg = sum(bg_colors) / 3
-                if avg > 127:
-                    self.stroke_color_combo.setCurrentIndex(0)  # White
-                else:
-                    self.stroke_color_combo.setCurrentIndex(1)  # Black
-            else:
-                # 根据字体颜色自动判断
-                if font_color and isinstance(font_color, str) and font_color.startswith('#'):
-                    try:
-                        r = int(font_color[1:3], 16)
-                        g = int(font_color[3:5], 16)
-                        b = int(font_color[5:7], 16)
-                        fg_avg = (r + g + b) / 3
-                        if fg_avg <= 127:
-                            self.stroke_color_combo.setCurrentIndex(0)  # White
-                        else:
-                            self.stroke_color_combo.setCurrentIndex(1)  # Black
-                    except (ValueError, IndexError):
-                        self.stroke_color_combo.setCurrentIndex(0)
-                else:
-                    fg_colors = region_data.get('fg_colors')
-                    if isinstance(fg_colors, (list, tuple)) and len(fg_colors) == 3:
-                        fg_avg = sum(fg_colors) / 3
-                        if fg_avg <= 127:
-                            self.stroke_color_combo.setCurrentIndex(0)  # White
-                        else:
-                            self.stroke_color_combo.setCurrentIndex(1)  # Black
-                    else:
-                        self.stroke_color_combo.setCurrentIndex(0)  # 默认白色
+        self.font_color_picker.set_color(color_hex)
 
-        
+        # Update stroke color display
+        bg_colors = region_data.get('bg_colors')
+        bg_color = region_data.get('bg_color')
+        stroke_hex = "#ffffff"
+        if isinstance(bg_color, (list, tuple)) and len(bg_color) == 3:
+            stroke_hex = f"#{int(bg_color[0]):02x}{int(bg_color[1]):02x}{int(bg_color[2]):02x}"
+        elif isinstance(bg_colors, (list, tuple)) and len(bg_colors) == 3:
+            stroke_hex = f"#{int(bg_colors[0]):02x}{int(bg_colors[1]):02x}{int(bg_colors[2]):02x}"
+        self.stroke_color_picker.set_color(stroke_hex)
+
         # Update stroke width
         stroke_width = region_data.get("stroke_width", region_data.get("default_stroke_width", 0.07))
         self.stroke_width_spinbox.setValue(stroke_width if stroke_width is not None else 0.07)
@@ -1107,7 +1028,6 @@ class PropertyPanel(QWidget):
             # 3. 将 \n 转换回 AI 换行符 [BR]（与 _on_translated_text_focus_out 保持一致）
             text_with_br = re.sub(r'\n+', '[BR]', text_with_newlines)
 
-            print(f"[PropertyPanel] 翻译文本修改: region={self.current_region_index}, text='{text_with_br[:50]}'")
             self.translated_text_modified.emit(self.current_region_index, text_with_br)
     
     def get_selected_ocr_model(self) -> str:
@@ -1163,210 +1083,20 @@ class PropertyPanel(QWidget):
         for region_index in selected_indices:
             self.font_family_changed.emit(region_index, font_filename)
     
-    def _on_font_color_clicked(self):
-        # 支持多选批量设置
-        selected_indices = self.model.get_selection()
-        if not selected_indices:
-            return
-        
-        current_color_str = self.font_color_button.styleSheet().replace("background-color: ", "").strip().rstrip(";")
-        current_color = QColor(current_color_str) if current_color_str else QColor("black")
-        
-        # 设置自定义颜色（从保存的颜色中加载）
-        dialog = QColorDialog(current_color, self)
-        dialog.setWindowTitle(self._t("Select font color"))
-        dialog.setOption(QColorDialog.ColorDialogOption.ShowAlphaChannel, False)
-        
-        # 添加自定义颜色到对话框
-        for i, color_hex in enumerate(self.saved_colors[:16]):  # QColorDialog最多支持16个自定义颜色
-            dialog.setCustomColor(i, QColor(color_hex))
-        
-        if dialog.exec() == QColorDialog.DialogCode.Accepted:
-            color = dialog.currentColor()
-            hex_color = color.name()
-            self._apply_font_color(hex_color)
-            
-            # 自动保存到常用颜色（如果不存在）
-            if hex_color not in self.saved_colors:
-                self.saved_colors.insert(0, hex_color)
-                if len(self.saved_colors) > 20:  # 最多保存20个
-                    self.saved_colors = self.saved_colors[:20]
-                self._save_colors()
-                self._create_saved_colors_menu()
+    def _on_font_color_changed(self, hex_color):
+        """字体颜色变化时的处理"""
+        for idx in self.model.get_selection():
+            self.font_color_changed.emit(idx, hex_color)
 
-    def _apply_font_color(self, hex_color):
-        """应用字体颜色到选中的区域"""
-        selected_indices = self.model.get_selection()
-        if not selected_indices:
-            return
-            
-        self.font_color_button.setStyleSheet(f"background-color: {hex_color};")
-        self._update_rgb_label(hex_color)
-        
-        # 批量应用到所有选中的区域
-        for region_index in selected_indices:
-            self.font_color_changed.emit(region_index, hex_color)
-        
-        # 字体颜色改变时，根据算法自动更新描边颜色选择
-        self._auto_select_stroke_color(hex_color)
-
-    def _update_rgb_label(self, hex_color):
-        """更新RGB显示标签"""
-        try:
-            color = QColor(hex_color)
-            r, g, b = color.red(), color.green(), color.blue()
-            self.font_color_rgb_label.setText(f"RGB: {r},{g},{b}")
-        except:
-            self.font_color_rgb_label.setText("RGB: -")
-
-    def _on_copy_color(self):
-        """复制当前颜色"""
-        current_color_str = self.font_color_button.styleSheet().replace("background-color: ", "").strip().rstrip(";")
-        if current_color_str:
-            self._color_clipboard = current_color_str
-            self.paste_color_button.setEnabled(True)
-            # 视觉反馈
-            self.copy_color_button.setStyleSheet("background-color: #90EE90;")
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(200, lambda: self.copy_color_button.setStyleSheet(""))
-
-    def _on_paste_color(self):
-        """粘贴颜色到选中的区域"""
-        if self._color_clipboard:
-            self._apply_font_color(self._color_clipboard)
-
-    def _create_saved_colors_menu(self):
-        """创建保存颜色的菜单"""
-        menu = QMenu(self)
-        
-        if self.saved_colors:
-            # 显示保存的颜色
-            for color_hex in self.saved_colors:
-                action = QAction(self)
-                # 创建颜色预览
-                color_icon = self._create_color_icon(color_hex)
-                action.setIcon(color_icon)
-                
-                # 显示颜色值和RGB
-                color = QColor(color_hex)
-                r, g, b = color.red(), color.green(), color.blue()
-                action.setText(f"{color_hex}  (R:{r} G:{g} B:{b})")
-                
-                action.triggered.connect(lambda checked, c=color_hex: self._apply_font_color(c))
-                menu.addAction(action)
-            
-            menu.addSeparator()
-        
-        # 添加"保存当前颜色"选项
-        save_action = QAction(self._t("Save current color"), self)
-        save_action.triggered.connect(self._save_current_color)
-        menu.addAction(save_action)
-        
-        # 添加"清除保存的颜色"选项
-        if self.saved_colors:
-            clear_action = QAction(self._t("Clear saved colors"), self)
-            clear_action.triggered.connect(self._clear_saved_colors)
-            menu.addAction(clear_action)
-        
-        self.saved_colors_button.setMenu(menu)
-
-    def _create_color_icon(self, hex_color):
-        """创建颜色图标"""
-        from PyQt6.QtGui import QPixmap, QPainter, QIcon
-        from PyQt6.QtCore import QSize
-        
-        pixmap = QPixmap(16, 16)
-        pixmap.fill(QColor(hex_color))
-        
-        # 添加边框
-        painter = QPainter(pixmap)
-        painter.setPen(QColor("#888888"))
-        painter.drawRect(0, 0, 15, 15)
-        painter.end()
-        
-        return QIcon(pixmap)
-
-    def _save_current_color(self):
-        """保存当前颜色到常用颜色列表"""
-        current_color_str = self.font_color_button.styleSheet().replace("background-color: ", "").strip().rstrip(";")
-        if current_color_str and current_color_str not in self.saved_colors:
-            self.saved_colors.insert(0, current_color_str)
-            if len(self.saved_colors) > 20:
-                self.saved_colors = self.saved_colors[:20]
-            self._save_colors()
-            self._create_saved_colors_menu()
-
-    def _clear_saved_colors(self):
-        """清除所有保存的颜色"""
-        self.saved_colors = []
-        self._save_colors()
-        self._create_saved_colors_menu()
-
-    def _load_saved_colors(self):
-        """从配置服务加载保存的颜色"""
-        try:
-            config = self.config_service.get_config()
-            # 从 app.saved_colors 读取
-            if hasattr(config.app, 'saved_colors') and config.app.saved_colors:
-                self.saved_colors = config.app.saved_colors
-            else:
-                self.saved_colors = []
-        except Exception as e:
-            logger.warning(f"加载保存的颜色失败: {e}")
-            self.saved_colors = []
-
-    def _save_colors(self):
-        """保存颜色到配置服务"""
-        try:
-            # 更新配置中的 saved_colors
-            self.config_service.update_config({
-                'app': {
-                    'saved_colors': self.saved_colors
-                }
-            })
-            # 保存到用户配置文件
-            self.config_service.save_config_file()
-        except Exception as e:
-            logger.error(f"保存颜色失败: {e}")
-
-    def _auto_select_stroke_color(self, font_color_hex):
-        """根据字体颜色自动选择描边颜色（黑或白）"""
-        try:
-            # 解析字体颜色
-            r = int(font_color_hex[1:3], 16)
-            g = int(font_color_hex[3:5], 16)
-            b = int(font_color_hex[5:7], 16)
-            
-            # 计算平均值
-            fg_avg = (r + g + b) / 3
-            
-            # 根据后端算法：fg_avg <= 127 用白色，否则用黑色
-            if fg_avg <= 127:
-                self.stroke_color_combo.setCurrentIndex(0)  # White
-            else:
-                self.stroke_color_combo.setCurrentIndex(1)  # Black
-        except Exception as e:
-            logger.error(f"自动选择描边颜色失败: {e}")
-
-    def _on_stroke_color_changed(self, index):
-        """处理描边颜色下拉框变化"""
-        # 支持多选批量设置
-        selected_indices = self.model.get_selection()
-        if not selected_indices:
-            return
-        
-        color_type = self.stroke_color_combo.currentData()
-        
-        # 批量应用到所有选中的区域
-        for region_index in selected_indices:
-            self.model.update_region_style(region_index, "stroke_color_type", color_type)
+    def _on_stroke_color_changed(self, hex_color):
+        """描边颜色变化时的处理"""
+        for idx in self.model.get_selection():
+            self.stroke_color_changed.emit(idx, hex_color)
 
     def _on_stroke_width_changed(self, value):
         """处理描边宽度变化"""
-        # 支持多选批量设置
-        selected_indices = self.model.get_selection()
-        for region_index in selected_indices:
-            self.model.update_region_style(region_index, "stroke_width", value)
+        for region_index in self.model.get_selection():
+            self.stroke_width_changed.emit(region_index, value)
 
     def _on_line_spacing_changed(self, value):
         """处理行间距倍率变化"""

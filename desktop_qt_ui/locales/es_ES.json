@@ -564,6 +564,8 @@
   "Testing API connection, please wait...": "Probando conexión API, por favor espere...",
   "API connection test successful!": "¡Prueba de conexión API exitosa!",
   "API connection test failed": "Prueba de conexión API fallida",
+  "Please check your API key and address.": "Por favor, verifique su clave API y dirección.",
+  "Address format example": "Ejemplo de formato de dirección",
   "Fetching models, please wait...": "Obteniendo lista de modelos, por favor espere...",
   "Failed to get models": "Error al obtener lista de modelos",
   "No models available": "No hay modelos disponibles",

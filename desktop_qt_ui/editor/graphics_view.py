@@ -2,12 +2,10 @@
 import os
 import cv2
 import numpy as np
-from manga_translator.rendering import resize_regions_to_font_size
-from manga_translator.utils import TextBlock
+from manga_translator.utils import TextBlock, rotate_polygons
 from PIL.ImageQt import ImageQt
 from PyQt6.QtCore import QPointF, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import (
-    QBrush,
     QColor,
     QCursor,
     QImage,
@@ -15,16 +13,28 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
-    QPolygonF,
     QTransform,
 )
-from PyQt6.QtCore import QRectF
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QMenu
 
 # --- 新增Imports for Refactoring ---
 from editor import text_renderer_backend
 from editor.editor_model import EditorModel
 from editor.graphics_items import RegionTextItem, TransparentPixmapItem
+from editor.selection_manager import SelectionManager
+from editor.text_render_pipeline import (
+    build_text_block_from_region as pipeline_build_text_block_from_region,
+    build_region_render_params as pipeline_build_region_render_params,
+    make_text_render_cache_key,
+    render_region_text,
+    clear_region_text,
+)
+from editor.render_layout_pipeline import (
+    build_region_specific_params,
+    calculate_region_dst_points,
+    prepare_layout_context,
+)
+from editor.region_render_snapshot import RegionRenderSnapshot
 from services import get_render_parameter_service
 
 # --- 结束新增 ---
@@ -35,7 +45,6 @@ class GraphicsView(QGraphicsView):
     负责显示和交互式操作图形项（如图片、文本框）。
     """
     region_geometry_changed = pyqtSignal(int, dict)
-    geometry_added = pyqtSignal(int, list)
     _layout_result_ready = pyqtSignal(list)  # 布局计算结果信号
 
     def __init__(self, model: EditorModel, parent=None):
@@ -65,20 +74,10 @@ class GraphicsView(QGraphicsView):
         self._last_pos = None
         self._current_draw_path: QPainterPath = None
 
-        # --- Geometry Editing State ---
-        self._is_drawing_geometry = False
-        self._geometry_start_pos = None
-        self._geometry_preview_item = None
-        
         # 拖动相关状态
         self._potential_drag = False  # 是否可能开始拖动
         self._drag_start_pos = None  # 拖动起始位置
         self._drag_threshold = 5  # 拖动阈值（像素）
-
-        # --- 框选状态 ---
-        self._is_box_selecting = False  # 是否正在框选
-        self._box_select_start_pos = None  # 框选起始位置
-        self._box_select_rect_item = None  # 框选矩形显示
 
         # --- Text Box Drawing State ---
         self._is_drawing_textbox = False
@@ -98,20 +97,24 @@ class GraphicsView(QGraphicsView):
         # --- 新增渲染器和缓存 ---
         self._text_blocks_cache: list[TextBlock] = []
         self._dst_points_cache: list[np.ndarray] = []
+        self._render_snapshot_cache: list[RegionRenderSnapshot | None] = []
+        self._last_geometry_edit_kind: str | None = None
         # --- 结束新增 ---
 
         self._setup_view()
         self._connect_model_signals()
-        
+
         # 连接布局结果信号
         self._layout_result_ready.connect(self._apply_layout_result)
 
     def _setup_view(self):
         """配置视图属性"""
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        
+
         # 性能优化配置
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self.setCacheMode(QGraphicsView.CacheModeFlag.CacheBackground)
@@ -125,6 +128,11 @@ class GraphicsView(QGraphicsView):
 
         self.scene.setBackgroundBrush(Qt.GlobalColor.darkGray)
 
+        # 选择管理器：集中管理选择逻辑和双向同步
+        self.selection_manager = SelectionManager(
+            self.model, self.scene, lambda: self._region_items
+        )
+
     def _connect_model_signals(self):
         """连接模型信号到视图的槽"""
         self.model.image_changed.connect(self.on_image_changed)
@@ -137,7 +145,7 @@ class GraphicsView(QGraphicsView):
         self.model.original_image_alpha_changed.connect(self.on_original_image_alpha_changed)
         self.model.region_text_updated.connect(self.on_region_text_updated) # New connection
         self.model.region_style_updated.connect(self.on_region_style_updated) # NEW: For targeted style updates
-        self.model.selection_changed.connect(self._on_selection_changed) # NEW: 同步selection到Qt item
+        # selection_changed 由 SelectionManager 处理，无需在此连接
 
         # --- Mask Editing Connections ---
         self.model.active_tool_changed.connect(self._on_active_tool_changed)
@@ -160,6 +168,7 @@ class GraphicsView(QGraphicsView):
 
     def clear_all_state(self):
         """清空所有状态,包括items、缓存、计时器"""
+        self.selection_manager.suppress_forward_sync(True)  # 防止 removeItem 触发选择同步
         try:
             # 停止防抖计时器
             if hasattr(self, 'render_debounce_timer') and self.render_debounce_timer.isActive():
@@ -200,37 +209,26 @@ class GraphicsView(QGraphicsView):
                 self.scene.removeItem(self._textbox_preview_item)
                 self._textbox_preview_item = None
 
-            if self._geometry_preview_item and self._geometry_preview_item.scene():
-                self.scene.removeItem(self._geometry_preview_item)
-                self._geometry_preview_item = None
-
             if self._preview_item and self._preview_item.scene():
                 self.scene.removeItem(self._preview_item)
                 self._preview_item = None
 
-            # 清空框选矩形
-            if self._box_select_rect_item:
-                try:
-                    if self._box_select_rect_item.scene():
-                        self.scene.removeItem(self._box_select_rect_item)
-                except RuntimeError:
-                    pass  # C++ 对象已被删除
-            self._box_select_rect_item = None
-            self._is_box_selecting = False
-            self._box_select_start_pos = None
+            # 清空框选状态（由 SelectionManager 管理）
+            self.selection_manager.clear_state()
 
             # 清空缓存
             if hasattr(self, '_text_render_cache'):
                 self._text_render_cache.clear()
             self._text_blocks_cache = []
             self._dst_points_cache = []
+            self._render_snapshot_cache = []
 
             # 重置所有绘制状态
             self._is_drawing = False
-            self._is_drawing_geometry = False
             self._is_drawing_textbox = False
             self._last_edited_region_index = None
-            
+            self._last_geometry_edit_kind = None
+
             # 关闭线程池（如果存在）
             if hasattr(self, '_render_executor'):
                 try:
@@ -241,6 +239,8 @@ class GraphicsView(QGraphicsView):
         except (RuntimeError, AttributeError) as e:
             # 清理过程中可能遇到已删除的对象
             print(f"[View] Warning: Error during clear_all_state: {e}")
+        finally:
+            self.selection_manager.suppress_forward_sync(False)
 
     def on_image_changed(self, image):
         """槽：当模型中的图像变化时更新背景"""
@@ -248,15 +248,17 @@ class GraphicsView(QGraphicsView):
         # 先清空所有状态
         self.clear_all_state()
 
-        # 清空场景
+        # 清空场景（防止触发选择同步）
+        self.selection_manager.suppress_forward_sync(True)
         self.scene.clear()
+        self.selection_manager.suppress_forward_sync(False)
+        self.selection_manager.on_scene_cleared()  # scene.clear() 会删除所有 item
         self._image_item = None
         self._raw_mask_item = None
         self._refined_mask_item = None
         self._inpainted_image_item = None
         self._preview_item = None
         self._image_np = None
-        self._box_select_rect_item = None  # scene.clear() 会删除所有 item
 
         if image is None:
             return
@@ -417,6 +419,7 @@ class GraphicsView(QGraphicsView):
         """Slot for targeted update when only style changes."""
         self._perform_single_item_update(region_index)
 
+
     @pyqtSlot(float)
     def on_original_image_alpha_changed(self, alpha: float):
         """槽：当原图透明度变化时更新"""
@@ -431,27 +434,19 @@ class GraphicsView(QGraphicsView):
                     item.setVisible(True)
                     item.set_text_visible(True)
                     item.set_box_visible(True)
-                    # 显示绿框和白框
-                    item.set_green_box_visible(True)
                     item.set_white_box_visible(True)
                 elif mode == "text_only":
                     item.setVisible(True)
                     item.set_text_visible(True)
                     item.set_box_visible(False)
-                    # 隐藏绿框和白框
-                    item.set_green_box_visible(False)
                     item.set_white_box_visible(False)
                 elif mode == "box_only":
                     item.setVisible(True)
                     item.set_text_visible(False)
                     item.set_box_visible(True)
-                    # 显示绿框和白框
-                    item.set_green_box_visible(True)
                     item.set_white_box_visible(True)
                 elif mode == "none":
                     item.setVisible(False)
-                    # 隐藏绿框和白框
-                    item.set_green_box_visible(False)
                     item.set_white_box_visible(False)
 
 
@@ -465,55 +460,228 @@ class GraphicsView(QGraphicsView):
         else:
             # A general change occurred (e.g., new translation). Perform full debounced update.
             self._text_render_cache.clear()
+            self._render_snapshot_cache = []
             self.render_debounce_timer.start()
 
-    def _perform_single_item_update(self, index):
-        """Delegates the update logic to the RegionTextItem itself."""
+    def _values_equal(self, left, right) -> bool:
         try:
+            if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
+                return np.array_equal(np.asarray(left), np.asarray(right))
+            return left == right
+        except Exception:
+            return False
+
+    def _infer_geometry_edit_kind(self, region_index: int, new_region_data: dict) -> str:
+        """根据旧/新 region_data 差异判断几何编辑类型。"""
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not isinstance(old_region_data, dict) or not isinstance(new_region_data, dict):
+            return "unknown"
+
+        if not self._values_equal(old_region_data.get("angle"), new_region_data.get("angle")):
+            return "rotate"
+        if not self._values_equal(old_region_data.get("center"), new_region_data.get("center")):
+            return "move"
+        if not self._values_equal(old_region_data.get("lines"), new_region_data.get("lines")):
+            return "shape"
+
+        white_changed = (
+            not self._values_equal(
+                old_region_data.get("white_frame_rect_local"),
+                new_region_data.get("white_frame_rect_local"),
+            )
+            or not self._values_equal(
+                old_region_data.get("has_custom_white_frame", False),
+                new_region_data.get("has_custom_white_frame", False),
+            )
+        )
+        if white_changed:
+            return "white_frame"
+        return "other"
+
+    def _perform_single_item_update(self, index):
+        """对单个区域执行targeted更新。"""
+        try:
+            self._last_edited_region_index = None  # 防止残留
+
             if not (0 <= index < len(self._region_items)):
                 return
 
             region_data = self.model.get_region_by_index(index)
             item = self._region_items[index]
 
-            # 安全检查：确保item仍然有效
-            if item is None:
-                return
-            
-            # 检查item是否仍在场景中（可能已被删除）
-            if not hasattr(item, 'scene') or item.scene() is None:
+            if not region_data or item is None or item.scene() is None:
                 return
 
-            if region_data and item:
-                # The item is now responsible for updating itself from the new data.
-                item.update_from_data(region_data)
+            edit_kind = getattr(self, "_last_geometry_edit_kind", None)
+            self._last_geometry_edit_kind = None
 
-                # 重新计算单个区域的渲染数据
+            if edit_kind == "white_frame":
+                # 白框编辑：不调 update_from_data（避免覆盖当前白框）
+                # 从 item 的白框构建 override_dst_points
+                override = self._build_dst_points_from_item(item)
+                self._recalculate_single_region_render_data(index, override_dst_points=override)
+            else:
+                # 风格/文本类 targeted 更新不应回滚当前 item 几何。
+                region_for_item = region_data.copy()
+                if hasattr(item, "geo") and item.geo is not None:
+                    try:
+                        region_for_item.update(item.geo.to_region_data_patch())
+                        region_for_item["center"] = list(item.geo.center)
+                    except Exception:
+                        pass
+                item.update_from_data(region_for_item)
                 self._recalculate_single_region_render_data(index)
 
-                # 重新渲染单个区域的文字
-                self._update_single_region_text_visual(index)
+            self._update_single_region_text_visual(index)
 
-                # 重新渲染后,再次更新白框
-                updated_region_data = self.model.get_region_by_index(index)
-                if updated_region_data and item.scene() is not None:
-                    item.update_from_data(updated_region_data)
-
-                if item.scene() is not None:
-                    item.update() # Trigger a repaint for the item.
+            if item.scene() is not None:
+                item.update()
         except (RuntimeError, AttributeError) as e:
-            # Item可能在更新过程中被删除
             print(f"[View] Warning: Item update failed for index {index}: {e}")
+
+    def _build_dst_points_from_item(self, item):
+        """从 item 的白框构建渲染 dst_points（世界坐标轴对齐矩形）。"""
+        wf = item.geo.white_frame_local
+        if wf is None or len(wf) != 4:
+            return None
+        left, top, right, bottom = wf
+        box_w = float(right - left)
+        box_h = float(bottom - top)
+        if box_w <= 0.0 or box_h <= 0.0:
+            return None
+
+        cx, cy = item.geo.center
+        angle = float(getattr(item.geo, "angle", 0.0) or 0.0)
+        theta = np.deg2rad(angle)
+        cos_t = np.cos(theta)
+        sin_t = np.sin(theta)
+        local_cx = (left + right) / 2.0
+        local_cy = (top + bottom) / 2.0
+        render_cx = float(cx + local_cx * cos_t - local_cy * sin_t)
+        render_cy = float(cy + local_cx * sin_t + local_cy * cos_t)
+        half_w = box_w / 2.0
+        half_h = box_h / 2.0
+
+        return np.array(
+            [[
+                [render_cx - half_w, render_cy - half_h],
+                [render_cx + half_w, render_cy - half_h],
+                [render_cx + half_w, render_cy + half_h],
+                [render_cx - half_w, render_cy + half_h],
+            ]],
+            dtype=np.float32,
+        )
+
+    def _ensure_render_cache_size(self, index: int):
+        while len(self._text_blocks_cache) <= index:
+            self._text_blocks_cache.append(None)
+        while len(self._dst_points_cache) <= index:
+            self._dst_points_cache.append(None)
+        while len(self._render_snapshot_cache) <= index:
+            self._render_snapshot_cache.append(None)
+
+    def _build_render_snapshot(self, index: int, region_data: dict, item: RegionTextItem | None) -> RegionRenderSnapshot:
+        geo_state = item.geo if (item is not None and hasattr(item, "geo")) else None
+        return RegionRenderSnapshot.from_sources(
+            region_index=index,
+            region_data=region_data,
+            geo_state=geo_state,
+        )
+
+    def _render_region_text_visual(self, index: int, use_cache: bool):
+        """统一渲染并应用单个区域文本显示。"""
+        if not (0 <= index < len(self._region_items)):
+            return
+        item = self._region_items[index]
+        if item is None or not hasattr(item, 'scene') or item.scene() is None:
+            return
+        if not hasattr(item, 'text_item') or item.text_item is None:
+            return
+
+        if self.model.get_region_display_mode() in ["box_only", "none"]:
+            item.text_item.setVisible(False)
+            return
+        item.text_item.setVisible(True)
+
+        if index >= len(self._text_blocks_cache) or index >= len(self._dst_points_cache):
+            return
+        text_block = self._text_blocks_cache[index]
+        dst_points = self._dst_points_cache[index]
+        if text_block is None or dst_points is None:
+            clear_region_text(item)
+            return
+
+        snapshot = self._render_snapshot_cache[index] if index < len(self._render_snapshot_cache) else None
+        if snapshot is None:
+            region_data = self.model.get_region_by_index(index)
+            if not region_data:
+                return
+            snapshot = self._build_render_snapshot(index, region_data, item)
+            self._ensure_render_cache_size(index)
+            self._render_snapshot_cache[index] = snapshot
+
+        region_data_for_render = snapshot.text_block_input()
+
+        unrotated_text_block = pipeline_build_text_block_from_region(
+            region_data_for_render,
+            font_size_override=getattr(text_block, 'font_size', None),
+            log_tag=f" for region {index}"
+        )
+        if unrotated_text_block is None:
+            clear_region_text(item)
+            return
+
+        render_parameter_service = get_render_parameter_service()
+        render_params = pipeline_build_region_render_params(
+            render_parameter_service,
+            text_renderer_backend,
+            index,
+            snapshot.style_input(),
+            unrotated_text_block,
+        )
+
+        cache_key = None
+        if use_cache:
+            cache_key = make_text_render_cache_key(unrotated_text_block, dst_points, render_params)
+
+        cached_result = self._text_render_cache.get(cache_key) if cache_key is not None else None
+        if cached_result is None:
+            render_result = render_region_text(
+                text_renderer_backend,
+                unrotated_text_block,
+                dst_points,
+                render_params,
+                len(self._text_blocks_cache),
+            )
+            if render_result and cache_key is not None:
+                self._text_render_cache[cache_key] = render_result
+            cached_result = render_result
+
+        if cached_result:
+            pixmap, pos = cached_result
+            # 先应用 dst_points（可能更新白框与旋转原点），再映射文字位置，
+            # 避免在变换更新后出现文字与白框中心错位。
+            item.set_dst_points(dst_points)
+            item.update_text_pixmap(
+                pixmap,
+                pos,
+                0,
+                None,
+                render_center=snapshot.render_center,
+            )
+        else:
+            clear_region_text(item)
 
 
 
     def _perform_render_update(self):
         """执行实际的渲染更新，由防抖计时器调用。"""
+        self.selection_manager.suppress_forward_sync(True)  # 防止增删 items 触发选择同步
         try:
             # Reuse existing items to improve performance and stability
             regions = self.model.get_regions()
             current_items = self._region_items
-            
+
             # 1. Remove excess items
             while len(current_items) > len(regions):
                 item = current_items.pop()
@@ -522,17 +690,14 @@ class GraphicsView(QGraphicsView):
                         self.scene.removeItem(item)
                 except (RuntimeError, AttributeError):
                     pass
-            
+
             # 2. Create new items if needed
             while len(current_items) < len(regions):
                 i = len(current_items)
                 region_data = regions[i]
                 if not region_data.get('lines'):
-                    # Placeholder or skip? If we skip, indices might mismatch.
-                    # Better to create it but maybe hide it if invalid?
-                    # For now, assume valid or handle in update.
                     pass
-                
+
                 item = RegionTextItem(
                     region_data,
                     i,
@@ -542,23 +707,23 @@ class GraphicsView(QGraphicsView):
                 item.setZValue(100)
                 self.scene.addItem(item)
                 current_items.append(item)
-            
+
             # 3. Update all items with new data
             for i, region_data in enumerate(regions):
                 if i < len(current_items):
                     item = current_items[i]
-                    # Ensure image item reference is up to date
                     item.set_image_item(self._image_item)
-                    # Update index (crucial if items were shifted)
                     item.region_index = i
-                    # Update content
                     item.update_from_data(region_data)
 
-            # After updating items, recalculate all rendering data (异步执行)
-            # _update_text_visuals 会在 recalculate_render_data 完成后自动调用
+            # After updating items, recalculate all rendering data
             self.recalculate_render_data()
         except Exception as e:
             print(f"[View] Warning: Render update failed: {e}")
+        finally:
+            self.selection_manager.suppress_forward_sync(False)
+            # 恢复 Qt items 的选择状态，与 model 同步
+            self.selection_manager.restore_selection_after_rebuild()
 
     def _update_text_visuals(self):
         try:
@@ -567,379 +732,68 @@ class GraphicsView(QGraphicsView):
                     if item and hasattr(item, 'text_item') and item.text_item and item.scene():
                         item.text_item.setVisible(False)
                 return
-            else:
-                for item in self._region_items:
-                    if item and hasattr(item, 'text_item') and item.text_item and item.scene():
-                        item.text_item.setVisible(True)
 
-            render_parameter_service = get_render_parameter_service()
-
-            for i, text_block in enumerate(self._text_blocks_cache):
-                item = self._region_items[i] if i < len(self._region_items) else None
-                if not item or item.scene() is None:
-                    continue
-
-                if text_block is None or i >= len(self._dst_points_cache) or self._dst_points_cache[i] is None:
-                    if item.scene() is not None:
-                        item.update_text_pixmap(QPixmap(), QPointF(0, 0))
-                        item.set_dst_points(None)  # 清除绿框数据
-                    continue
-
-                region_data = self.model.get_region_by_index(i)
-                if not region_data:
-                    continue
-
-                # --- FIX: Create a temporary un-rotated text block for rendering ---
-                render_region_data = region_data.copy()
-                render_region_data['angle'] = 0
-
-                constructor_args = render_region_data.copy()
-                if 'lines' in constructor_args and isinstance(constructor_args['lines'], list):
-                    constructor_args['lines'] = np.array(constructor_args['lines'])
-                if 'font_color' in constructor_args and isinstance(constructor_args['font_color'], str):
-                    hex_color = constructor_args.pop('font_color')
-                    try:
-                        r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
-                        constructor_args['fg_color'] = (r, g, b)
-                    except (ValueError, TypeError):
-                        constructor_args['fg_color'] = (0, 0, 0)
-                elif 'fg_colors' in constructor_args:
-                    constructor_args['fg_color'] = constructor_args.pop('fg_colors')
-                if 'bg_colors' in constructor_args:
-                    constructor_args['bg_color'] = constructor_args.pop('bg_colors')
-
-                # 【关键修复】转换direction字段：'horizontal'→'h', 'vertical'→'v'
-                if 'direction' in constructor_args:
-                    dir_val = constructor_args['direction']
-                    if dir_val == 'horizontal':
-                        constructor_args['direction'] = 'h'
-                    elif dir_val == 'vertical':
-                        constructor_args['direction'] = 'v'
-
-                # 使用缓存中计算好的 font_size（经过 resize_regions_to_font_size 计算的）
-                if text_block is not None and hasattr(text_block, 'font_size'):
-                    constructor_args['font_size'] = text_block.font_size
-
-                try:
-                    unrotated_text_block = TextBlock(**constructor_args)
-                except Exception as e:
-                    print(f"[View] Failed to create unrotated TextBlock for full update on index {i}: {e}")
-                    item.update_text_pixmap(QPixmap(), QPointF(0, 0))
-                    item.set_dst_points(None)  # 清除绿框数据
-                    continue
-                # --- END FIX ---
-
-                render_params = render_parameter_service.export_parameters_for_backend(i, region_data)
-                # 同步算法计算的 font_size 到 render_params，确保缓存键使用正确的值
-                render_params['font_size'] = unrotated_text_block.font_size
-
-                # Set region-specific font_path for cache key
-                region_font_path = region_data.get('font_path', '')
-                if region_font_path and os.path.exists(region_font_path):
-                    render_params['font_path'] = region_font_path
-
-                cache_key = (
-                    unrotated_text_block.get_translation_for_rendering(),
-                    tuple(map(tuple, self._dst_points_cache[i].reshape(-1, 2))),
-                    render_params.get('font_path'),
-                    render_params.get('font_size'),
-                    render_params.get('bold'),
-                    render_params.get('italic'),
-                    render_params.get('font_weight'),
-                    tuple(render_params.get('font_color', (0,0,0))),
-                    tuple(render_params.get('text_stroke_color', (0,0,0))),
-                    render_params.get('opacity'),
-                    render_params.get('alignment'),
-                    render_params.get('direction'),
-                    render_params.get('vertical'),
-                    render_params.get('line_spacing'),
-                    render_params.get('letter_spacing'),
-                    render_params.get('layout_mode'),
-                    render_params.get('disable_auto_wrap'),
-                    render_params.get('hyphenate'),
-                    render_params.get('font_size_offset'),
-                    render_params.get('font_size_minimum'),
-                    render_params.get('max_font_size'),
-                    render_params.get('font_scale_ratio'),
-                    render_params.get('center_text_in_bubble'),
-                    render_params.get('text_stroke_width'),
-                    render_params.get('shadow_radius'),
-                    render_params.get('shadow_strength'),
-                    tuple(render_params.get('shadow_color', (0,0,0))),
-                    tuple(render_params.get('shadow_offset', [0.0, 0.0])),
-                    render_params.get('disable_font_border'),
-                    render_params.get('auto_rotate_symbols'),
-                )
-                cached_result = self._text_render_cache.get(cache_key)
-
-                if cached_result is None:
-                    # Set font for this region if specified
-                    region_font_path = region_data.get('font_path', '')
-                    if region_font_path and os.path.exists(region_font_path):
-                        text_renderer_backend.update_font_config(region_font_path)
-                    else:
-                        # Use default font from global parameters
-                        default_params_obj = render_parameter_service.get_default_parameters()
-                        font_path = default_params_obj.font_path
-                        if font_path:
-                            text_renderer_backend.update_font_config(font_path)
-
-                    identity_transform = QTransform()
-                    render_result = text_renderer_backend.render_text_for_region(
-                        unrotated_text_block,
-                        self._dst_points_cache[i],
-                        identity_transform,
-                        render_params,
-                        pure_zoom=1.0,
-                        total_regions=len(self._text_blocks_cache)
-                    )
-
-                    if render_result:
-                        pixmap, pos = render_result
-                        self._text_render_cache[cache_key] = (pixmap, pos)
-                        cached_result = (pixmap, pos)
-
-                if cached_result:
-                    pixmap, pos = cached_result
-                    # 不传递 angle，因为 item 已经通过 setRotation() 设置了旋转
-                    pivot = None
-
-                    if item.scene() is not None:
-                        item.update_text_pixmap(pixmap, pos, 0, pivot)
-                else:
-                    if item.scene() is not None:
-                        item.update_text_pixmap(QPixmap(), QPointF(0, 0))
-
-                # 无论是否有渲染结果,都设置绿框数据(即使 translation 为空)
-                if item.scene() is not None and i < len(self._dst_points_cache):
-                    item.set_dst_points(self._dst_points_cache[i])
+            for i in range(min(len(self._region_items), len(self._text_blocks_cache), len(self._dst_points_cache))):
+                self._render_region_text_visual(i, use_cache=True)
 
         except (RuntimeError, AttributeError) as e:
             # 处理item在更新过程中被删除的情况
             print(f"[View] Warning: Text visuals update failed: {e}")
 
-    def _recalculate_single_region_render_data(self, index):
-        """重新计算单个区域的渲染数据"""
+    def _recalculate_single_region_render_data(self, index, override_dst_points=None):
+        """重新计算单个区域的渲染数据。
+
+        override_dst_points: 如果提供，直接使用此值作为 dst_points（白框编辑场景），
+                            跳过默认布局计算。
+        """
         regions = self.model.get_regions()
         if self._image_np is None or not regions or not (0 <= index < len(regions)):
             return
 
-        # 确保缓存列表足够大
-        while len(self._text_blocks_cache) <= index:
-            self._text_blocks_cache.append(None)
-        while len(self._dst_points_cache) <= index:
-            self._dst_points_cache.append(None)
+        self._ensure_render_cache_size(index)
 
-        region_dict = regions[index]
+        item = self._region_items[index] if 0 <= index < len(self._region_items) else None
+        snapshot = self._build_render_snapshot(index, regions[index], item)
+        self._render_snapshot_cache[index] = snapshot
 
-        # 1. 将字典转换为 TextBlock 对象（保留原始的 angle）
-        constructor_args = region_dict.copy()
-        
-        if 'lines' in constructor_args and isinstance(constructor_args['lines'], list):
-            constructor_args['lines'] = np.array(constructor_args['lines'])
-
-        # 确保 texts 不为 None
-        if constructor_args.get('texts') is None:
-            constructor_args['texts'] = []
-
-        # 转换颜色格式和键名
-        if 'font_color' in constructor_args and isinstance(constructor_args['font_color'], str):
-            hex_color = constructor_args.pop('font_color')
-            try:
-                r = int(hex_color[1:3], 16)
-                g = int(hex_color[3:5], 16)
-                b = int(hex_color[5:7], 16)
-                constructor_args['fg_color'] = (r, g, b)
-            except (ValueError, TypeError):
-                constructor_args['fg_color'] = (0, 0, 0)
-        elif 'fg_colors' in constructor_args:
-            constructor_args['fg_color'] = constructor_args.pop('fg_colors')
-
-        if 'bg_colors' in constructor_args:
-            constructor_args['bg_color'] = constructor_args.pop('bg_colors')
-
-        # 【关键修复】转换direction字段：'horizontal'→'h', 'vertical'→'v'
-        # TextBlock.direction只认'h', 'v', 'hr', 'vr'，不认'horizontal'/'vertical'
-        if 'direction' in constructor_args:
-            dir_val = constructor_args['direction']
-            if dir_val == 'horizontal':
-                constructor_args['direction'] = 'h'
-            elif dir_val == 'vertical':
-                constructor_args['direction'] = 'v'
-            # 'h', 'v', 'hr', 'vr', 'auto' 保持不变
-
-        # 创建未旋转的 text block 用于计算 dst_points
-        # 因为 Qt 会通过 setRotation() 来应用旋转,所以这里需要使用 angle=0
-        constructor_args['angle'] = 0
-
-        try:
-            text_block = TextBlock(**constructor_args)
-            self._text_blocks_cache[index] = text_block
-        except Exception as e:
-            print(f"[View] Failed to create TextBlock for region {index}: {e}")
-            import traceback
-            traceback.print_exc()
-            self._text_blocks_cache[index] = None
+        region_dict = snapshot.text_block_input()
+        text_block = pipeline_build_text_block_from_region(region_dict, log_tag=f" for region {index}")
+        self._text_blocks_cache[index] = text_block
+        if text_block is None:
+            self._dst_points_cache[index] = None
             return
 
-        # 2. 获取全局渲染参数并设置字体
         render_parameter_service = get_render_parameter_service()
-        default_params_obj = render_parameter_service.get_default_parameters()
-        global_params_dict = default_params_obj.to_dict()
+        global_params_dict, config_obj = prepare_layout_context(
+            render_parameter_service,
+            text_renderer_backend,
+        )
+        region_specific_params = build_region_specific_params(global_params_dict, text_block)
+        if region_dict.get("line_spacing") is not None:
+            region_specific_params["line_spacing"] = region_dict.get("line_spacing")
 
-        font_path = default_params_obj.font_path
-        if font_path:
-            text_renderer_backend.update_font_config(font_path)
-
-        from manga_translator.config import Config, RenderConfig
-
-        # 【修复】使用区域自己的参数覆盖全局参数
-        region_specific_params = global_params_dict.copy()
-        
-        # 从 text_block 获取区域特定的 direction
-        if hasattr(text_block, 'direction'):
-            region_direction = text_block.direction
-            # 转换为 RenderConfig 需要的格式
-            if region_direction == 'h':
-                region_specific_params['direction'] = 'horizontal'
-            elif region_direction == 'v':
-                region_specific_params['direction'] = 'vertical'
-            elif region_direction in ['horizontal', 'vertical', 'auto']:
-                region_specific_params['direction'] = region_direction
-        else:
-            # Hotfix for direction enum validation (fallback)
-            if global_params_dict.get('direction') == 'h':
-                region_specific_params['direction'] = 'horizontal'
-            elif global_params_dict.get('direction') == 'v':
-                region_specific_params['direction'] = 'vertical'
-
-        config_obj = Config(render=RenderConfig(**region_specific_params))
-
-        # 3. 调用后端进行布局计算（只计算单个区域）
+        # 3. 计算渲染框 dst_points
         try:
-            single_region_dst_points = resize_regions_to_font_size(self._image_np, [text_block], config_obj, self._image_np)
-            if single_region_dst_points and len(single_region_dst_points) > 0:
-                self._dst_points_cache[index] = single_region_dst_points[0]
-            else:
-                self._dst_points_cache[index] = None
+            self._dst_points_cache[index] = calculate_region_dst_points(
+                text_block,
+                region_specific_params,
+                config_obj,
+                override_dst_points=override_dst_points,
+            )
         except Exception as e:
             print(f"[View] Failed to calculate dst_points for region {index}: {e}")
+            print(f"  font_size={text_block.font_size}, horizontal={text_block.horizontal}, "
+                  f"center={text_block.center}, xyxy={text_block.xyxy}, "
+                  f"line_spacing={region_specific_params.get('line_spacing')}, "
+                  f"angle={region_dict.get('angle')}")
             import traceback
             traceback.print_exc()
             self._dst_points_cache[index] = None
 
-    def _update_single_region_text_visual(self, index):
+    def _update_single_region_text_visual(self, index, use_cache=False):
         """重新渲染单个区域的文字"""
         try:
-            if not (0 <= index < len(self._region_items)):
-                return
-
-            item = self._region_items[index]
-            
-            # 安全检查：确保item有效且在场景中
-            if item is None or not hasattr(item, 'scene') or item.scene() is None:
-                return
-            
-            if not hasattr(item, 'text_item') or item.text_item is None:
-                return
-
-            if self.model.get_region_display_mode() in ["box_only", "none"]:
-                item.text_item.setVisible(False)
-                return
-            else:
-                item.text_item.setVisible(True)
-
-            if index >= len(self._text_blocks_cache) or index >= len(self._dst_points_cache):
-                return
-
-            text_block = self._text_blocks_cache[index] if index < len(self._text_blocks_cache) else None
-            dst_points = self._dst_points_cache[index] if index < len(self._dst_points_cache) else None
-
-            if text_block is None or dst_points is None:
-                item.update_text_pixmap(QPixmap(), QPointF(0, 0))
-                item.set_dst_points(None)
-                return
-
-            region_data = self.model.get_region_by_index(index)
-            if not region_data:
-                return
-
-            # 创建未旋转的 text block 用于渲染
-            render_region_data = region_data.copy()
-            render_region_data['angle'] = 0
-
-            constructor_args = render_region_data.copy()
-            if 'lines' in constructor_args and isinstance(constructor_args['lines'], list):
-                constructor_args['lines'] = np.array(constructor_args['lines'])
-            if 'font_color' in constructor_args and isinstance(constructor_args['font_color'], str):
-                hex_color = constructor_args.pop('font_color')
-                try:
-                    r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
-                    constructor_args['fg_color'] = (r, g, b)
-                except (ValueError, TypeError):
-                    constructor_args['fg_color'] = (0, 0, 0)
-            elif 'fg_colors' in constructor_args:
-                constructor_args['fg_color'] = constructor_args.pop('fg_colors')
-            if 'bg_colors' in constructor_args:
-                constructor_args['bg_color'] = constructor_args.pop('bg_colors')
-
-            # 【关键修复】转换direction字段：'horizontal'→'h', 'vertical'→'v'
-            if 'direction' in constructor_args:
-                dir_val = constructor_args['direction']
-                if dir_val == 'horizontal':
-                    constructor_args['direction'] = 'h'
-                elif dir_val == 'vertical':
-                    constructor_args['direction'] = 'v'
-
-            # 使用缓存中计算好的 font_size（经过 resize_regions_to_font_size 计算的）
-            if text_block is not None and hasattr(text_block, 'font_size'):
-                constructor_args['font_size'] = text_block.font_size
-
-            try:
-                unrotated_text_block = TextBlock(**constructor_args)
-            except Exception as e:
-                print(f"[View] Failed to create unrotated TextBlock for region {index}: {e}")
-                item.update_text_pixmap(QPixmap(), QPointF(0, 0))
-                item.set_dst_points(None)
-                return
-
-            render_parameter_service = get_render_parameter_service()
-            render_params = render_parameter_service.export_parameters_for_backend(index, region_data)
-            # 同步算法计算的 font_size 到 render_params
-            render_params['font_size'] = unrotated_text_block.font_size
-
-            # Set font for this region if specified
-            region_font_path = region_data.get('font_path', '')
-            if region_font_path and os.path.exists(region_font_path):
-                text_renderer_backend.update_font_config(region_font_path)
-            else:
-                # Use default font from global parameters
-                default_params_obj = render_parameter_service.get_default_parameters()
-                font_path = default_params_obj.font_path
-                if font_path:
-                    text_renderer_backend.update_font_config(font_path)
-
-            # 渲染文字（不使用缓存，因为几何已经改变）
-            identity_transform = QTransform()
-            render_result = text_renderer_backend.render_text_for_region(
-                unrotated_text_block,
-                self._dst_points_cache[index],
-                identity_transform,
-                render_params,
-                pure_zoom=1.0,
-                total_regions=len(self._text_blocks_cache)
-            )
-
-            if render_result:
-                pixmap, pos = render_result
-                # 不传递 angle，因为 item 已经通过 setRotation() 设置了旋转
-                if item.scene() is not None:  # 再次检查item是否仍有效
-                    item.update_text_pixmap(pixmap, pos, 0, None)
-                    item.set_dst_points(dst_points)
-            else:
-                if item.scene() is not None:
-                    item.update_text_pixmap(QPixmap(), QPointF(0, 0))
-                    item.set_dst_points(None)
+            self._render_region_text_visual(index, use_cache=use_cache)
         except (RuntimeError, AttributeError) as e:
             # Item可能在渲染过程中被删除
             print(f"[View] Warning: Text visual update failed for index {index}: {e}")
@@ -956,108 +810,59 @@ class GraphicsView(QGraphicsView):
         if self._image_np is None or not regions:
             self._text_blocks_cache = []
             self._dst_points_cache = []
+            self._render_snapshot_cache = []
             return
 
-        # 1. 将字典转换为 TextBlock 对象 (从旧版UI移植的正确逻辑)
-        text_blocks = []
-        for region_dict in regions:
-            constructor_args = region_dict.copy()
-            if 'lines' in constructor_args and isinstance(constructor_args['lines'], list):
-                constructor_args['lines'] = np.array(constructor_args['lines'])
+        # 1. 构建统一渲染快照（避免 model/item 混用造成位置跳变）
+        snapshots: list[RegionRenderSnapshot] = []
+        for i, region_dict in enumerate(regions):
+            item = self._region_items[i] if i < len(self._region_items) else None
+            snapshots.append(self._build_render_snapshot(i, region_dict, item))
+        self._render_snapshot_cache = snapshots
 
-            # 转换颜色格式和键名
-            if 'font_color' in constructor_args and isinstance(constructor_args['font_color'], str):
-                hex_color = constructor_args.pop('font_color')
-                try:
-                    r = int(hex_color[1:3], 16)
-                    g = int(hex_color[3:5], 16)
-                    b = int(hex_color[5:7], 16)
-                    constructor_args['fg_color'] = (r, g, b)
-                except (ValueError, TypeError):
-                    constructor_args['fg_color'] = (0, 0, 0)
-            elif 'fg_colors' in constructor_args:
-                 constructor_args['fg_color'] = constructor_args.pop('fg_colors')
-            
-            if 'bg_colors' in constructor_args:
-                constructor_args['bg_color'] = constructor_args.pop('bg_colors')
+        # 2. 将快照数据转换为 TextBlock
+        self._text_blocks_cache = [
+            pipeline_build_text_block_from_region(snapshot.text_block_input(), log_tag=f" for region {i}")
+            for i, snapshot in enumerate(snapshots)
+        ]
 
-            # 【关键修复】转换direction字段：'horizontal'→'h', 'vertical'→'v'
-            # TextBlock.direction只认'h', 'v', 'hr', 'vr'，不认'horizontal'/'vertical'
-            if 'direction' in constructor_args:
-                dir_val = constructor_args['direction']
-                if dir_val == 'horizontal':
-                    constructor_args['direction'] = 'h'
-                elif dir_val == 'vertical':
-                    constructor_args['direction'] = 'v'
-                # 'h', 'v', 'hr', 'vr', 'auto' 保持不变
-
-            # 创建未旋转的 text block 用于计算 dst_points
-            # 因为 Qt 会通过 setRotation() 来应用旋转,所以这里需要使用 angle=0
-            constructor_args['angle'] = 0
-
-            try:
-                text_block = TextBlock(**constructor_args)
-                text_blocks.append(text_block)
-            except Exception as e:
-                print(f"[View] Failed to create TextBlock for region: {e}")
-                text_blocks.append(None)
-        self._text_blocks_cache = text_blocks
-
-        # 2. 获取全局渲染参数
         render_parameter_service = get_render_parameter_service()
-        default_params_obj = render_parameter_service.get_default_parameters()
-        global_params_dict = default_params_obj.to_dict()
-        
-        # 关键修复：在调用任何渲染函数之前，确保字体已设置
-        font_path = default_params_obj.font_path
-        if font_path:
-            text_renderer_backend.update_font_config(font_path)
-        
-        from manga_translator.config import Config, RenderConfig
-        
-        # 【注意】这里使用全局参数是合理的，因为 resize_regions_to_font_size 会
-        # 从每个 TextBlock 对象中读取其自己的 direction 属性
-        # 只需要确保全局参数的格式正确即可
-        if global_params_dict.get('direction') == 'h':
-            global_params_dict['direction'] = 'horizontal'
-        elif global_params_dict.get('direction') == 'v':
-            global_params_dict['direction'] = 'vertical'
-            
-        config_obj = Config(render=RenderConfig(**global_params_dict))
+        global_params_dict, config_obj = prepare_layout_context(
+            render_parameter_service,
+            text_renderer_backend,
+        )
 
-        # 3. 异步执行昂贵的布局计算
-        valid_blocks = [b for b in self._text_blocks_cache if b is not None]
-        if not valid_blocks:
-            self._dst_points_cache = []
-            return
-        
-        # 使用线程池异步计算
-        import concurrent.futures
-        if not hasattr(self, '_render_executor'):
-            self._render_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        
-        # 保存当前状态用于回调
-        image_np = self._image_np
-        
-        def compute_layout():
+        # 3. 计算每个区域的渲染框
+        dst_points_list = []
+        for i, text_block in enumerate(self._text_blocks_cache):
+            if text_block is None:
+                dst_points_list.append(None)
+                continue
+
             try:
-                return resize_regions_to_font_size(image_np, valid_blocks, config_obj, image_np)
+                snapshot = snapshots[i] if i < len(snapshots) else None
+                region_dict = snapshot.region_data if snapshot is not None else {}
+                region_params = build_region_specific_params(global_params_dict, text_block)
+                if region_dict.get("line_spacing") is not None:
+                    region_params["line_spacing"] = region_dict.get("line_spacing")
+                dst_points_list.append(
+                    calculate_region_dst_points(
+                        text_block,
+                        region_params,
+                        config_obj,
+                    )
+                )
             except Exception as e:
-                print(f"[View] Error during resize_regions_to_font_size: {e}")
-                import traceback
-                traceback.print_exc()
-                return [None] * len(valid_blocks)
-        
-        def on_layout_complete(future):
-            try:
-                result = future.result()
-                # 使用信号在主线程更新缓存和UI（信号是线程安全的）
-                self._layout_result_ready.emit(result)
-            except Exception as e:
-                print(f"[View] Layout computation failed: {e}")
-        
-        future = self._render_executor.submit(compute_layout)
-        future.add_done_callback(on_layout_complete)
+                print(f"[View] Failed to calculate dst_points for region {i}: {e}")
+                print(f"  font_size={text_block.font_size}, horizontal={text_block.horizontal}, "
+                      f"center={text_block.center}, xyxy={text_block.xyxy}, "
+                      f"line_spacing={global_params_dict.get('line_spacing')}, "
+                      f"angle={regions[i].get('angle') if i < len(regions) else 'N/A'}")
+                dst_points_list.append(None)
+
+        self._dst_points_cache = dst_points_list
+        self._update_text_visuals()
+        self.scene.update()
     
     @pyqtSlot(list)
     def _apply_layout_result(self, dst_points_cache):
@@ -1073,6 +878,7 @@ class GraphicsView(QGraphicsView):
 
     def _on_region_geometry_changed(self, region_index, new_region_data):
         self._last_edited_region_index = region_index
+        self._last_geometry_edit_kind = self._infer_geometry_edit_kind(region_index, new_region_data)
         self.region_geometry_changed.emit(region_index, new_region_data)
 
 
@@ -1091,7 +897,7 @@ class GraphicsView(QGraphicsView):
             self.scale(zoom_in_factor, zoom_in_factor)
         else:
             self.scale(zoom_out_factor, zoom_out_factor)
-        
+
         self._update_cursor() # Update cursor size on zoom
 
     def mousePressEvent(self, event):
@@ -1104,23 +910,6 @@ class GraphicsView(QGraphicsView):
         # 让画布获取焦点
         self.setFocus()
         
-        if self._active_tool == 'geometry_edit' and event.button() == Qt.MouseButton.LeftButton:
-            if len(self.model.get_selection()) == 1:
-                self._is_drawing_geometry = True
-                self._geometry_start_pos = self.mapToScene(event.pos())
-                
-                if self._geometry_preview_item is None:
-                    pen = QPen(QColor(0, 255, 255, 200)) # Cyan, semi-transparent
-                    pen.setWidth(2)
-                    pen.setStyle(Qt.PenStyle.DashLine)
-                    self._geometry_preview_item = self.scene.addPolygon(QPolygonF(), pen)
-                    self._geometry_preview_item.setZValue(200)
-                
-                self._geometry_preview_item.setPolygon(QPolygonF())
-                self._geometry_preview_item.setVisible(True)
-                event.accept()
-                return
-
         if self._active_tool == 'draw_textbox' and event.button() == Qt.MouseButton.LeftButton:
             self._start_drawing_textbox(event.pos())
             event.accept()
@@ -1170,95 +959,37 @@ class GraphicsView(QGraphicsView):
 
             # 如果点击在空白区域（没有 item 或只有图片），开始框选
             if item_at_pos is None or item_at_pos == self._image_item:
-                self._is_box_selecting = True
-                self._box_select_start_pos = self.mapToScene(event.pos())
-                
-                # 创建框选矩形（检查是否需要重新创建）
-                need_create = self._box_select_rect_item is None
-                if not need_create:
-                    # 检查 C++ 对象是否仍然有效
-                    try:
-                        _ = self._box_select_rect_item.scene()
-                    except RuntimeError:
-                        need_create = True
-                        self._box_select_rect_item = None
-                
-                if need_create:
-                    pen = QPen(QColor(0, 120, 215, 180))  # 蓝色半透明
-                    pen.setWidth(2)
-                    pen.setStyle(Qt.PenStyle.DashLine)
-                    brush = QBrush(QColor(0, 120, 215, 30))  # 浅蓝色填充
-                    self._box_select_rect_item = self.scene.addRect(0, 0, 0, 0, pen, brush)
-                    self._box_select_rect_item.setZValue(300)  # 在最上层
-                
-                self._box_select_rect_item.setVisible(True)
+                self.selection_manager.start_box_select(self.mapToScene(event.pos()))
                 event.accept()
                 return
 
             # 如果点击在 RegionTextItem 上，让 item 处理事件
             if clicked_region_item:
                 super().mousePressEvent(event)
-                # 不要在这里清除选择，让 RegionTextItem 自己处理
+                # 选择同步由 scene.selectionChanged 统一处理
             else:
                 super().mousePressEvent(event)
-                
-                # 如果点击空白且不是 Ctrl，清除选择
-                if not event.isAccepted():
-                    ctrl_pressed = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-                    if not ctrl_pressed:
-                        self.model.set_selection([])
+                # 空白区域点击：手动清除选择（Qt不一定自动清除item选择）
+                ctrl_pressed = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                if not ctrl_pressed:
+                    # 清除所有 Qt item 选择，scene.selectionChanged 会自动同步到 model
+                    self.scene.clearSelection()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         """Handle mouse move for drawing."""
         # 处理框选
-        if self._is_box_selecting and self._box_select_start_pos:
-            # 检查框选矩形是否仍然有效（可能在切换图片时被删除）
-            if self._box_select_rect_item is None:
-                self._is_box_selecting = False
-                self._box_select_start_pos = None
-                return
-            try:
-                current_pos = self.mapToScene(event.pos())
-                # 更新框选矩形
-                rect = QRectF(self._box_select_start_pos, current_pos).normalized()
-                self._box_select_rect_item.setRect(rect)
+        if self.selection_manager.is_box_selecting:
+            current_pos = self.mapToScene(event.pos())
+            if self.selection_manager.update_box_select(current_pos):
                 event.accept()
                 return
-            except RuntimeError:
-                # C++ 对象已被删除，重置状态
-                self._box_select_rect_item = None
-                self._is_box_selecting = False
-                self._box_select_start_pos = None
+            else:
                 return
-        
+
         if self._is_drawing_textbox:
             self._update_textbox_drawing(event.pos())
-            event.accept()
-            return
-
-        if self._is_drawing_geometry:
-            if self._geometry_preview_item and self._image_item:
-                selected_indices = self.model.get_selection()
-                if selected_indices:
-                    region_data = self.model.get_region_by_index(selected_indices[0])
-                    angle = region_data.get('angle', 0) if region_data else 0
-                else:
-                    angle = 0
-                start_pos_image = self._image_item.mapFromScene(self._geometry_start_pos)
-                current_pos_scene = self.mapToScene(event.pos())
-                current_pos_image = self._image_item.mapFromScene(current_pos_scene)
-                from .desktop_ui_geometry import calculate_rectangle_from_diagonal
-                poly_coords_image = calculate_rectangle_from_diagonal(
-                    (start_pos_image.x(), start_pos_image.y()),
-                    (current_pos_image.x(), current_pos_image.y()),
-                    angle
-                )
-                poly_scene = QPolygonF()
-                for p in poly_coords_image:
-                    poly_scene.append(self._image_item.mapToScene(QPointF(p[0], p[1])))
-                self._geometry_preview_item.setPolygon(poly_scene)
             event.accept()
             return
 
@@ -1269,75 +1000,14 @@ class GraphicsView(QGraphicsView):
     def mouseReleaseEvent(self, event):
         """处理鼠标释放事件"""
         # 处理框选完成
-        if self._is_box_selecting and event.button() == Qt.MouseButton.LeftButton:
-            self._is_box_selecting = False
-            self._box_select_start_pos = None
-            
-            # 隐藏框选矩形（检查对象是否仍然有效）
-            if self._box_select_rect_item:
-                try:
-                    select_rect = self._box_select_rect_item.rect()
-                    self._box_select_rect_item.setVisible(False)
-                    # 重置矩形数据，避免下次显示时出现上次的框
-                    self._box_select_rect_item.setRect(0, 0, 0, 0)
-                    
-                    # 查找框内的所有 RegionTextItem
-                    selected_indices = []
-                    for i, item in enumerate(self._region_items):
-                        if isinstance(item, RegionTextItem):
-                            # 检查 item 的边界是否与选择框相交
-                            item_rect = item.sceneBoundingRect()
-                            if select_rect.intersects(item_rect):
-                                selected_indices.append(i)
-                    
-                    # 更新选择
-                    ctrl_pressed = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-                    if ctrl_pressed:
-                        # Ctrl+框选：添加到现有选择
-                        current_selection = self.model.get_selection()
-                        new_selection = list(set(current_selection + selected_indices))
-                        self.model.set_selection(new_selection)
-                    else:
-                        # 普通框选：替换选择
-                        self.model.set_selection(selected_indices)
-                except RuntimeError:
-                    # C++ 对象已被删除，重置引用
-                    self._box_select_rect_item = None
-            
+        if self.selection_manager.is_box_selecting and event.button() == Qt.MouseButton.LeftButton:
+            ctrl_pressed = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            self.selection_manager.finish_box_select(ctrl_pressed)
             event.accept()
             return
-        
+
         if self._is_drawing_textbox and event.button() == Qt.MouseButton.LeftButton:
             self._finish_textbox_drawing()
-            event.accept()
-            return
-
-        if self._is_drawing_geometry and event.button() == Qt.MouseButton.LeftButton:
-            self._is_drawing_geometry = False
-            if self._geometry_preview_item:
-                self._geometry_preview_item.setVisible(False)
-                # 清空多边形数据，避免下次显示时出现上次的矩形
-                self._geometry_preview_item.setPolygon(QPolygonF())
-
-                selected_indices = self.model.get_selection()
-                if selected_indices and self._image_item:
-                    region_data = self.model.get_region_by_index(selected_indices[0])
-                    angle = region_data.get('angle', 0) if region_data else 0
-
-                    start_pos_image = self._image_item.mapFromScene(self._geometry_start_pos)
-                    current_pos_scene = self.mapToScene(event.pos())
-                    current_pos_image = self._image_item.mapFromScene(current_pos_scene)
-
-                    from .desktop_ui_geometry import calculate_rectangle_from_diagonal
-
-                    final_poly_image = calculate_rectangle_from_diagonal(
-                        (start_pos_image.x(), start_pos_image.y()),
-                        (current_pos_image.x(), current_pos_image.y()),
-                        angle
-                    )
-
-                    self._last_edited_region_index = selected_indices[0]
-                    self.geometry_added.emit(selected_indices[0], final_poly_image)
             event.accept()
             return
 
@@ -1508,37 +1178,6 @@ class GraphicsView(QGraphicsView):
         self._brush_size = size
         self._update_cursor()
 
-    def _on_selection_changed(self, selected_indices: list):
-        """同步model的selection到Qt item的selected状态"""
-        try:
-            # 先清除所有item的selection - 使用安全遍历
-            for item in self._region_items:
-                try:
-                    if item and hasattr(item, 'scene') and item.scene() and item.isSelected():
-                        item.setSelected(False)
-                        item.update()  # 强制重绘
-                except (RuntimeError, AttributeError):
-                    # Item可能已被删除
-                    pass
-
-            # 设置新选中的items
-            for idx in selected_indices:
-                if 0 <= idx < len(self._region_items):
-                    item = self._region_items[idx]
-                    try:
-                        if item and hasattr(item, 'scene') and item.scene():
-                            item.setSelected(True)
-                            item.update()  # 强制重绘
-                    except (RuntimeError, AttributeError):
-                        pass
-            
-            # 强制场景更新
-            if self.scene:
-                self.scene.update()
-            self.viewport().update()
-        except Exception as e:
-            print(f"[View] Warning: Selection change failed: {e}")
-
     def _update_cursor(self):
         """Updates the cursor to match the selected tool and brush size."""
         from PyQt6.QtWidgets import QApplication
@@ -1582,18 +1221,14 @@ class GraphicsView(QGraphicsView):
             # 在视图和viewport上都设置光标
             self.setCursor(cursor)
             self.viewport().setCursor(cursor)
-        elif self._active_tool == 'geometry_edit':
-            # 在视图和viewport上都设置光标
-            self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
-            self.viewport().setCursor(QCursor(Qt.CursorShape.CrossCursor))
         elif self._active_tool == 'draw_textbox':
             # 在视图和viewport上都设置光标
             self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
             self.viewport().setCursor(QCursor(Qt.CursorShape.CrossCursor))
         else:
-            # 对于选择工具或其他工具，恢复默认箭头光标
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+            # 选择工具下不要强制覆盖光标，让 item 手柄光标生效
+            self.unsetCursor()
+            self.viewport().unsetCursor()
 
     def enterEvent(self, event):
         """Handle mouse enter event."""
@@ -1604,6 +1239,7 @@ class GraphicsView(QGraphicsView):
         """Handle mouse leave event."""
         # Reset cursor when leaving the view
         self.unsetCursor()
+        self.viewport().unsetCursor()
         super().leaveEvent(event)
 
 
@@ -1858,6 +1494,16 @@ class GraphicsView(QGraphicsView):
             for point in scene_points:
                 image_point = inverse_transform.map(point)
                 image_points.append([image_point.x(), image_point.y()])
+
+            # 计算中心点（在图像坐标系中）— 必须先于 white_frame_rect_local
+            center_scene = QPointF(rect_center_x, rect_center_y)
+            center_image = inverse_transform.map(center_scene)
+            cx, cy = center_image.x(), center_image.y()
+
+            # 白框数据：局部坐标（相对于 center 的偏移）
+            xs = [p[0] for p in image_points]
+            ys = [p[1] for p in image_points]
+            white_frame_rect_local = [min(xs) - cx, min(ys) - cy, max(xs) - cx, max(ys) - cy]
             
             # 使用之前获取的模板区域数据
             template_data = {}
@@ -1874,10 +1520,6 @@ class GraphicsView(QGraphicsView):
                             'direction': template_region.get('direction', 'auto'),
                             'angle': template_region.get('angle', 0)
                         }
-            
-            # 计算中心点（在图像坐标系中）
-            center_scene = QPointF(rect_center_x, rect_center_y)
-            center_image = inverse_transform.map(center_scene)
             
             # 从配置服务获取默认渲染参数
             from services import get_config_service
@@ -1898,7 +1540,9 @@ class GraphicsView(QGraphicsView):
                 'translation': '',
                 'polygons': [image_points],
                 'lines': [image_points],
-                'center': [center_image.x(), center_image.y()],  # 添加中心点
+                'white_frame_rect_local': white_frame_rect_local,
+                'has_custom_white_frame': True,
+                'center': [cx, cy],
                 'font_family': template_data.get('font_family', 'Arial'),
                 'font_size': template_data.get('font_size', 24),
                 'font_color': template_data.get('font_color', '#000000'),
@@ -1907,7 +1551,6 @@ class GraphicsView(QGraphicsView):
                 'angle': template_data.get('angle', 0),
                 'line_spacing': default_line_spacing,
                 'stroke_width': default_stroke_width,
-                'stroke_color_type': 'white',  # 默认白色描边
                 'font_path': ''  # 空字符串，渲染时会自动使用主页配置的默认字体
             }
             
@@ -1939,3 +1582,4 @@ class GraphicsView(QGraphicsView):
             import traceback
             print(f"创建文本区域失败: {e}")
             traceback.print_exc()
+

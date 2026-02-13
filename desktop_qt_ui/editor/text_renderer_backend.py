@@ -1,5 +1,4 @@
 
-import re
 import logging
 
 import cv2
@@ -7,7 +6,6 @@ import numpy as np
 from manga_translator.config import Config, RenderConfig
 from manga_translator.rendering import text_render
 from manga_translator.rendering.text_render import (
-    auto_add_horizontal_tags,
     set_font,
 )
 from manga_translator.utils import TextBlock
@@ -49,60 +47,12 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
         # --- 1. 文本预处理 ---
         text_to_render = original_translation or text_block.text
         if not text_to_render:
-            logger.warning(f"[EDITOR RENDER SKIPPED] Text is empty")
+            logger.debug("[EDITOR RENDER SKIPPED] Text is empty")
             return None
 
-        processed_text = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text_to_render.replace('↵', '\n'), flags=re.IGNORECASE)
-        if not text_block.horizontal and render_params.get('auto_rotate_symbols'):
-            processed_text = auto_add_horizontal_tags(processed_text)
-        text_block.translation = processed_text
+        text_block.translation = text_to_render
 
         # --- 2. 渲染 ---
-        # 与后端逻辑一致：
-        # 1. 当AI断句开启(disable_auto_wrap=True)且文本中有[BR]标记时，关闭自动换行
-        # 2. 当AI断句开启但文本中没有[BR]标记时，启用自动换行（回退到自动换行模式）
-        disable_auto_wrap_param = render_params.get('disable_auto_wrap', False)
-        layout_mode = render_params.get('layout_mode', 'default')
-        
-        # 获取区域数（lines数组的长度），用于智能排版模式的换行判断
-        region_count = 1
-        if hasattr(text_block, 'lines') and text_block.lines is not None:
-            try:
-                region_count = len(text_block.lines)
-            except:
-                region_count = 1
-
-        # 检测文本中是否有BR标记
-        has_br = bool(re.search(r'(\[BR\]|【BR】|<br>|\n)', processed_text, flags=re.IGNORECASE))
-        
-        # 如果检测到换行符，强制开启AI断句
-        if has_br and not disable_auto_wrap_param:
-            disable_auto_wrap_param = True
-            logger.debug(f"[EDITOR RENDER] 检测到换行符，强制开启AI断句")
-        
-        # 核心逻辑同步：当AI断句开启(disable_auto_wrap=True)时：
-        # 1. 如果有 [BR] 标记 -> 强制不换行 (依赖标记)
-        # 2. 如果是 Strict/SmartScaling 模式且为单行 -> 强制不换行
-        # 3. 否则 -> 回退到自动换行
-        
-        is_strict_or_smart = layout_mode in ['strict', 'smart_scaling']
-        is_single_line = region_count <= 1
-        force_no_wrap = is_strict_or_smart and is_single_line
-        
-        # 只有在 disable_auto_wrap_param 为 True 时才应用这些逻辑
-        # effective_disable_auto_wrap = True 意味着传给后端的 width/height 为无限大
-        effective_disable_auto_wrap = disable_auto_wrap_param and (has_br or force_no_wrap)
-        
-        # 横排使用hyphenate参数控制
-        hyphenate = not effective_disable_auto_wrap
-        
-        if disable_auto_wrap_param:
-            if has_br:
-                logger.debug(f"[EDITOR RENDER] AI断句开启且有BR标记，禁用自动换行")
-            elif force_no_wrap:
-                logger.debug(f"[EDITOR RENDER] AI断句开启且单行Strict/Smart，禁用自动换行")
-            else:
-                logger.debug(f"[EDITOR RENDER] AI断句开启但无BR且非单行强制模式，回退到自动换行模式")
         disable_font_border = render_params.get('disable_font_border', False)
         
         middle_pts = (dst_points[:, [1, 2, 3, 0]] + dst_points) / 2
@@ -127,7 +77,7 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
             bg_color = None
 
         if render_w <= 0 or render_h <= 0:
-            logger.warning(f"[EDITOR RENDER SKIPPED] Invalid render dimensions: width={render_w}, height={render_h}")
+            logger.debug(f"[EDITOR RENDER SKIPPED] Invalid render dimensions: width={render_w}, height={render_h}")
             return None
 
         config_data = render_params.copy()
@@ -143,15 +93,11 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
             except (IndexError, TypeError):
                 config_data.pop('font_color')
         
-        # ✅ 修复：将后端参数名映射回RenderConfig期望的字段名
+        # 将后端参数名映射回RenderConfig期望的字段名
         if 'text_stroke_width' in config_data:
             config_data['stroke_width'] = config_data.pop('text_stroke_width')
         if 'text_stroke_color' in config_data:
             config_data['bg_color'] = config_data.pop('text_stroke_color')
-        
-        # ✅ 关键修复：根据是否有BR标记来设置effective的disable_auto_wrap
-        # 这样竖排渲染时也能正确回退到自动换行模式
-        config_data['disable_auto_wrap'] = effective_disable_auto_wrap
 
         config_obj = Config(render=RenderConfig(**config_data)) if config_data else Config()
         line_spacing_multiplier = render_params.get('line_spacing', 1.0)
@@ -185,7 +131,7 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
                 fg_color, 
                 bg_color, 
                 text_block.target_lang, 
-                hyphenate, 
+                True, 
                 line_spacing_from_params, 
                 config=config_obj, 
                 region_count=region_count,
@@ -206,13 +152,13 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
             )
 
         if rendered_surface is None or rendered_surface.size == 0:
-            logger.warning(f"[EDITOR RENDER SKIPPED] Rendered surface is None or empty. Text: '{text_block.translation[:50] if hasattr(text_block, 'translation') else 'N/A'}...'")
+            logger.debug(f"[EDITOR RENDER SKIPPED] Rendered surface is None or empty. Text: '{text_block.translation[:50] if hasattr(text_block, 'translation') else 'N/A'}...'")
             return None
         
         # --- 3. 宽高比校正 (与后端渲染逻辑完全同步) ---
         h_temp, w_temp, _ = rendered_surface.shape
         if h_temp == 0 or w_temp == 0:
-            logger.warning(f"[EDITOR RENDER SKIPPED] Rendered surface has zero dimensions: width={w_temp}, height={h_temp}")
+            logger.debug(f"[EDITOR RENDER SKIPPED] Rendered surface has zero dimensions: width={w_temp}, height={h_temp}")
             return None
         r_temp = w_temp / h_temp
         
@@ -280,7 +226,7 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
         # 计算屏幕上的最小边界框
         x_s, y_s, w_s, h_s = cv2.boundingRect(np.round(dst_points_screen).astype(np.int32))
         if w_s <= 0 or h_s <= 0:
-            logger.warning(f"[EDITOR RENDER SKIPPED] Screen bounding box has invalid dimensions: x={x_s}, y={y_s}, width={w_s}, height={h_s}. Text may be outside visible area.")
+            logger.debug(f"[EDITOR RENDER SKIPPED] Screen bounding box has invalid dimensions: x={x_s}, y={y_s}, width={w_s}, height={h_s}. Text may be outside visible area.")
             return None
 
         # 将目标点偏移到边界框的局部坐标
@@ -288,7 +234,7 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
 
         matrix, _ = cv2.findHomography(src_points, dst_points_warp, cv2.RANSAC, 5.0)
         if matrix is None:
-            logger.warning(f"[EDITOR RENDER SKIPPED] Failed to compute homography matrix for text transformation")
+            logger.debug("[EDITOR RENDER SKIPPED] Failed to compute homography matrix for text transformation")
             return None
 
         warped_image = cv2.warpPerspective(box, matrix, (w_s, h_s), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0,0,0,0))
@@ -306,9 +252,7 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
             return (final_pixmap, QPointF(x_s, y_s))
 
     except Exception as e:
-        print(f"Error during backend text rendering: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.debug(f"Error during backend text rendering: {e}")
         return None
     finally:
         text_block.translation = original_translation

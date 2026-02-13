@@ -564,6 +564,8 @@
   "Testing API connection, please wait...": "API 연결을 테스트하는 중입니다. 잠시만 기다려주세요...",
   "API connection test successful!": "API 연결 테스트 성공!",
   "API connection test failed": "API 연결 테스트 실패",
+  "Please check your API key and address.": "API 키와 주소를 확인해 주세요.",
+  "Address format example": "주소 형식 예시",
   "Fetching models, please wait...": "모델 목록을 가져오는 중입니다. 잠시만 기다려주세요...",
   "Failed to get models": "모델 목록 가져오기 실패",
   "No models available": "사용 가능한 모델이 없습니다",

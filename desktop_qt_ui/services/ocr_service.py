@@ -203,6 +203,262 @@ class OcrService:
         except Exception as e:
             self.logger.error(f"区域图像提取失败: {e}")
             return None
+
+    def _build_text_mask_canny_flood(self, img: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Build a text mask from a rectified region using a Canny+flood-fill pipeline.
+        This is adapted from BallonsTranslator's canny_flood preprocessing.
+        """
+        try:
+            if img is None or img.size == 0:
+                return None
+            if img.ndim == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            elif img.ndim == 3 and img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+
+            kernel = np.ones((3, 3), np.uint8)
+            orih, oriw = img.shape[:2]
+            scale_r = 1.0
+            if orih > 300 and oriw > 300:
+                scale_r = 0.6
+            elif orih < 120 or oriw < 120:
+                scale_r = 1.4
+
+            if scale_r != 1.0:
+                orimg = np.copy(img)
+                new_w = max(int(oriw * scale_r), 2)
+                new_h = max(int(orih * scale_r), 2)
+                img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+            h, w = img.shape[:2]
+            if h < 2 or w < 2:
+                return None
+            img_area = h * w
+
+            cpimg = cv2.GaussianBlur(img, (3, 3), cv2.BORDER_DEFAULT)
+            detected_edges = cv2.Canny(cpimg, 70, 140, L2gradient=True, apertureSize=3)
+            cv2.rectangle(detected_edges, (0, 0), (w - 1, h - 1), (255, 255, 255), 1, cv2.LINE_8)
+            cons, _ = cv2.findContours(detected_edges, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+            cv2.rectangle(detected_edges, (0, 0), (w - 1, h - 1), (0, 0, 0), 1, cv2.LINE_8)
+
+            ballon_mask = np.zeros((h, w), np.uint8)
+            min_retval = np.inf
+            contour_mask = np.zeros((h, w), np.uint8)
+            difres = 10
+            seedpnt = (int(w / 2), int(h / 2))
+            for i in range(len(cons)):
+                rect = cv2.boundingRect(cons[i])
+                if rect[2] * rect[3] < img_area * 0.4:
+                    continue
+
+                contour_mask = cv2.drawContours(contour_mask, cons, i, 255, 2)
+                cpmask = np.copy(contour_mask)
+                cv2.rectangle(contour_mask, (0, 0), (w - 1, h - 1), 255, 1, cv2.LINE_8)
+                retval, _, _, _ = cv2.floodFill(
+                    cpmask,
+                    mask=None,
+                    seedPoint=seedpnt,
+                    flags=4,
+                    newVal=127,
+                    loDiff=(difres, difres, difres),
+                    upDiff=(difres, difres, difres),
+                )
+                if retval <= img_area * 0.3:
+                    contour_mask = cv2.drawContours(contour_mask, cons, i, 0, 2)
+                if retval < min_retval and retval > img_area * 0.3:
+                    min_retval = retval
+                    ballon_mask = cpmask
+
+            if np.count_nonzero(ballon_mask) == 0:
+                gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+                _, fallback_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                if scale_r != 1.0:
+                    fallback_mask = cv2.resize(fallback_mask, (oriw, orih), interpolation=cv2.INTER_NEAREST)
+                return fallback_mask
+
+            ballon_mask = 127 - ballon_mask
+            ballon_mask = cv2.dilate(ballon_mask, kernel, iterations=1)
+            outer_area, _, _, _ = cv2.floodFill(
+                ballon_mask,
+                mask=None,
+                seedPoint=seedpnt,
+                flags=4,
+                newVal=30,
+                loDiff=(difres, difres, difres),
+                upDiff=(difres, difres, difres),
+            )
+            ballon_mask = 30 - ballon_mask
+            _, ballon_mask = cv2.threshold(ballon_mask, 1, 255, cv2.THRESH_BINARY)
+            ballon_mask = cv2.bitwise_not(ballon_mask, ballon_mask)
+
+            detected_edges = cv2.dilate(detected_edges, kernel, iterations=1)
+            work_mask = np.copy(detected_edges)
+            outer_area = max(int(outer_area), 1)
+            for _ in range(2):
+                work_mask = cv2.bitwise_and(work_mask, ballon_mask)
+                flood_base = np.copy(work_mask)
+                bgarea1, _, _, _ = cv2.floodFill(
+                    flood_base,
+                    mask=None,
+                    seedPoint=(0, 0),
+                    flags=4,
+                    newVal=127,
+                    loDiff=(difres, difres, difres),
+                    upDiff=(difres, difres, difres),
+                )
+                bgarea2, _, _, _ = cv2.floodFill(
+                    flood_base,
+                    mask=None,
+                    seedPoint=(w - 1, h - 1),
+                    flags=4,
+                    newVal=127,
+                    loDiff=(difres, difres, difres),
+                    upDiff=(difres, difres, difres),
+                )
+                txt_area = min(img_area - bgarea1, img_area - bgarea2)
+                ratio_ob = txt_area / outer_area
+                ballon_mask = cv2.erode(ballon_mask, kernel, iterations=1)
+                if ratio_ob < 0.85:
+                    work_mask = flood_base
+                    break
+                work_mask = flood_base
+
+            text_mask = 127 - work_mask
+            _, text_mask = cv2.threshold(text_mask, 1, 255, cv2.THRESH_BINARY)
+
+            if scale_r != 1.0:
+                ballon_mask = cv2.resize(ballon_mask, (oriw, orih), interpolation=cv2.INTER_NEAREST)
+                text_mask = cv2.resize(text_mask, (oriw, orih), interpolation=cv2.INTER_NEAREST)
+
+            text_mask = cv2.bitwise_and(text_mask, ballon_mask)
+            return text_mask
+        except Exception as e:
+            self.logger.debug(f"canny_flood preprocessing failed, fallback to original region: {e}")
+            return None
+
+    def _split_spans_from_mask(self, mask: np.ndarray, axis: str) -> List[Tuple[int, int]]:
+        """
+        Split a text mask into line spans using projection on Y (horizontal text)
+        or X (vertical text).
+        """
+        if mask is None or mask.size == 0:
+            return []
+        if axis == 'y':
+            proj = mask.mean(axis=1)
+            dim = mask.shape[0]
+        else:
+            proj = mask.mean(axis=0)
+            dim = mask.shape[1]
+        if proj.size < 2:
+            return []
+
+        base = float(np.mean(proj))
+        if base <= 1e-6:
+            return []
+        threshold = base * 0.4
+        active = np.where(proj > threshold)[0]
+        if active.size == 0:
+            return []
+
+        spans: List[Tuple[int, int]] = []
+        start = int(active[0])
+        prev = start
+        for idx in active[1:]:
+            idx = int(idx)
+            if idx - prev > 1:
+                spans.append((start, prev))
+                start = idx
+            prev = idx
+        spans.append((start, prev))
+
+        if not spans:
+            return []
+
+        max_len = max(e - s + 1 for s, e in spans)
+        min_len = max(3, int(round(max_len * 0.3)))
+        filtered = [(s, e) for s, e in spans if (e - s + 1) >= min_len]
+        if not filtered:
+            filtered = spans
+
+        expanded: List[Tuple[int, int]] = []
+        for i, (s, e) in enumerate(filtered):
+            if i == 0:
+                start_pad = max(0, s - 2)
+            else:
+                gap = max(1, s - filtered[i - 1][1] - 1)
+                start_pad = max(0, s - gap // 2)
+
+            if i == len(filtered) - 1:
+                end_pad = min(dim - 1, e + 2)
+            else:
+                gap = max(1, filtered[i + 1][0] - e - 1)
+                end_pad = min(dim - 1, e + gap // 2)
+
+            if end_pad - start_pad >= 1:
+                expanded.append((start_pad, end_pad))
+
+        return expanded
+
+    def _split_single_polygon(self, image: np.ndarray, pts: np.ndarray) -> List[np.ndarray]:
+        """
+        Split a single large polygon into multiple sub-polygons using:
+        rectify -> canny_flood mask -> projection spans -> inverse projection.
+        """
+        if pts is None or len(pts) < 4:
+            return []
+
+        quad = Quadrilateral(pts=pts.astype(np.int32), text='', prob=1.0)
+        [l1a, l1b, l2a, l2b] = [a.astype(np.float32) for a in quad.structure]
+        norm_v = np.linalg.norm(l1b - l1a)
+        norm_h = np.linalg.norm(l2b - l2a)
+        if norm_v <= 1 or norm_h <= 1:
+            return []
+
+        h = max(int(round(norm_v)), 2)
+        w = max(int(round(norm_h)), 2)
+
+        dst_pts = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+        M, _ = cv2.findHomography(quad.pts.astype(np.float32), dst_pts, cv2.RANSAC, 5.0)
+        if M is None:
+            return []
+
+        rectified = cv2.warpPerspective(image, M, (w, h))
+        text_mask = self._build_text_mask_canny_flood(rectified)
+        if text_mask is None:
+            return []
+
+        axis = 'y' if quad.direction == 'h' else 'x'
+        spans = self._split_spans_from_mask(text_mask, axis=axis)
+        if len(spans) <= 1:
+            return []
+
+        try:
+            inv_m = np.linalg.inv(M)
+        except np.linalg.LinAlgError:
+            return []
+
+        split_polygons: List[np.ndarray] = []
+        for start, end in spans:
+            if axis == 'y':
+                local_quad = np.array(
+                    [[0, start], [w - 1, start], [w - 1, end], [0, end]],
+                    dtype=np.float32
+                )
+            else:
+                local_quad = np.array(
+                    [[start, 0], [end, 0], [end, h - 1], [start, h - 1]],
+                    dtype=np.float32
+                )
+            restored = cv2.perspectiveTransform(local_quad.reshape(1, 4, 2), inv_m)[0]
+            restored[:, 0] = np.clip(restored[:, 0], 0, image.shape[1] - 1)
+            restored[:, 1] = np.clip(restored[:, 1], 0, image.shape[0] - 1)
+            restored_int = np.round(restored).astype(np.int32)
+            if cv2.contourArea(restored_int) < 16:
+                continue
+            split_polygons.append(restored_int)
+
+        return split_polygons
     
     async def recognize_region(self, image: np.ndarray, region: Dict[str, Any], 
                              config: Optional[OcrConfig] = None) -> Optional[OcrResult]:
@@ -237,9 +493,20 @@ class OcrService:
             if not all_polygons:
                 return None
 
+            should_try_split = len(all_polygons) == 1 and config.ocr in {
+                Ocr.ocr32px, Ocr.ocr48px, Ocr.ocr48px_ctc
+            }
+
             for poly_points in all_polygons:
                 if len(poly_points) >= 4:
                     pts = np.array(poly_points, dtype=np.int32)
+                    if should_try_split:
+                        split_polys = self._split_single_polygon(image, pts.astype(np.float32))
+                        if len(split_polys) > 1:
+                            self.logger.debug(f"OCR pre-split triggered: {len(split_polys)} sub-lines")
+                            for sp in split_polys:
+                                quadrilaterals.append(Quadrilateral(pts=sp, text='', prob=1.0))
+                            continue
                     quadrilaterals.append(Quadrilateral(pts=pts, text='', prob=1.0))
 
             if not quadrilaterals:
