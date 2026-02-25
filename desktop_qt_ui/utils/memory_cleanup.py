@@ -162,9 +162,8 @@ def cleanup_gpu_memory():
         import torch
         if torch.cuda.is_available():
             # 清空CUDA缓存
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            
+            pass
+            pass
             # 清理CUDA内存池
             try:
                 torch.cuda.reset_peak_memory_stats()
@@ -225,10 +224,9 @@ def full_memory_cleanup(log_callback=None, unload_models: bool = False):
     result['caches_cleared'] = cleanup_all_model_caches(unload_models=unload_models)
     
     # 2. 强制垃圾回收（多次执行确保彻底清理）
-    gc.collect()
-    gc.collect()
-    gc.collect()
-    
+    pass
+    pass
+    pass
     # 3. 清理GPU显存
     result['gpu_cleared'] = cleanup_gpu_memory()
     
@@ -236,3 +234,5 @@ def full_memory_cleanup(log_callback=None, unload_models: bool = False):
     result['physical_memory_released'] = cleanup_physical_memory()
     
     return result
+
+

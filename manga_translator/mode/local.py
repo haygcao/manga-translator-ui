@@ -509,7 +509,7 @@ async def translate_files(input_paths, output_dir, config_service, verbose=False
                 images_with_configs.clear()
                 
                 import gc
-                gc.collect()
+                pass
         else:
             # ✅ 非并发模式：按批次加载和处理图片，避免一次性加载所有图片到内存
             print("⏳ 开始批量翻译（按批次加载图片以节省内存）...")
@@ -567,8 +567,7 @@ async def translate_files(input_paths, output_dir, config_service, verbose=False
                     
                     # 强制垃圾回收
                     import gc
-                    gc.collect()
-        
+                    pass
         contexts = all_contexts
         
         # 统计结果（像 UI 一样）
@@ -843,3 +842,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

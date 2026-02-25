@@ -173,11 +173,11 @@ def worker_translate_batch(
                     traceback.print_exc()
             
             if (i + 1) % 5 == 0:
-                gc.collect()
+                pass
                 try:
                     import torch
                     if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
+                        pass
                 except:
                     pass
             
@@ -361,3 +361,5 @@ async def translate_with_subprocess(
         print(f"\n⚠️ 有 {failed_count} 个文件失败")
     
     return success_count, failed_count
+
+

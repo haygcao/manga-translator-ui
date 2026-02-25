@@ -1119,13 +1119,22 @@ class MangaTranslator:
         
         current_time = time.time()
         self._model_usage_timestamps[("detection", config.detector.detector)] = current_time
-        result = await dispatch_detection(config.detector.detector, ctx.img_rgb, config.detector.detection_size, config.detector.text_threshold,
-                                        config.detector.box_threshold,
-                                        config.detector.unclip_ratio, config.detector.det_invert, config.detector.det_gamma_correct, config.detector.det_rotate,
-                                        config.detector.det_auto_rotate,
-                                        self.device, self.verbose,
-                                        config.detector.use_yolo_obb, config.detector.yolo_obb_conf, config.detector.yolo_obb_iou, config.detector.yolo_obb_overlap_threshold,
-                                        config.detector.min_box_area_ratio, self._result_path)
+        result = await dispatch_detection(
+            config.detector.detector,
+            ctx.img_rgb,
+            config.detector.detection_size,
+            config.detector.text_threshold,
+            config.detector.box_threshold,
+            config.detector.unclip_ratio,
+            self.device,
+            self.verbose,
+            config.detector.use_yolo_obb,
+            config.detector.yolo_obb_conf,
+            config.detector.yolo_obb_iou,
+            config.detector.yolo_obb_overlap_threshold,
+            config.detector.min_box_area_ratio,
+            self._result_path,
+        )
         
         # 处理bbox调试图（如果检测器返回了）
         if self.verbose and result and len(result) == 3 and result[2] is not None:
@@ -1220,6 +1229,66 @@ class MangaTranslator:
         # --- END NON-MAXIMUM SUPPRESSION (NMS) ---
 
         return result
+
+    def _save_labeled_textline_debug_image(self, img_rgb: np.ndarray, textlines: List, filename: str = 'bboxes_unfiltered_labeled.png'):
+        """
+        在原图上绘制带标签的检测框调试图（仅供 verbose 模式调用）。
+        """
+        if img_rgb is None or textlines is None:
+            return
+        if len(textlines) == 0:
+            return
+
+        # BGR 颜色映射（OpenCV）
+        label_colors = {
+            'balloon': (255, 255, 0),       # 青
+            'qipao': (0, 255, 0),           # 绿
+            'other': (0, 255, 255),         # 黄
+            'changfangtiao': (255, 0, 255), # 品红
+            'hengxie': (255, 128, 0),       # 橙
+            'shuqing': (128, 0, 255),       # 紫
+            'unlabeled': (200, 200, 200),   # 灰
+        }
+
+        try:
+            canvas_bgr = cv2.cvtColor(np.copy(img_rgb), cv2.COLOR_RGB2BGR)
+            label_stats = {}
+            for idx, txtln in enumerate(textlines):
+                pts = getattr(txtln, 'pts', None)
+                if pts is None:
+                    continue
+                pts = np.asarray(pts, dtype=np.int32)
+                if pts.size == 0:
+                    continue
+
+                label = getattr(txtln, 'det_label', None) or getattr(txtln, 'yolo_label', None) or 'unlabeled'
+                label = str(label).strip().lower() if label is not None else 'unlabeled'
+                if not label:
+                    label = 'unlabeled'
+                # other 仅用于包裹辅助，不在调试图中显示
+                if label == 'other':
+                    continue
+                color = label_colors.get(label, (80, 80, 255))  # 未知标签：红
+
+                cv2.polylines(canvas_bgr, [pts], True, color=color, thickness=2)
+
+                x = int(np.min(pts[:, 0]))
+                y = int(np.min(pts[:, 1])) - 6
+                if y < 12:
+                    y = int(np.max(pts[:, 1])) + 14
+                caption = f'{idx}:{label}'
+                cv2.putText(canvas_bgr, caption, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 2, cv2.LINE_AA)
+                cv2.putText(canvas_bgr, caption, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+
+                label_stats[label] = label_stats.get(label, 0) + 1
+
+            out_path = self._result_path(filename)
+            imwrite_unicode(out_path, canvas_bgr, logger)
+            logger.info(f'Saved labeled textline debug image to {out_path}')
+            logger.info(f'Textline label statistics: {label_stats}')
+        except Exception as e:
+            logger.error(f'Failed to save labeled textline debug image: {e}')
+
     async def _unload_model(self, tool: str, model: str, **kwargs):
         logger.info(f"Unloading {tool} model: {model}")
         match tool:
@@ -1760,7 +1829,6 @@ class MangaTranslator:
                         region.adjust_bg_color = False
                 new_text_regions.append(region)
         text_regions = new_text_regions
-
         text_regions = sort_regions(
             text_regions,
             right_to_left=config.render.rtl,
@@ -3368,6 +3436,7 @@ class MangaTranslator:
             for txtln in ctx.textlines:
                 cv2.polylines(img_bbox_raw, [txtln.pts], True, color=(255, 0, 0), thickness=2)
             imwrite_unicode(self._result_path('bboxes_unfiltered.png'), cv2.cvtColor(img_bbox_raw, cv2.COLOR_RGB2BGR), logger)
+            self._save_labeled_textline_debug_image(ctx.img_rgb, ctx.textlines, 'bboxes_unfiltered_labeled.png')
 
         # -- OCR
         await self._report_progress('ocr')

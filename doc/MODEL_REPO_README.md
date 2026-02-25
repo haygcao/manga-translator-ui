@@ -43,7 +43,7 @@ license: CC-BY-NC-4.0
 - `detect-20241225.ckpt` - 默认文字检测器
 - `comictextdetector.pt` / `comictextdetector.pt.onnx` - 漫画文字检测器
 - `craft_mlt_25k.pth` / `craft_refiner_CTW1500.pth` - CRAFT 检测器
-- `ysgyolo_1.2_OS1.0.onnx` - YOLO OBB 检测器
+- `yolo26obb.onnx` - YOLO OBB 检测器
 
 ### 气泡检测模型 (Bubble Detection)
 - `mangalens.onnx` - 漫画气泡检测模型
@@ -138,9 +138,10 @@ license: CC-BY-NC-4.0
 - [PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - PaddleOCR 模型支持
 - [kha-white/manga-ocr](https://github.com/kha-white/manga-ocr) - MangaOCR 模型支持
 - [jzhang533/PaddleOCR-VL-For-Manga](https://github.com/jzhang533/PaddleOCR-VL-For-Manga) - 提供 PaddleOCR-VL-For-Manga 模型支持
+- [huyvux3005/manga109-segmentation-bubble](https://huggingface.co/huyvux3005/manga109-segmentation-bubble) - 漫画气泡检测模型支持
 - [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) - Real-ESRGAN 超分模型
 - [nihui/waifu2x-ncnn-vulkan](https://github.com/nihui/waifu2x-ncnn-vulkan) - Waifu2x 超分模型
 
 ---
 
-**最后更新时间**：2026-02-13
+**最后更新时间**：2026-02-24

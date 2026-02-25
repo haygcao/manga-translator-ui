@@ -237,7 +237,13 @@ class LamaMPEInpainter(OfflineInpainter):
         if new_h != h or new_w != w:
             image = cv2.resize(image, (new_w, new_h), interpolation = cv2.INTER_LINEAR)
             mask = cv2.resize(mask, (new_w, new_h), interpolation = cv2.INTER_LINEAR)
-        self.logger.info(f'Inpainting resolution: {new_w}x{new_h}')
+        model_h, model_w = self._get_inpaint_canvas_hw(new_h, new_w, base_align=8)
+        extra_pad_h = max(0, model_h - new_h)
+        extra_pad_w = max(0, model_w - new_w)
+        if extra_pad_h or extra_pad_w:
+            image = np.pad(image, ((0, extra_pad_h), (0, extra_pad_w), (0, 0)), mode='symmetric')
+            mask = np.pad(mask, ((0, extra_pad_h), (0, extra_pad_w)), mode='constant', constant_values=0)
+        self.logger.info(f'Inpainting resolution: {model_w}x{model_h}')
         if isinstance(self.model, LamaFourier):
             img_torch = torch.from_numpy(image).permute(2, 0, 1).unsqueeze_(0).float() / 255.
         else:
@@ -267,7 +273,10 @@ class LamaMPEInpainter(OfflineInpainter):
                     img_inpainted_torch = self.model(img_torch, mask_torch)
                 
                 # ✅ autocast后立即清理缓存（防止bf16中间激活累积）
-                torch.cuda.empty_cache()
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
         if isinstance(self.model, LamaFourier):
             img_inpainted_torch = img_inpainted_torch.to(torch.float32)
@@ -275,6 +284,8 @@ class LamaMPEInpainter(OfflineInpainter):
         else:
             img_inpainted_torch = img_inpainted_torch.to(torch.float32)
             img_inpainted = ((img_inpainted_torch.cpu().squeeze_(0).permute(1, 2, 0).numpy() + 1.0) * 127.5).astype(np.uint8)
+        if extra_pad_h or extra_pad_w:
+            img_inpainted = img_inpainted[:new_h, :new_w, :]
         if new_h != height or new_w != width:
             img_inpainted = cv2.resize(img_inpainted, (width, height), interpolation = cv2.INTER_LINEAR)
         
@@ -683,16 +694,11 @@ class LamaLargeInpainter(LamaMPEInpainter):
             
             # 强制垃圾回收
             gc.collect()
-            
             return ans
             
         except Exception as e:
-            # 清理所有临时变量
-            for var_name in ['img_original', 'mask_original', 'img', 'mask_input', 'img_inpainted']:
-                if var_name in locals():
-                    del locals()[var_name]
+            # 异常路径执行垃圾回收，避免大数组滞留
             gc.collect()
-            
             # 记录详细错误
             self.logger.error(f'ONNX推理异常: {type(e).__name__}: {str(e)}')
             if 'bad allocation' in str(e) or 'allocation' in str(e).lower():
@@ -1406,3 +1412,5 @@ def load_lama_mpe(model_path, device, use_mpe: bool = True, large_arch: bool = F
                 raise
     
     return model
+
+

@@ -136,10 +136,10 @@ class StableDiffusionInpainter(OfflineInpainter):
         # ✅ Inpainting完成后立即清理GPU内存和numpy数组（不删除输入参数）
         del img, img_inpainted, img_original, mask_original
         if self.device.startswith('cuda') and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-        
+            pass
+            pass
         import gc
-        gc.collect()
-        
+        pass
         return ans
+
+

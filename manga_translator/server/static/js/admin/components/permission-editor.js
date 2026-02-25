@@ -436,6 +436,7 @@ class PermissionEditor {
                 ${this.createFormRow(this.t('label_merge_gamma', '合并-距离容忍度'), this.createInput('ocr', 'merge_gamma', 'number'), '值越高越宽容，默认0.8', 'ocr', 'merge_gamma')}
                 ${this.createFormRow(this.t('label_merge_sigma', '合并-离群容忍度'), this.createInput('ocr', 'merge_sigma', 'number'), '值越高越宽容，默认2.5', 'ocr', 'merge_sigma')}
                 ${this.createFormRow(this.t('label_merge_edge_ratio_threshold', '合并-边缘距离比例阈值'), this.createInput('ocr', 'merge_edge_ratio_threshold', 'number'), '0表示禁用，默认0.0', 'ocr', 'merge_edge_ratio_threshold')}
+                ${this.createFormRow(this.t('label_merge_special_require_full_wrap', '模型辅助合并'), this.createCheckbox('ocr', 'merge_special_require_full_wrap'), '开启后：无标签框必须被目标标签框完全包裹才参与特殊预合并', 'ocr', 'merge_special_require_full_wrap')}
             </div>
             <div class="form-section">
                 <h3>${this.t('label_detector', '文本检测器')}</h3>
@@ -445,10 +446,6 @@ class PermissionEditor {
                 ${this.createFormRow(this.t('label_box_threshold', '边界框生成阈值'), this.createInput('detector', 'box_threshold', 'number'), '边界框生成阈值，默认0.5', 'detector', 'box_threshold')}
                 ${this.createFormRow(this.t('label_unclip_ratio', 'Unclip比例'), this.createInput('detector', 'unclip_ratio', 'number'), '文本骨架扩展比例，默认2.5', 'detector', 'unclip_ratio')}
                 ${this.createFormRow(this.t('label_min_box_area_ratio', '最小检测框面积占比'), this.createInput('detector', 'min_box_area_ratio', 'number'), '相对图片总像素，默认0.0009(0.09%)', 'detector', 'min_box_area_ratio')}
-                ${this.createFormRow(this.t('label_det_rotate', '旋转图像进行检测'), this.createCheckbox('detector', 'det_rotate'), '旋转图像进行检测，可能提高检测效果', 'detector', 'det_rotate')}
-                ${this.createFormRow(this.t('label_det_auto_rotate', '旋转图像以优先检测垂直文本行'), this.createCheckbox('detector', 'det_auto_rotate'), '自动旋转以优先检测垂直文本', 'detector', 'det_auto_rotate')}
-                ${this.createFormRow(this.t('label_det_invert', '反转图像颜色进行检测'), this.createCheckbox('detector', 'det_invert'), '反转图像颜色进行检测', 'detector', 'det_invert')}
-                ${this.createFormRow(this.t('label_det_gamma_correct', '应用伽马校正进行检测'), this.createCheckbox('detector', 'det_gamma_correct'), '应用伽马校正，可能提高检测效果', 'detector', 'det_gamma_correct')}
                 ${this.createFormRow(this.t('label_use_yolo_obb', '启用YOLO辅助检测'), this.createCheckbox('detector', 'use_yolo_obb'), '启用YOLO旋转边界框辅助检测', 'detector', 'use_yolo_obb')}
                 ${this.createFormRow(this.t('label_yolo_obb_conf', 'YOLO置信度阈值'), this.createInput('detector', 'yolo_obb_conf', 'number'), '默认0.4', 'detector', 'yolo_obb_conf')}
                 ${this.createFormRow(this.t('label_yolo_obb_iou', 'YOLO交叉比(IoU)'), this.createInput('detector', 'yolo_obb_iou', 'number'), 'NMS的IoU阈值，默认0.6', 'detector', 'yolo_obb_iou')}

@@ -7,9 +7,7 @@ import logging
 from io import BytesIO
 from typing import List, Dict, Any
 from PIL import Image
-import httpx
 import openai
-from openai import AsyncOpenAI
 
 from .common import CommonTranslator, VALID_LANGUAGES, draw_text_boxes_on_image, parse_json_or_text_response, merge_glossary_to_file, get_glossary_extraction_prompt, parse_hq_response, validate_openai_response, AsyncOpenAICurlCffi
 from .keys import OPENAI_API_KEY, OPENAI_MODEL
@@ -146,9 +144,7 @@ class OpenAIHighQualityTranslator(CommonTranslator):
             self.logger.info(f"Setting OpenAI HQ max requests per minute to: {max_rpm}")
         
         # 读取自定义API参数配置
-        use_custom_params = getattr(args, 'use_custom_api_params', False)
-        if use_custom_params:
-            self._load_custom_api_params()
+        self._configure_custom_api_params(args)
         
         # 从配置中读取用户级 API Key（优先于环境变量）
         # 这允许 Web 服务器为每个用户使用不同的 API Key
@@ -198,29 +194,16 @@ class OpenAIHighQualityTranslator(CommonTranslator):
             self.client = None
 
         if not self.client:
-            # 尝试使用 curl_cffi 客户端绕过 TLS 指纹检测
-            try:
-                self.client = AsyncOpenAICurlCffi(
-                    api_key=self.api_key,
-                    base_url=self.base_url,
-                    default_headers=BROWSER_HEADERS,
-                    impersonate="chrome110",
-                    timeout=300.0
-                )
-                self.logger.debug("已创建新的OpenAI HQ客户端连接（使用 curl_cffi TLS 指纹伪装）")
-            except ImportError:
-                # 如果 curl_cffi 不可用，回退到标准客户端
-                self.logger.warning("curl_cffi 未安装，使用标准 OpenAI 客户端（可能被 TLS 指纹检测阻止）")
-                self.client = AsyncOpenAI(
-                    api_key=self.api_key,
-                    base_url=self.base_url,
-                    default_headers=BROWSER_HEADERS,
-                    http_client=httpx.AsyncClient(
-                        headers=BROWSER_HEADERS,
-                        timeout=httpx.Timeout(300.0, connect=60.0)
-                    )
-                )
-                self.logger.debug("已创建新的OpenAI HQ客户端连接（标准模式）")
+            # 强制使用 curl_cffi 客户端（不回退标准 SDK）
+            self.client = AsyncOpenAICurlCffi(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                default_headers=BROWSER_HEADERS,
+                impersonate="chrome110",
+                timeout=600.0,
+                stream_timeout=300.0
+            )
+            self.logger.debug("已创建新的OpenAI HQ客户端连接（强制 curl_cffi 模式）")
     
     async def _cleanup(self):
         """清理资源"""
@@ -501,25 +484,64 @@ This is an incorrect response because it includes extra text and explanations.
                     api_params.update(self._custom_api_params)
                     self.logger.debug(f"使用自定义API参数: {self._custom_api_params}")
 
-                response = await self._await_with_cancel_polling(
-                    self.client.chat.completions.create(**api_params),
-                    poll_interval=0.2,
-                    on_cancel=self._abort_inflight_request,
-                )
+                def _extract_openai_stream_text(chunk):
+                    if not (hasattr(chunk, 'choices') and chunk.choices):
+                        return ""
+                    choice = chunk.choices[0]
+                    delta = getattr(choice, 'delta', None)
+                    return getattr(delta, 'content', '') if delta else ""
+
+                def _extract_openai_stream_finish_reason(chunk):
+                    if not (hasattr(chunk, 'choices') and chunk.choices):
+                        return None
+                    return getattr(chunk.choices[0], 'finish_reason', None)
                 
+                def _on_stream_chunk(delta_text, _full_text):
+                    # 避免 INFO 级别下流式增量刷屏；仅在 DEBUG 时显示逐块预览
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self._emit_stream_json_preview("[OpenAI HQ Stream]", _full_text, source_texts=texts)
+
+                streamed_text = None
+                response = None
+                try:
+                    self._reset_stream_json_preview()
+                    stream_params = dict(api_params)
+                    stream_params["stream"] = True
+                    streamed_text, streamed_finish_reason = await self._run_unified_stream_transport(
+                        create_stream=lambda: self.client.chat.completions.create(**stream_params),
+                        extract_text=_extract_openai_stream_text,
+                        extract_finish_reason=_extract_openai_stream_finish_reason,
+                        on_chunk=_on_stream_chunk,
+                        on_cancel=self._abort_inflight_request,
+                        poll_interval=0.2,
+                        sync_iter_in_thread=False,
+                    )
+                    self._finish_stream_inline()
+                except Exception as stream_error:
+                    self._finish_stream_inline()
+                    self.logger.warning(f"流式请求不可用，已回退普通请求: {stream_error}")
+                    response = await self._await_with_cancel_polling(
+                        self.client.chat.completions.create(**api_params),
+                        poll_interval=0.2,
+                        on_cancel=self._abort_inflight_request,
+                    )
+                 
                 # 在API调用成功后立即更新时间戳，确保所有请求（包括重试）都被计入速率限制
                 if self._MAX_REQUESTS_PER_MINUTE > 0:
                     OpenAIHighQualityTranslator._GLOBAL_LAST_REQUEST_TS[self._last_request_ts_key] = time.time()
 
-                # 验证响应对象是否有效
-                validate_openai_response(response, self.logger)
-
-                # 检查成功条件：有内容就尝试处理，后续会有质量检查
-                finish_reason = response.choices[0].finish_reason if (hasattr(response, 'choices') and response.choices) else None
-                has_content = response.choices and response.choices[0].message.content
-                
+                if streamed_text is not None:
+                    finish_reason = streamed_finish_reason
+                    has_content = bool(streamed_text)
+                else:
+                    # 验证响应对象是否有效
+                    validate_openai_response(response, self.logger)
+                    # 检查成功条件：有内容就尝试处理，后续会有质量检查
+                    finish_reason = response.choices[0].finish_reason if (hasattr(response, 'choices') and response.choices) else None
+                    has_content = response.choices and response.choices[0].message.content
+                 
                 if has_content:
-                    result_text = response.choices[0].message.content.strip()
+                    result_text = streamed_text.strip() if streamed_text is not None else response.choices[0].message.content.strip()
                     
                     # 统一的编码清理（处理UTF-16-LE等编码问题）
                     from .common import sanitize_text_encoding
@@ -549,6 +571,7 @@ This is an incorrect response because it includes extra text and explanations.
                     
                     # 处理提取到的术语
                     if extract_glossary and new_terms:
+                        self._emit_terms_from_list(new_terms)
                         prompt_path = None
                         if ctx and hasattr(ctx, 'config') and hasattr(ctx.config, 'translator'):
                             prompt_path = getattr(ctx.config.translator, 'high_quality_prompt_path', None)
@@ -599,9 +622,10 @@ This is an incorrect response because it includes extra text and explanations.
                         await self._sleep_with_cancel_polling(2)
                         continue
 
-                    self.logger.info("--- Translation Results ---")
-                    for original, translated in zip(texts, translations):
-                        self.logger.info(f'{original} -> {translated}')
+                    if not self._has_stream_result_pairs():
+                        self.logger.info("--- Translation Results ---")
+                        for original, translated in zip(texts, translations):
+                            self.logger.info(f'{original} -> {translated}')
                     self.logger.info("---------------------------")
 
                     # BR检查：检查翻译结果是否包含必要的[BR]标记
@@ -703,9 +727,13 @@ This is an incorrect response because it includes extra text and explanations.
                 log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
                 last_exception = e
 
-                # 降级检查：502错误
-                if '502' in str(e):
-                     self.logger.warning(f"检测到网络错误(502)，下次重试将不再发送图片。错误信息: {e}")
+                # 降级检查：502/429错误
+                error_text = str(e)
+                if '502' in error_text or '429' in error_text or 'rate limit' in error_text.lower():
+                     if '502' in error_text:
+                         self.logger.warning(f"检测到网络错误(502)，下次重试将不再发送图片。错误信息: {e}")
+                     else:
+                         self.logger.warning(f"检测到限流错误(429)，下次重试将不再发送图片。错误信息: {e}")
                      send_images = False
 
                 self.logger.warning(f"OpenAI高质量翻译出错 ({log_attempt}): {e}")

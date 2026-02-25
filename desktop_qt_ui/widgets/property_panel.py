@@ -566,7 +566,8 @@ class PropertyPanel(QWidget):
         direction_map = self.app_logic.get_display_mapping('direction')
         if direction_map:
             self.direction_combo.clear()
-            self.direction_combo.addItems(list(direction_map.values()))
+            direction_items = [v for k, v in direction_map.items() if k != 'auto']
+            self.direction_combo.addItems(direction_items)
     
     def refresh_ui_texts(self):
         """刷新所有UI文本（用于语言切换）"""
@@ -713,7 +714,8 @@ class PropertyPanel(QWidget):
         if direction_map:
             self.direction_combo.blockSignals(True)
             self.direction_combo.clear()
-            self.direction_combo.addItems(list(direction_map.values()))
+            direction_items = [v for k, v in direction_map.items() if k != 'auto']
+            self.direction_combo.addItems(direction_items)
             # 恢复选中的索引
             if 0 <= current_direction_index < self.direction_combo.count():
                 self.direction_combo.setCurrentIndex(current_direction_index)
@@ -848,24 +850,10 @@ class PropertyPanel(QWidget):
                 translation_text = region_data.get("translation", "")
                 translation_text = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', translation_text, flags=re.IGNORECASE)
 
-                # 2. 如果是竖排且开启了自动旋转符号,自动添加 <H> 标签(仅用于显示)
-                direction = region_data.get('direction', 'auto')
-                is_vertical = direction in ('v', 'vertical')
-                if direction == 'auto':
-                    is_vertical = not region_data.get('horizontal', True)
-
-                if is_vertical and self.config_service.get_config().render.auto_rotate_symbols:
-                    # 使用与后端一致的正则表达式(英文数字2+字符，符号2-4字符)
-                    # 注意：移除了点号(.)以避免匹配省略号
-                    # 但是要避免重复添加:如果已经有 <H> 标签,就不添加
-                    if '<H>' not in translation_text.upper():
-                        horizontal_char_pattern = r'([a-zA-Z0-9_-]{2,}|[!?！？]{2,4})'
-                        translation_text = re.sub(horizontal_char_pattern, r'<H>\1</H>', translation_text)
-
-                # 3. 将 <H> 标签替换为符号 ⇄ 显示在文本框中
+                # 2. 将 <H> 标签替换为符号 ⇄ 显示在文本框中
                 display_text = translation_text.replace('<H>', '⇄').replace('</H>', '⇄')
 
-                # 4. 将 \n 替换为 ↵ 显示在文本框中
+                # 3. 将 \n 替换为 ↵ 显示在文本框中
                 display_text = display_text.replace('\n', '↵')
                 self.translated_text_box.setText(display_text)
             
@@ -931,8 +919,23 @@ class PropertyPanel(QWidget):
             alignment_map = {"auto": "自动", "left": "左对齐", "center": "居中", "right": "右对齐"}
             self.alignment_combo.setCurrentText(alignment_map.get(region_data.get("alignment", "auto"), "自动"))
             
-            direction_map = {"auto": "自动", "horizontal": "横排", "vertical": "竖排", "h": "横排", "v": "竖排"}
-            self.direction_combo.setCurrentText(direction_map.get(region_data.get("direction", "auto"), "自动"))
+            display_direction_map = self.app_logic.get_display_mapping('direction') or {}
+            horizontal_text = display_direction_map.get('h', self._t("direction_horizontal"))
+            vertical_text = display_direction_map.get('v', self._t("direction_vertical"))
+
+            direction_value = str(region_data.get("direction", "")).strip().lower()
+            if direction_value in ("v", "vertical"):
+                direction_display = vertical_text
+            elif direction_value in ("h", "horizontal"):
+                direction_display = horizontal_text
+            else:
+                # 旧数据的 auto 或空值：在编辑器内按框形状回显横/竖
+                if wf_info:
+                    _, _, w, h = wf_info
+                    direction_display = vertical_text if h > w else horizontal_text
+                else:
+                    direction_display = horizontal_text
+            self.direction_combo.setCurrentText(direction_display)
 
             # --- Update Mask Checkboxes ---
             display_mask_type = self.model.get_display_mask_type()

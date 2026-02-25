@@ -17,6 +17,7 @@ from services import (
     get_config_service,
     get_file_service,
     get_history_service,
+    get_i18n_manager,
     get_logger,
     get_ocr_service,
     get_resource_manager,
@@ -447,13 +448,12 @@ class EditorController(QObject):
                 pass
         
         # 强制垃圾回收
-        gc.collect()
-        
+        pass
         # 释放GPU显存
         try:
             import torch
             if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                pass
         except ImportError:
             pass
         
@@ -1344,8 +1344,27 @@ class EditorController(QObject):
     @pyqtSlot(int, str)
     def update_direction(self, region_index: int, direction_text: str):
         """槽：响应UI中的方向修改"""
-        direction_map = {"自动": "auto", "横排": "horizontal", "竖排": "vertical"}
-        direction_value = direction_map.get(direction_text, "auto")
+        direction_value = "horizontal"
+        raw_text = str(direction_text or "").strip()
+        lower_text = raw_text.lower()
+        if lower_text in ("v", "vertical"):
+            direction_value = "vertical"
+        elif lower_text in ("h", "horizontal"):
+            direction_value = "horizontal"
+        else:
+            i18n = get_i18n_manager()
+            if i18n:
+                horizontal_label = i18n.translate("direction_horizontal")
+                vertical_label = i18n.translate("direction_vertical")
+                if raw_text == vertical_label:
+                    direction_value = "vertical"
+                elif raw_text == horizontal_label:
+                    direction_value = "horizontal"
+            # 兼容历史中文值
+            if raw_text in ("竖排",):
+                direction_value = "vertical"
+            elif raw_text in ("横排",):
+                direction_value = "horizontal"
 
         old_region_data = self._get_region_by_index(region_index)
         if not old_region_data or old_region_data.get('direction') == direction_value:
@@ -2240,7 +2259,8 @@ class EditorController(QObject):
                         prob=current_ocr_config.prob,
                         merge_gamma=current_ocr_config.merge_gamma,
                         merge_sigma=current_ocr_config.merge_sigma,
-                        merge_edge_ratio_threshold=current_ocr_config.merge_edge_ratio_threshold
+                        merge_edge_ratio_threshold=current_ocr_config.merge_edge_ratio_threshold,
+                        merge_special_require_full_wrap=current_ocr_config.merge_special_require_full_wrap
                     )
                     self.logger.info(f"Using OCR model from property panel: {selected_ocr}")
                 except (ValueError, AttributeError) as e:
@@ -2372,3 +2392,5 @@ class EditorController(QObject):
                     error_message = getattr(result, 'error_message', 'Unknown error')
                     self.logger.error(f"Backend task failed for {os.path.basename(current_source_path)}: {error_message}")
                 break
+
+

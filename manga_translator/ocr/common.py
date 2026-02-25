@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from abc import abstractmethod
 from typing import List, Tuple, Union
@@ -205,7 +206,7 @@ class OfflineOCR(CommonOCR, ModelWrapper):
             try:
                 import torch
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    pass
             except:
                 pass
         
@@ -247,6 +248,31 @@ class OfflineOCR(CommonOCR, ModelWrapper):
             try:
                 import torch
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    pass
             except:
                 pass
+
+    def _get_ocr_canvas_width(self, valid_widths: List[int], base_align: int = 4, extra_pad: int = 0) -> int:
+        """
+        Normalize OCR canvas width to reduce dynamic-shape explosion on cuDNN.
+        Env vars:
+        - MANGA_OCR_FIXED_WIDTH: force a minimum fixed width when > 0
+        - MANGA_OCR_WIDTH_BUCKET: round width up to this bucket on GPU (default: 256)
+        """
+        max_content_width = max(valid_widths) + max(0, int(extra_pad))
+        base_align = max(1, int(base_align))
+        aligned_width = base_align * ((max_content_width + base_align - 1) // base_align)
+
+        # CPU path keeps the original fine-grained width for lower memory overhead.
+        if not (hasattr(self, 'use_gpu') and self.use_gpu):
+            return aligned_width
+
+        fixed_width = int(os.environ.get("MANGA_OCR_FIXED_WIDTH", "0") or 0)
+        if fixed_width > 0:
+            return max(aligned_width, fixed_width)
+
+        bucket = int(os.environ.get("MANGA_OCR_WIDTH_BUCKET", "256") or 1)
+        if bucket <= 1:
+            return aligned_width
+        return bucket * ((aligned_width + bucket - 1) // bucket)
+

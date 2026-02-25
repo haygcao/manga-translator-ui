@@ -71,6 +71,23 @@ class MangaColorizationV2(OfflineColorizer):
             img = cv2.resize(img, (img_shape_before_denoise[1], img_shape_before_denoise[0]), interpolation=cv2.INTER_LINEAR)
 
         img, current_pad = resize_pad(img, size)
+        extra_pad = (0, 0)
+        if isinstance(self.device, str) and self.device.startswith('cuda'):
+            h, w = img.shape[:2]
+            fixed_size = int(os.environ.get("MANGA_COLORIZATION_FIXED_SIZE", "0") or 0)
+            if fixed_size > 0:
+                target_h = max(h, fixed_size)
+                target_w = max(w, fixed_size)
+            else:
+                bucket = int(os.environ.get("MANGA_COLORIZATION_SIZE_BUCKET", "128") or 128)
+                if bucket > 1:
+                    target_h = bucket * ((h + bucket - 1) // bucket)
+                    target_w = bucket * ((w + bucket - 1) // bucket)
+                else:
+                    target_h, target_w = h, w
+            extra_pad = (max(0, target_h - h), max(0, target_w - w))
+            if extra_pad[0] or extra_pad[1]:
+                img = np.pad(img, ((0, extra_pad[0]), (0, extra_pad[1]), (0, 0)), 'maximum')
 
         transform = ToTensor()
         current_image = transform(img).unsqueeze(0).to(self.device)
@@ -82,6 +99,10 @@ class MangaColorizationV2(OfflineColorizer):
 
         result = fake_color[0].detach().cpu().permute(1, 2, 0) * 0.5 + 0.5
 
+        if extra_pad[0] != 0:
+            result = result[:-extra_pad[0]]
+        if extra_pad[1] != 0:
+            result = result[:, :-extra_pad[1]]
         if current_pad[0] != 0:
             result = result[:-current_pad[0]]
         if current_pad[1] != 0:

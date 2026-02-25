@@ -59,12 +59,16 @@ def calculate_region_dst_points(
     target_lang = text_block.target_lang or "en_US"
     region_font_path = region_params.get("font_path") or getattr(text_block, "font_path", "")
     text_renderer_backend.apply_font_for_render(region_font_path)
+    # 编辑器渲染链路不做自动 <H> 注入，避免与输入文本产生隐式偏差
+    calc_params = region_params.copy()
+    calc_params["auto_rotate_symbols"] = False
+    calc_config = Config(render=RenderConfig(**calc_params))
     box_w, box_h, _ = calc_box_from_font(
         font_size,
         translation,
         is_horizontal,
         line_spacing,
-        config_obj,
+        calc_config,
         target_lang,
         center=None,
         angle=0,

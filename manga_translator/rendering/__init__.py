@@ -58,10 +58,39 @@ def _resolve_font_path(font_path: str) -> str:
     return ''
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _estimate_effect_padding(font_size: int, config: Config = None) -> float:
+    """估算文本效果（当前主要是描边）带来的额外边缘像素。"""
+    if font_size <= 0:
+        return 0.0
+
+    render_cfg = getattr(config, 'render', None) if config is not None else None
+    disable_border = bool(getattr(render_cfg, 'disable_font_border', False)) if render_cfg is not None else False
+    if disable_border:
+        return 0.0
+
+    stroke_ratio = 0.07
+    if render_cfg is not None:
+        stroke_ratio = _safe_float(getattr(render_cfg, 'stroke_width', stroke_ratio), stroke_ratio)
+    stroke_ratio = max(stroke_ratio, 0.0)
+    if stroke_ratio <= 0.0:
+        return 0.0
+
+    # 与 text_render.py 中 bg_size 计算保持一致
+    return float(max(int(font_size * stroke_ratio), 1))
+
+
 def calc_text_block_dimensions(text: str, is_horizontal: bool, line_spacing: float = 1.0,
-                                config: Config = None, target_lang: str = None) -> tuple:
+                                config: Config = None, target_lang: str = None,
+                                font_size: int = BASE_FONT_SIZE) -> tuple:
     """
-    用 BASE_FONT_SIZE=100 模拟渲染文本块，返回精确的像素尺寸
+    按指定字号模拟渲染文本块，返回精确的像素尺寸
 
     复用后端渲染的尺寸计算逻辑，保证和实际渲染一致。
 
@@ -75,8 +104,10 @@ def calc_text_block_dimensions(text: str, is_horizontal: bool, line_spacing: flo
     Returns:
         (base_width, base_height, n_lines) - 基准尺寸和行/列数
     """
-    base_font = BASE_FONT_SIZE
+    base_font = max(1, int(font_size))
 
+    # 先做特殊符号规范化（省略号等），保证排版和渲染阶段文本一致
+    text = text_render.compact_special_symbols(text)
     # 处理 BR 标记
     text_for_calc = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
 
@@ -128,12 +159,11 @@ def calc_text_block_dimensions(text: str, is_horizontal: bool, line_spacing: flo
 
     return 0, 0, 0
 
-
 def calc_font_from_box(width: float, height: float, text: str, is_horizontal: bool,
                        line_spacing: float = 1.0, config: Config = None,
                        target_lang: str = None) -> int:
     """
-    框 → 字体：用 BASE_FONT_SIZE=100 模拟一次，按比例换算，往下取整
+    框 → 字体：基于真实测量结果二分搜索可容纳的最大字号
 
     Args:
         width: 框宽度（像素）
@@ -150,21 +180,44 @@ def calc_font_from_box(width: float, height: float, text: str, is_horizontal: bo
     if width <= 0 or height <= 0:
         return 1
 
-    base_w, base_h, _ = calc_text_block_dimensions(
-        text, is_horizontal, line_spacing, config, target_lang
-    )
-
-    if base_w <= 0 or base_h <= 0:
+    text = (text or '').strip()
+    if not text:
         return 1
 
-    # 按比例计算，取较小的缩放比
-    scale_w = width / base_w
-    scale_h = height / base_h
-    scale = min(scale_w, scale_h)
+    def _fits(fs: int) -> bool:
+        req_w, req_h, _ = calc_box_from_font(
+            fs,
+            text,
+            is_horizontal,
+            line_spacing,
+            config,
+            target_lang,
+            center=None,
+            angle=0
+        )
+        return req_w <= width and req_h <= height
 
-    # 往下取整
-    font_size = int(BASE_FONT_SIZE * scale)
-    return max(1, font_size)
+    if not _fits(1):
+        return 1
+
+    lo = 1
+    hi = max(1, int(min(width, height)))
+    hi = min(hi, 8192)
+
+    while hi < 8192 and _fits(hi):
+        lo = hi
+        hi = min(hi * 2, 8192)
+        if hi == lo:
+            break
+
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _fits(mid):
+            lo = mid
+        else:
+            hi = mid - 1
+
+    return max(1, int(lo))
 
 
 def calc_box_from_font(font_size: int, text: str, is_horizontal: bool,
@@ -172,7 +225,7 @@ def calc_box_from_font(font_size: int, text: str, is_horizontal: bool,
                        target_lang: str = None, center: tuple = None,
                        angle: float = 0) -> tuple:
     """
-    字体 → 框：用 BASE_FONT_SIZE=100 模拟一次，按比例换算
+    字体 → 框：直接按目标字号测量文本像素尺寸
 
     Args:
         font_size: 字体大小（像素）
@@ -188,8 +241,9 @@ def calc_box_from_font(font_size: int, text: str, is_horizontal: bool,
         如果 center 为 None: (required_width, required_height, n_lines)
         如果 center 不为 None: dst_points (shape: (1, 4, 2)) - 可直接用于绿框
     """
+    font_size = max(1, int(font_size))
     base_w, base_h, n_lines = calc_text_block_dimensions(
-        text, is_horizontal, line_spacing, config, target_lang
+        text, is_horizontal, line_spacing, config, target_lang, font_size=font_size
     )
 
     if base_w <= 0 or base_h <= 0:
@@ -197,10 +251,15 @@ def calc_box_from_font(font_size: int, text: str, is_horizontal: bool,
             return None
         return 0, 0, 0
 
-    # 按比例计算，往上取整（保证能放下）
-    scale = font_size / BASE_FONT_SIZE
-    req_width = math.ceil(base_w * scale)
-    req_height = math.ceil(base_h * scale)
+    # 直接按目标字号测量，不再做基准字号线性缩放
+    req_width = math.ceil(base_w)
+    req_height = math.ceil(base_h)
+
+    # 计入效果边距，避免“字号不变但框太小导致视觉缩字”
+    effect_padding = _estimate_effect_padding(font_size, config)
+    if effect_padding > 0.0:
+        req_width += int(effect_padding * 2.0)
+        req_height += int(effect_padding * 2.0)
 
     # 如果没有提供中心点，返回尺寸
     if center is None:

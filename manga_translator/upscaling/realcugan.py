@@ -217,7 +217,7 @@ class RealCUGANUpscaler(OfflineUpscaler):
             del self.model
             self.model = None
             if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                pass
         logger.info('Real-CUGAN model unloaded')
     
     async def _infer(self, image_batch: List[Image.Image], upscale_ratio: float) -> List[Image.Image]:
@@ -340,7 +340,7 @@ class RealCUGANUpscaler(OfflineUpscaler):
         del tensor
         del output
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            pass
         
         result_img = Image.fromarray(output_np, mode='RGB')
         
@@ -364,7 +364,19 @@ class RealCUGANUpscaler(OfflineUpscaler):
         # Process each tile
         processed_tiles = []
         for i, (tile, pos) in enumerate(tiles_with_pos):
-            processed_tile = self._process_single(tile, device)
+            orig_w, orig_h = tile.size
+            # Pad edge tiles to canonical size so model input shapes stay stable.
+            if orig_w != tile_size or orig_h != tile_size:
+                padded_tile = Image.new('RGB', (tile_size, tile_size), (0, 0, 0))
+                padded_tile.paste(tile, (0, 0))
+                tile_for_infer = padded_tile
+            else:
+                tile_for_infer = tile
+            processed_tile = self._process_single(tile_for_infer, device)
+            expected_w = orig_w * self.scale
+            expected_h = orig_h * self.scale
+            if processed_tile.size != (expected_w, expected_h):
+                processed_tile = processed_tile.crop((0, 0, expected_w, expected_h))
             processed_tiles.append((processed_tile, pos))
         
         # Merge tiles
@@ -378,3 +390,4 @@ class RealCUGANUpscaler(OfflineUpscaler):
         logger.info(f'Merged tiles into final image: {output_img.size[0]}x{output_img.size[1]} (scale={self.scale}x)')
         
         return output_img
+

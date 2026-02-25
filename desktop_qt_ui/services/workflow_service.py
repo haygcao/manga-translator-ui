@@ -958,7 +958,7 @@ def safe_update_large_json_from_text(
         # logger.info(f"创建备份: {os.path.basename(backup_path)}")
 
         # 4. 使用内存优化的方式加载和更新JSON
-        gc.collect()
+        pass
         start_time = time.time()
         
         # 对于大文件使用流式处理以减少内存占用
@@ -1055,8 +1055,7 @@ def safe_update_large_json_from_text(
         # 8. 清理内存
         logger.debug("Clearing source data from memory.")
         del source_data
-        gc.collect()
-        
+        pass
         # 9. 验证文件完整性
         try:
             logger.debug("Verifying integrity of written JSON file.")
@@ -1113,9 +1112,7 @@ def safe_update_large_json_from_text(
     finally:
         # 强制垃圾回收
         logger.debug("Running final garbage collection.")
-        gc.collect()
-
-
+        pass
 def batch_update_directory_translations(
     directory_path: str,
     template_path: str = None,
@@ -1206,6 +1203,7 @@ def batch_update_directory_translations(
     summary = f"批量更新完成 (处理: {successful}/{total}):\n" + "\n".join(results)
     logger.debug(f"Batch update summary:\n{summary}")
     return summary
+
 
 
 

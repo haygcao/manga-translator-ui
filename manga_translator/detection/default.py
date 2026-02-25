@@ -251,8 +251,9 @@ class DefaultDetector(OfflineDetector):
             try:
                 import torch
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    pass
             except Exception:
                 pass
         
         return textlines, raw_mask, bbox_debug_img
+

@@ -29,15 +29,12 @@ class OcrSettings(BaseModel):
     merge_gamma: float = 0.8
     merge_sigma: float = 2.5
     merge_edge_ratio_threshold: float = 0.0
+    merge_special_require_full_wrap: bool = True
 
 class DetectorSettings(BaseModel):
     detector: str = "default"
     detection_size: int = 2048
     text_threshold: float = 0.5
-    det_rotate: bool = False
-    det_auto_rotate: bool = False
-    det_invert: bool = False
-    det_gamma_correct: bool = False
     box_threshold: float = 0.5
     unclip_ratio: float = 2.5
     use_yolo_obb: bool = False

@@ -543,15 +543,62 @@ class ESRGANUpscalerPytorch(OfflineUpscaler):
         assert upscale_ratio <= 4
         ratio = upscale_ratio / 4
         if image_batch :
-            batch = torch.cat([einops.rearrange(torch.from_numpy(np.array(img.convert('RGB'))[:,:,::-1].copy()).float() / 255.0, 'h w c -> 1 c h w') for img in image_batch], dim = 0).to(self.device)
+            tensors = []
+            original_hw = []
+            for img in image_batch:
+                arr = np.array(img.convert('RGB'))[:, :, ::-1].copy()
+                t = einops.rearrange(torch.from_numpy(arr).float() / 255.0, 'h w c -> c h w')
+                tensors.append(t)
+                original_hw.append((t.shape[1], t.shape[2]))
+
+            max_h = max(h for h, _ in original_hw)
+            max_w = max(w for _, w in original_hw)
+            max_h, max_w = self._get_upscale_canvas_hw(max_h, max_w)
+
+            padded_tensors = []
+            for t, (h, w) in zip(tensors, original_hw):
+                pad_h = max_h - h
+                pad_w = max_w - w
+                if pad_h or pad_w:
+                    t = F.pad(t, (0, pad_w, 0, pad_h), mode='replicate')
+                padded_tensors.append(t)
+
+            batch = torch.stack(padded_tensors, dim=0).to(self.device)
             with torch.no_grad() :
                 ret = self.model(batch)
             ret: torch.Tensor
-            ret: List[Image.Image] = [Image.fromarray((einops.rearrange(img.clip(0, 1), 'c h w -> h w c').cpu().numpy()[:,:,::-1].copy() * 255.0).astype(np.uint8)) for img in ret]
-            ret = [img.resize(size = (int(round(img.size[0] * ratio)), int(round(img.size[1] * ratio))), resample = Image.Resampling.BILINEAR) for img in ret]
-            return ret
+            out_images: List[Image.Image] = []
+            for out_t, (h, w) in zip(ret, original_hw):
+                out_t = out_t[:, : h * 4, : w * 4]
+                out_img = Image.fromarray((einops.rearrange(out_t.clip(0, 1), 'c h w -> h w c').cpu().numpy()[:, :, ::-1].copy() * 255.0).astype(np.uint8))
+                out_img = out_img.resize(
+                    size=(int(round(out_img.size[0] * ratio)), int(round(out_img.size[1] * ratio))),
+                    resample=Image.Resampling.BILINEAR,
+                )
+                out_images.append(out_img)
+            return out_images
         else :
             return []
+
+    def _get_upscale_canvas_hw(self, h: int, w: int) -> tuple[int, int]:
+        """
+        Normalize PyTorch ESRGAN input shape on GPU.
+        Env vars:
+        - MANGA_UPSCALE_FIXED_SIZE: force min H/W when > 0
+        - MANGA_UPSCALE_SIZE_BUCKET: round H/W up to this bucket on GPU (default: 128)
+        """
+        if not (isinstance(self.device, str) and self.device.startswith('cuda')):
+            return int(h), int(w)
+        fixed_size = int(os.environ.get("MANGA_UPSCALE_FIXED_SIZE", "0") or 0)
+        if fixed_size > 0:
+            return max(int(h), fixed_size), max(int(w), fixed_size)
+        bucket = int(os.environ.get("MANGA_UPSCALE_SIZE_BUCKET", "128") or 128)
+        if bucket <= 1:
+            return int(h), int(w)
+        return (
+            bucket * ((int(h) + bucket - 1) // bucket),
+            bucket * ((int(w) + bucket - 1) // bucket),
+        )
 
 def test() :
     sd = torch.load('../../models/upscaling/esrgan-pytorch/4xESRGAN.pth')

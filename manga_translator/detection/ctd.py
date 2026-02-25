@@ -187,7 +187,7 @@ class ComicTextDetector(OfflineDetector):
             try:
                 import torch
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    pass
             except Exception:
                 pass
         
@@ -199,3 +199,4 @@ class ComicTextDetector(OfflineDetector):
         #     mask_refined = refine_undetected_mask(image, mask, mask_refined, blk_list, refine_mode=refine_mode)
 
         # return blk_list, mask, mask_refined
+

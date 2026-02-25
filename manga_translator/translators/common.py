@@ -3,6 +3,10 @@ import time
 import asyncio
 import json
 import contextlib
+import inspect
+import textwrap
+import sys
+import shutil
 from typing import Callable, Awaitable, Optional
 from typing import List, Tuple, Dict, Any
 from abc import abstractmethod
@@ -163,6 +167,10 @@ class AsyncOpenAICurlCffi:
             # 添加其他参数
             data.update(kwargs)
 
+            stream_mode = bool(data.get("stream"))
+            if stream_mode:
+                return self._create_stream(url, data, headers)
+
             # 发送异步请求
             response = await self.parent.session.post(
                 url,
@@ -188,6 +196,38 @@ class AsyncOpenAICurlCffi:
 
             # 转换为类似 OpenAI SDK 的响应对象
             return _OpenAIResponse(result)
+
+        def _create_stream(self, url, data, headers):
+            """SSE 流式请求，返回异步可迭代对象。"""
+
+            async def _gen():
+                async with self.parent.session.stream(
+                    "POST",
+                    url,
+                    json=data,
+                    headers=headers,
+                    timeout=self.parent.stream_timeout
+                ) as response:
+                    if response.status_code != 200:
+                        text = await response.atext()
+                        raise Exception(f"API request failed with status {response.status_code}: {text[:500] if text else '(empty)'}")
+
+                    async for raw_line in response.aiter_lines():
+                        if isinstance(raw_line, (bytes, bytearray)):
+                            raw_line = raw_line.decode("utf-8", errors="ignore")
+                        line = str(raw_line or "").strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            chunk_data = json.loads(payload)
+                        except Exception:
+                            continue
+                        yield _OpenAIStreamChunk(chunk_data)
+
+            return _gen()
 
     class Chat:
         """聊天接口"""
@@ -249,7 +289,8 @@ class AsyncOpenAICurlCffi:
             return _ModelsResponse(result)
 
     def __init__(self, api_key, base_url="https://api.openai.com/v1",
-                 default_headers=None, http_client=None, impersonate="chrome110", timeout=30):
+                 default_headers=None, http_client=None, impersonate="chrome110",
+                 timeout=600, stream_timeout=300):
         """
         初始化异步客户端
 
@@ -259,12 +300,14 @@ class AsyncOpenAICurlCffi:
             default_headers: 默认请求头
             http_client: 忽略此参数（为了兼容性）
             impersonate: 模拟的浏览器类型 (chrome110, chrome120, safari15_5 等)
-            timeout: 请求超时时间（秒）
+            timeout: 非流式请求超时时间（秒）
+            stream_timeout: 流式 HTTP 请求超时时间（秒）
         """
         self.api_key = api_key
         self.base_url = base_url.rstrip('/')
         self.default_headers = default_headers or {}
         self.timeout = timeout
+        self.stream_timeout = stream_timeout
         self.impersonate = impersonate
 
         # 检测是否是本地地址（本地地址不需要 impersonate，且可能导致超时）
@@ -339,6 +382,28 @@ class _OpenAIResponse:
             usage_data.get('prompt_tokens', 0),
             usage_data.get('completion_tokens', 0)
         )
+
+
+class _OpenAIStreamChunk:
+    """模拟 OpenAI SDK stream chunk 对象（最小字段集）"""
+
+    class Choice:
+        class Delta:
+            def __init__(self, content):
+                self.content = content
+
+        def __init__(self, delta_content, finish_reason):
+            self.delta = self.Delta(delta_content)
+            self.finish_reason = finish_reason
+
+    def __init__(self, data):
+        choices = data.get("choices", []) if isinstance(data, dict) else []
+        self.choices = []
+        for c in choices:
+            delta = c.get("delta", {}) if isinstance(c, dict) else {}
+            delta_content = delta.get("content", "") if isinstance(delta, dict) else ""
+            finish_reason = c.get("finish_reason") if isinstance(c, dict) else None
+            self.choices.append(self.Choice(delta_content, finish_reason))
 
 
 class _ModelsResponse:
@@ -468,6 +533,10 @@ class AsyncGeminiCurlCffi:
             # 添加其他参数
             data.update(kwargs)
 
+            stream_mode = bool(data.pop("stream", False))
+            if stream_mode:
+                return self._generate_content_stream(url, data, request_headers)
+
             # 发送异步请求
             response = await self.parent.session.post(
                 url,
@@ -501,6 +570,46 @@ class AsyncGeminiCurlCffi:
 
             # 转换为类似 Gemini SDK 的响应对象
             return _GeminiResponse(result)
+
+        async def generate_content_stream(self, model, contents, config=None, **kwargs):
+            """兼容 google-genai 的流式接口"""
+            generation_config = config or kwargs.pop("generation_config", None)
+            return await self.generate_content(
+                model=model,
+                contents=contents,
+                generation_config=generation_config,
+                stream=True,
+                **kwargs
+            )
+
+        def _generate_content_stream(self, url, data, headers):
+            async def _gen():
+                stream_url = f"{url}?alt=sse" if "?" not in url else f"{url}&alt=sse"
+                async with self.parent.session.stream(
+                    "POST",
+                    stream_url,
+                    json=data,
+                    headers=headers,
+                    timeout=self.parent.stream_timeout
+                ) as response:
+                    if response.status_code != 200:
+                        text = await response.atext()
+                        raise Exception(f"Gemini API request failed with status {response.status_code}: {text[:500] if text else '(empty)'}")
+
+                    async for raw_line in response.aiter_lines():
+                        if isinstance(raw_line, (bytes, bytearray)):
+                            raw_line = raw_line.decode("utf-8", errors="ignore")
+                        line = str(raw_line or "").strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        try:
+                            chunk_data = json.loads(payload)
+                        except Exception:
+                            continue
+                        yield _GeminiResponse(chunk_data)
+
+            return _gen()
 
         async def list(self):
             """获取可用模型列表"""
@@ -550,7 +659,7 @@ class AsyncGeminiCurlCffi:
             return _GeminiModelsResponse(result)
 
     def __init__(self, api_key, base_url="https://generativelanguage.googleapis.com",
-                 default_headers=None, impersonate="chrome110", timeout=300):
+                 default_headers=None, impersonate="chrome110", timeout=600, stream_timeout=300):
         """
         初始化异步客户端
 
@@ -559,12 +668,14 @@ class AsyncGeminiCurlCffi:
             base_url: API 基础 URL
             default_headers: 默认请求头
             impersonate: 模拟的浏览器类型 (chrome110, chrome120, safari15_5 等)
-            timeout: 请求超时时间（秒）
+            timeout: 非流式请求超时时间（秒）
+            stream_timeout: 流式 HTTP 请求超时时间（秒）
         """
         self.api_key = api_key
         self.base_url = base_url.rstrip('/')
         self.default_headers = default_headers or {}
         self.timeout = timeout
+        self.stream_timeout = stream_timeout
         self.impersonate = impersonate
 
         # 检测是否是本地地址（本地地址不需要 impersonate，且可能导致超时）
@@ -611,7 +722,7 @@ class _GeminiResponse:
         class Content:
             class Part:
                 def __init__(self, text):
-                    self.text = text
+                    self.text = text if isinstance(text, str) else (str(text) if text is not None else "")
 
             def __init__(self, parts_data):
                 parts_data = parts_data or []
@@ -711,6 +822,13 @@ def validate_gemini_response(response, logger=None) -> bool:
         if logger:
             logger.error(error_msg)
         raise Exception("Gemini API响应缺少text属性")
+    
+    # text 可能存在但为 None（如安全拦截/空回），后续 .strip() 会崩溃
+    if getattr(response, 'text', None) is None:
+        error_msg = "Gemini returned empty content (finish_reason: None)"
+        if logger:
+            logger.error(error_msg)
+        raise Exception(error_msg)
     
     return True
 
@@ -941,6 +1059,12 @@ class CommonTranslator(InfererModule):
         self._max_total_attempts = -1  # 全局最大尝试次数
         self._cancel_check_callback = None  # 取消检查回调
         self._custom_api_params = {}  # 存储自定义API参数
+        self._stream_inline_last_len = 0
+        self._stream_inline_buffer = ""
+        self._stream_json_seen: Dict[int, str] = {}
+        self._stream_term_seen: Dict[Tuple[str, str], str] = {}
+        self._stream_result_header_printed = False
+        self._stream_result_pairs_printed = False
 
     def _normalize_retry_attempts(self, attempts: Any) -> int:
         """
@@ -992,6 +1116,21 @@ class CommonTranslator(InfererModule):
         except Exception as e:
             self.logger.error(f"加载自定义API参数配置失败: {e}")
             self._custom_api_params = {}
+
+    def _configure_custom_api_params(self, args) -> bool:
+        """
+        根据配置决定是否加载自定义 API 参数，并统一日志输出格式。
+        返回值表示是否启用。
+        """
+        use_custom_params = getattr(args, 'use_custom_api_params', False)
+        if not use_custom_params:
+            self._custom_api_params = {}
+            return False
+
+        self._load_custom_api_params()
+        if self._custom_api_params:
+            self.logger.info(f"已启用自定义API参数: {self._custom_api_params}")
+        return True
     
     def set_cancel_check_callback(self, callback):
         """设置取消检查回调"""
@@ -1046,6 +1185,147 @@ class CommonTranslator(InfererModule):
             asyncio.sleep(seconds),
             poll_interval=min(poll_interval, max(seconds, 0.05)),
         )
+
+    async def _run_unified_stream_transport(
+        self,
+        *,
+        create_stream: Callable[[], Any],
+        extract_text: Callable[[Any], Any],
+        extract_finish_reason: Optional[Callable[[Any], Any]] = None,
+        on_chunk: Optional[Callable[[str, str], None]] = None,
+        on_cancel: Optional[Callable[[], Awaitable[None] | None]] = None,
+        poll_interval: float = 0.2,
+        sync_iter_in_thread: bool = False,
+        first_chunk_timeout: float = 300.0,
+        idle_timeout: float = 300.0,
+    ) -> Tuple[str, Any]:
+        """
+        通用流式传输层：
+        - OpenAI async stream（异步迭代）
+        - Gemini stream（同步迭代，放入 to_thread 消费）
+        返回：(聚合后的完整文本, 最后一次 finish_reason)
+        """
+        def _normalize_stream_piece(piece_text: str, current_text: str) -> str:
+            """
+            兼容“增量块/累计块/重复块”三种常见流格式，尽量只返回新增部分。
+            """
+            if not piece_text:
+                return ""
+            if not current_text:
+                return piece_text
+
+            # 标准累计块：piece = current + delta
+            if piece_text.startswith(current_text):
+                return piece_text[len(current_text):]
+
+            # 回退/截断块：piece 只是 current 的前缀（且不是极短 token），忽略
+            if len(piece_text) >= 16 and current_text.startswith(piece_text):
+                return ""
+
+            # 某些服务会把 current 放在 piece 中间，取最后一次出现后的尾部
+            pos = piece_text.rfind(current_text)
+            if pos != -1:
+                return piece_text[pos + len(current_text):]
+
+            # 明确重发：较长片段且 current 已以该片段结尾，忽略
+            if len(piece_text) >= 16 and current_text.endswith(piece_text):
+                return ""
+
+            # 处理部分重叠：current 尾部 + piece 头部
+            max_overlap = min(len(piece_text), len(current_text))
+            for overlap in range(max_overlap, 0, -1):
+                if current_text.endswith(piece_text[:overlap]):
+                    return piece_text[overlap:]
+
+            # 无法判断关系时按增量处理（保守）
+            return piece_text
+
+        text_parts: List[str] = []
+        last_finish_reason = None
+
+        if sync_iter_in_thread:
+            def _consume_sync_stream():
+                local_parts: List[str] = []
+                local_finish = None
+                stream_obj = create_stream()
+                for chunk in stream_obj:
+                    piece = extract_text(chunk)
+                    if piece:
+                        piece_text = str(piece)
+                        current_text = ''.join(local_parts)
+                        normalized_piece = _normalize_stream_piece(piece_text, current_text)
+                        if normalized_piece:
+                            local_parts.append(normalized_piece)
+                        if on_chunk:
+                            on_chunk(normalized_piece, ''.join(local_parts))
+                    if extract_finish_reason:
+                        finish = extract_finish_reason(chunk)
+                        if finish is not None:
+                            local_finish = finish
+                return ''.join(local_parts), local_finish
+
+            return await self._await_with_cancel_polling(
+                asyncio.to_thread(_consume_sync_stream),
+                poll_interval=poll_interval,
+                on_cancel=on_cancel,
+            )
+
+        stream_obj = create_stream()
+        while inspect.isawaitable(stream_obj):
+            stream_obj = await self._await_with_cancel_polling(
+                stream_obj,
+                poll_interval=poll_interval,
+                on_cancel=on_cancel,
+            )
+
+        try:
+            aiter = stream_obj.__aiter__()
+            got_first_chunk = False
+            while True:
+                chunk_timeout = first_chunk_timeout if not got_first_chunk else idle_timeout
+                try:
+                    chunk = await self._await_with_cancel_polling(
+                        asyncio.wait_for(aiter.__anext__(), timeout=chunk_timeout),
+                        poll_interval=poll_interval,
+                        on_cancel=on_cancel,
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError as timeout_error:
+                    timeout_type = "首包" if not got_first_chunk else "流空闲"
+                    raise TimeoutError(f"流式{timeout_type}超时（{chunk_timeout:.0f}s）") from timeout_error
+
+                got_first_chunk = True
+                self._check_cancelled()
+                piece = extract_text(chunk)
+                if piece:
+                    piece_text = str(piece)
+                    current_text = ''.join(text_parts)
+                    normalized_piece = _normalize_stream_piece(piece_text, current_text)
+                    if normalized_piece:
+                        text_parts.append(normalized_piece)
+                    if on_chunk:
+                        on_chunk(normalized_piece, ''.join(text_parts))
+                if extract_finish_reason:
+                    finish = extract_finish_reason(chunk)
+                    if finish is not None:
+                        last_finish_reason = finish
+        except asyncio.CancelledError:
+            if on_cancel:
+                cleanup_result = on_cancel()
+                if asyncio.iscoroutine(cleanup_result):
+                    with contextlib.suppress(Exception):
+                        await cleanup_result
+            raise
+        finally:
+            close_fn = getattr(stream_obj, "aclose", None)
+            if callable(close_fn):
+                with contextlib.suppress(Exception):
+                    close_ret = close_fn()
+                    if asyncio.iscoroutine(close_ret):
+                        await close_ret
+
+        return ''.join(text_parts), last_finish_reason
 
     def _get_retry_temperature(self, base_temperature: float, retry_attempt: int, retry_reason: str = "") -> float:
         """
@@ -1533,6 +1813,158 @@ class CommonTranslator(InfererModule):
         self.attempts = self._normalize_retry_attempts(raw_attempts)
         self._max_total_attempts = self._resolve_max_total_attempts()
 
+    def _emit_stream_lines(self, prefix: str, text: str, width: int = 100) -> None:
+        """将流式增量按固定宽度换行输出，避免命令行单行过长被截断。"""
+        content = (text or "").strip()
+        if not content:
+            return
+        for line in textwrap.wrap(content, width=width, break_long_words=True, break_on_hyphens=False):
+            self.logger.info(f"{prefix} {line}")
+
+    def _reset_stream_json_preview(self) -> None:
+        self._stream_json_seen = {}
+        self._stream_term_seen = {}
+        self._stream_result_header_printed = False
+        self._stream_result_pairs_printed = False
+
+    def _has_stream_result_pairs(self) -> bool:
+        return bool(self._stream_result_pairs_printed)
+
+    def _emit_terms_from_list(self, new_terms: List[Dict[str, str]]) -> None:
+        """统一输出术语提取结果；按(原文,译文)去重并优先保留带分类版本。"""
+        if not new_terms:
+            return
+        for term in new_terms:
+            if not isinstance(term, dict):
+                continue
+            term_o = str(term.get("original") or term.get("src") or "").strip()
+            term_t = str(term.get("translation") or term.get("dst") or "").strip()
+            term_c = str(term.get("category") or "").strip()
+            if not term_o or not term_t:
+                continue
+
+            key = (term_o, term_t)
+            prev_category = self._stream_term_seen.get(key)
+            if prev_category is not None:
+                if prev_category == term_c:
+                    continue
+                if prev_category and not term_c:
+                    continue
+            # 无分类先缓存，不立即输出；后续若拿到分类再输出，避免重复两条
+            if not term_c and prev_category is None:
+                self._stream_term_seen[key] = ""
+                continue
+            self._stream_term_seen[key] = term_c
+
+            if term_c:
+                self.logger.info(f"[TERM] {term_o} -> {term_t} ({term_c})")
+            else:
+                self.logger.info(f"[TERM] {term_o} -> {term_t}")
+
+    def _emit_stream_json_preview(self, prefix: str, full_text: str, source_texts: Optional[List[str]] = None) -> None:
+        """
+        从流式累计文本中提取已闭合的 {"id": n, "translation": "..."}，按 id 去重输出。
+        这样可避免直接打印原始 JSON 分片导致的乱码和重复刷屏。
+        """
+        if not full_text:
+            return
+        pattern = r'"id"\s*:\s*(\d+)\s*,\s*"translation"\s*:\s*"((?:\\.|[^"\\])*)"'
+        for m in re.finditer(pattern, full_text, flags=re.DOTALL):
+            try:
+                tid = int(m.group(1))
+            except Exception:
+                continue
+            raw_text = m.group(2)
+            try:
+                decoded_text = json.loads(f'"{raw_text}"')
+            except Exception:
+                decoded_text = raw_text.replace('\\"', '"').replace("\\n", "\n")
+            if self._stream_json_seen.get(tid) == decoded_text:
+                continue
+            self._stream_json_seen[tid] = decoded_text
+            if not self._stream_result_header_printed:
+                self.logger.info("--- Translation Results ---")
+                self._stream_result_header_printed = True
+            if source_texts and 1 <= tid <= len(source_texts):
+                self.logger.info(f"{source_texts[tid - 1]} -> {decoded_text}")
+            else:
+                self.logger.info(f"{prefix} #{tid}: {decoded_text}")
+            self._stream_result_pairs_printed = True
+
+        term_pattern = r'"original"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"translation"\s*:\s*"((?:\\.|[^"\\])*)"(?:\s*,\s*"category"\s*:\s*"((?:\\.|[^"\\])*)")?'
+        stream_terms: List[Dict[str, str]] = []
+        for tm in re.finditer(term_pattern, full_text, flags=re.DOTALL):
+            raw_o, raw_t, raw_c = tm.group(1), tm.group(2), tm.group(3) or ""
+            try:
+                term_o = json.loads(f'"{raw_o}"')
+            except Exception:
+                term_o = raw_o
+            try:
+                term_t = json.loads(f'"{raw_t}"')
+            except Exception:
+                term_t = raw_t
+            try:
+                term_c = json.loads(f'"{raw_c}"') if raw_c else ""
+            except Exception:
+                term_c = raw_c
+            stream_terms.append({"original": str(term_o), "translation": str(term_t), "category": str(term_c)})
+        if stream_terms:
+            if not self._stream_result_header_printed:
+                self.logger.info("--- Translation Results ---")
+                self._stream_result_header_printed = True
+            self._emit_terms_from_list(stream_terms)
+
+    def _update_stream_inline(self, prefix: str, delta_text: str) -> None:
+        """按增量流内容刷新；遇到换行符时真正换行输出。"""
+        if not delta_text:
+            return
+        self._stream_inline_buffer += str(delta_text)
+
+        # 输出完整行（包含模型返回的换行）
+        while "\n" in self._stream_inline_buffer:
+            line_text, rest = self._stream_inline_buffer.split("\n", 1)
+            self._stream_inline_buffer = rest
+            line = f"{prefix} {line_text}"
+            pad = max(0, self._stream_inline_last_len - len(line))
+            try:
+                sys.stdout.write("\r" + line + (" " * pad) + "\n")
+                sys.stdout.flush()
+            except Exception:
+                self._emit_stream_lines(prefix, line_text)
+            self._stream_inline_last_len = 0
+
+        # 没有换行时做同一行刷新
+        text = self._stream_inline_buffer
+        if not text:
+            return
+        try:
+            term_width = shutil.get_terminal_size(fallback=(120, 24)).columns
+        except Exception:
+            term_width = 120
+        # 预留少量边距，避免贴边抖动
+        available = max(20, term_width - len(prefix) - 2)
+        tail = text[-available:]
+        line = f"{prefix} {tail}"
+        pad = max(0, self._stream_inline_last_len - len(line))
+        try:
+            sys.stdout.write("\r" + line + (" " * pad))
+            sys.stdout.flush()
+            self._stream_inline_last_len = len(line)
+        except Exception:
+            # 终端不可写时退回普通日志
+            self._emit_stream_lines(prefix, tail)
+
+    def _finish_stream_inline(self) -> None:
+        """结束同一行刷新，补一个换行。"""
+        if self._stream_inline_last_len > 0 or self._stream_inline_buffer:
+            try:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            except Exception:
+                pass
+            self._stream_inline_last_len = 0
+            self._stream_inline_buffer = ""
+
     def supports_languages(self, from_lang: str, to_lang: str, fatal: bool = False) -> bool:
         supported_src_languages = ['auto'] + list(self._LANGUAGE_CODE_MAP)
         supported_tgt_languages = list(self._LANGUAGE_CODE_MAP)
@@ -1839,16 +2271,56 @@ def parse_hq_response(result_text: str) -> Tuple[List[str], List[Dict[str, str]]
     if not result_text:
         return [], []
 
-    # 1. 清理Markdown
-    if "```" in result_text:
-        code_block_match = re.search(r'```(?:json)?\s*\n(.*?)\n```', result_text, re.DOTALL)
-        if code_block_match:
-            result_text = code_block_match.group(1).strip()
-        else:
-            lines = result_text.split('\n')
-            if lines[0].strip().startswith("```"): lines = lines[1:]
-            if lines and lines[-1].strip() == "```": lines = lines[:-1]
-            result_text = "\n".join(lines).strip()
+    # 1. 从原始文本中收集候选 JSON 片段（兼容流式重复块）
+    def _extract_balanced_json_candidates(text: str) -> List[str]:
+        candidates = []
+        stack = []
+        start = -1
+        in_str = False
+        escape = False
+        for i, ch in enumerate(text):
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == '\\':
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+                continue
+            if ch in '{[':
+                if not stack:
+                    start = i
+                stack.append(ch)
+            elif ch in '}]' and stack:
+                top = stack[-1]
+                if (top == '{' and ch == '}') or (top == '[' and ch == ']'):
+                    stack.pop()
+                    if not stack and start >= 0:
+                        candidates.append(text[start:i + 1].strip())
+                        start = -1
+                else:
+                    stack = []
+                    start = -1
+        return candidates
+
+    raw_text = result_text
+    candidate_texts: List[str] = []
+
+    if "```" in raw_text:
+        fenced = re.findall(r'```(?:json)?\s*\n(.*?)\n```', raw_text, flags=re.DOTALL)
+        candidate_texts.extend([x.strip() for x in fenced if x and x.strip()])
+        lines = raw_text.split('\n')
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped_text = "\n".join(lines).strip()
+        if stripped_text:
+            candidate_texts.append(stripped_text)
+        result_text = stripped_text or raw_text
 
     # 2. 查找JSON起始 (清理前缀)
     first_bracket = result_text.find('[')
@@ -1860,66 +2332,97 @@ def parse_hq_response(result_text: str) -> Tuple[List[str], List[Dict[str, str]]
     
     if json_start > 0:
         result_text = result_text[json_start:].strip()
+    if result_text:
+        candidate_texts.append(result_text)
+
+    # 原文中所有平衡 JSON 片段也作为候选
+    candidate_texts.extend(_extract_balanced_json_candidates(raw_text))
+
+    # 去重且保序
+    dedup_candidates = []
+    seen_candidates = set()
+    for c in candidate_texts:
+        if not c:
+            continue
+        key = c.strip()
+        if key in seen_candidates:
+            continue
+        seen_candidates.add(key)
+        dedup_candidates.append(key)
 
     translations = []
     new_terms = []
     
-    parsed_json = None
-    
-    # === 策略1: 标准 JSON 解析 ===
-    try:
-        parsed_json = json.loads(result_text)
-    except json.JSONDecodeError:
-        # === 策略2: 宽松 JSON5 解析 ===
+    def _parse_candidate(candidate_text: str):
+        parsed = None
         try:
-            import json5
-            parsed_json = json5.loads(result_text)
-            logger.info("Using json5 for parsing")
-        except (ImportError, Exception):
-            parsed_json = None
+            parsed = json.loads(candidate_text)
+        except json.JSONDecodeError:
+            try:
+                import json5
+                parsed = json5.loads(candidate_text)
+                logger.info("Using json5 for parsing")
+            except (ImportError, Exception):
+                parsed = None
+        if parsed is None:
+            return None
 
-    # 如果JSON解析成功，提取数据
-    if parsed_json is not None:
+        out_trans = []
+        out_terms = []
         try:
-            # 情况1: Object format {"translations": [...], "new_terms": [...]}
-            if isinstance(parsed_json, dict):
-                # 提取翻译
-                trans_list = parsed_json.get("translations")
-                if not trans_list and "t" in parsed_json: trans_list = parsed_json.get("t") # 兼容简写
-                if not trans_list: trans_list = [] # 确保不为None
+            if isinstance(parsed, dict):
+                trans_list = parsed.get("translations")
+                if not trans_list and "t" in parsed:
+                    trans_list = parsed.get("t")
+                if not trans_list:
+                    trans_list = []
 
                 if isinstance(trans_list, list):
                     if trans_list and isinstance(trans_list[0], dict):
-                         # Sort by ID if possible
-                        try: trans_list.sort(key=lambda x: int(x.get('id', 0)))
-                        except: pass
+                        try:
+                            trans_list.sort(key=lambda x: int(x.get('id', 0)))
+                        except Exception:
+                            pass
                         for item in trans_list:
                             text = item.get('translation') or item.get('text') or list(item.values())[0]
-                            translations.append(str(text) if text is not None else "")
+                            out_trans.append(str(text) if text is not None else "")
                     else:
-                        translations = [str(x) for x in trans_list]
-                
-                # 提取术语
-                terms_list = parsed_json.get("new_terms") or parsed_json.get("glossary")
-                if isinstance(terms_list, list):
-                    new_terms = terms_list
-            
-            # 情况2: Array format [{"id":..., "translation":...}]
-            elif isinstance(parsed_json, list):
-                if parsed_json:
-                    if isinstance(parsed_json[0], dict):
-                        try: parsed_json.sort(key=lambda x: int(x.get('id', 0)))
-                        except: pass
-                        for item in parsed_json:
-                            text = item.get('translation') or item.get('text') or list(item.values())[0]
-                            translations.append(str(text) if text is not None else "")
-                    else:
-                        translations = [str(x) for x in parsed_json]
-            
-            return translations, new_terms
+                        out_trans = [str(x) for x in trans_list]
 
-        except Exception as e:
-             logger.warning(f"JSON structure parsing failed, falling back to regex: {e}")
+                terms_list = parsed.get("new_terms") or parsed.get("glossary")
+                if isinstance(terms_list, list):
+                    out_terms = terms_list
+            elif isinstance(parsed, list):
+                if parsed:
+                    if isinstance(parsed[0], dict):
+                        try:
+                            parsed.sort(key=lambda x: int(x.get('id', 0)))
+                        except Exception:
+                            pass
+                        for item in parsed:
+                            text = item.get('translation') or item.get('text') or list(item.values())[0]
+                            out_trans.append(str(text) if text is not None else "")
+                    else:
+                        out_trans = [str(x) for x in parsed]
+            return out_trans, out_terms
+        except Exception:
+            return None
+
+    # 优先选择“翻译条目数最多”的候选；同分时选术语更多
+    best = None
+    best_score = (-1, -1)
+    for c in dedup_candidates:
+        parsed_result = _parse_candidate(c)
+        if not parsed_result:
+            continue
+        cand_trans, cand_terms = parsed_result
+        score = (len(cand_trans), len(cand_terms))
+        if score > best_score:
+            best_score = score
+            best = (cand_trans, cand_terms)
+
+    if best is not None:
+        return best[0], best[1]
 
     # === 策略3: 正则表达式暴力提取 ===
     logger.warning("JSON parsing failed, falling back to Regex extraction")
@@ -2090,7 +2593,6 @@ def merge_glossary_to_file(file_path: str, new_terms: List[Dict[str, str]]) -> b
                     "translation": translation
                 })
                 modified = True
-                print(f"[Glossary] Added new term: {original} -> {translation} ({target_key})")
         
         if modified:
             # 确保存储目录存在

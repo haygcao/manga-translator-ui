@@ -500,7 +500,7 @@ class ModelPaddleOCR(OfflineOCR):
                     widths.append(new_w)
                 
                 # 打包成 batch
-                max_width = 4 * (max(widths) + 7) // 4
+                max_width = self._get_ocr_canvas_width(widths, base_align=4)
                 batch_region = np.zeros((N, text_height, max_width, 3), dtype=np.uint8)
                 
                 for i, region_resized in enumerate(resized_regions):
@@ -597,9 +597,11 @@ class ModelPaddleOCR(OfflineOCR):
             
             region_resized = cv2.resize(region_rgb, (new_w, text_height), interpolation=cv2.INTER_AREA)
             
-            # 转换为 tensor
-            image_tensor = (torch.from_numpy(region_resized).float() - 127.5) / 127.5
-            image_tensor = einops.rearrange(image_tensor, 'H W C -> 1 C H W')
+            canvas_w = self._get_ocr_canvas_width([new_w], base_align=4)
+            batch_region = np.zeros((1, text_height, canvas_w, 3), dtype=np.uint8)
+            batch_region[0, :, :new_w, :] = region_resized
+            image_tensor = (torch.from_numpy(batch_region).float() - 127.5) / 127.5
+            image_tensor = einops.rearrange(image_tensor, 'N H W C -> N C H W')
             
             # GPU 加速
             if self.use_gpu:
@@ -769,3 +771,4 @@ class ModelPaddleOCRThai(ModelPaddleOCR):
     """Thai OCR"""
     def __init__(self, *args, **kwargs):
         super().__init__(model_type='thai', *args, **kwargs)
+

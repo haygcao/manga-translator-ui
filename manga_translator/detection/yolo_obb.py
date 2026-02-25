@@ -15,12 +15,12 @@ from ..utils import Quadrilateral, build_det_rearrange_plan, det_rearrange_patch
 
 class YOLOOBBDetector(OfflineDetector):
     """YOLO OBB 检测器 - 基于ONNX Runtime"""
-    _MODEL_FILENAME = 'ysgyolo_1.2_OS1.0_1600.onnx'
+    _MODEL_FILENAME = 'yolo26obb.onnx'
     
     _MODEL_MAPPING = {
         'model': {
-            'url': 'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/ysgyolo_1.2_OS1.0_1600.onnx',
-            'hash': '94d4c1fd89f26b15e85c30484843ab809bdf1ff8932f07cc450ea289e039b0f4',
+            'url': 'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/yolo26obb.onnx',
+            'hash': 'a7c3b9eaaa87f3afb2df331abb087a1047637c8110fb3319fd269cf28c81f012',
             'file': _MODEL_FILENAME,
         }
     }
@@ -29,11 +29,21 @@ class YOLOOBBDetector(OfflineDetector):
         os.makedirs(self.model_dir, exist_ok=True)
         super().__init__(*args, **kwargs)
         
-        # 类别列表（不包括other）
+        # 类别列表（主类）
         self.classes = ['balloon', 'qipao', 'shuqing', 'changfangtiao', 'hengxie']
+        # yolo26obb 额外类别映射：other 仅用于模型辅助合并（包裹关系）
+        self.class_id_to_label = {
+            0: 'balloon',
+            1: 'qipao',
+            2: 'shuqing',
+            3: 'changfangtiao',
+            4: 'hengxie',
+            5: 'other',
+        }
         # 使用 1600 作为默认推理尺寸（会在预处理阶段 letterbox 到方形输入）
         self.input_size = 1600
         self.using_cuda = False  # 初始化标志
+        self.nms_iou_threshold = 0.6
     
     async def _load(self, device: str):
         """加载ONNX模型"""
@@ -401,18 +411,25 @@ class YOLOOBBDetector(OfflineDetector):
         if len(predictions) == 0:
             return np.array([]), np.array([]), np.array([])
         
-        # YOLO OBB 输出格式: [cx, cy, w, h, class0, class1, ..., classN, angle]
-        nc = len(self.classes)
-        box = predictions[:, :4]  # [cx, cy, w, h]
-        cls = predictions[:, 4:4+nc]  # 类别分数
-        angle = predictions[:, -1:]  # angle（最后一列）
-        
-        # 获取最高置信度的类别
-        conf = np.max(cls, axis=1, keepdims=True)
-        j = np.argmax(cls, axis=1, keepdims=True).astype(float)
-        
-        # 组合：[box, conf, class_id, angle]
-        x = np.concatenate((box, conf, j, angle), axis=1)
+        # 支持两种输出格式：
+        # 1) 新格式（yolo26obb）: [cx, cy, w, h, conf, class_id, angle]
+        # 2) 旧格式: [cx, cy, w, h, class0..classN, angle]
+        if predictions.shape[1] == 7:
+            box = predictions[:, :4]
+            conf = predictions[:, 4:5]
+            j = predictions[:, 5:6]
+            angle = predictions[:, 6:7]
+            x = np.concatenate((box, conf, j, angle), axis=1)
+        else:
+            nc = len(self.classes)
+            box = predictions[:, :4]  # [cx, cy, w, h]
+            cls = predictions[:, 4:4+nc]  # 类别分数
+            angle = predictions[:, -1:]  # angle（最后一列）
+            # 获取最高置信度的类别
+            conf = np.max(cls, axis=1, keepdims=True)
+            j = np.argmax(cls, axis=1, keepdims=True).astype(float)
+            # 组合：[box, conf, class_id, angle]
+            x = np.concatenate((box, conf, j, angle), axis=1)
         
         # 应用置信度阈值
         x = x[conf.flatten() > conf_threshold]
@@ -442,6 +459,16 @@ class YOLOOBBDetector(OfflineDetector):
         boxes_xywhr = np.concatenate((x[:, :4], x[:, -1:]), axis=-1)
         scores = x[:, 4]
         class_ids = x[:, 5].astype(int)
+
+        # 过滤掉无效类别：允许 yolo26obb 的 other=5 进入后续“模型辅助合并”链路
+        valid_class_ids = np.array(list(self.class_id_to_label.keys()), dtype=class_ids.dtype)
+        valid_cls_mask = np.isin(class_ids, valid_class_ids)
+        if not np.all(valid_cls_mask):
+            drop_count = int(np.size(valid_cls_mask) - np.sum(valid_cls_mask))
+            self.logger.info(f"YOLO OBB过滤无效类别: 移除 {drop_count} 个框")
+            boxes_xywhr = boxes_xywhr[valid_cls_mask]
+            scores = scores[valid_cls_mask]
+            class_ids = class_ids[valid_cls_mask]
         
         # 转换为角点格式
         if len(boxes_xywhr) > 0:
@@ -564,7 +591,7 @@ class YOLOOBBDetector(OfflineDetector):
                     try:
                         import torch
                         if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
+                            pass
                     except:
                         pass
                 continue
@@ -577,7 +604,7 @@ class YOLOOBBDetector(OfflineDetector):
                 gain,
                 pad,
                 text_threshold,
-                0.6
+                float(getattr(self, 'nms_iou_threshold', 0.6))
             )
             
             if len(boxes) > 0:
@@ -765,15 +792,20 @@ class YOLOOBBDetector(OfflineDetector):
                 gain,
                 pad,
                 text_threshold,
-                0.6
+                float(getattr(self, 'nms_iou_threshold', 0.6))
             )
         
         # 转换为Quadrilateral对象
         textlines = []
         for corners, score, class_id in zip(boxes_corners, scores, class_ids):
             pts = corners.astype(np.int32)
-            label = self.classes[class_id] if class_id < len(self.classes) else f'class_{class_id}'
+            label = self.class_id_to_label.get(int(class_id))
+            if not label:
+                label = self.classes[class_id] if class_id < len(self.classes) else f'class_{class_id}'
             quad = Quadrilateral(pts, label, float(score))
+            quad.det_label = label
+            quad.yolo_label = label
+            quad.is_yolo_box = True
             textlines.append(quad)
         
         self.logger.info(f"YOLO OBB检测到 {len(textlines)} 个文本框")
@@ -782,9 +814,10 @@ class YOLOOBBDetector(OfflineDetector):
         try:
             import torch
             if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                pass
         except Exception:
             pass
         
         return textlines, None, None
+
 

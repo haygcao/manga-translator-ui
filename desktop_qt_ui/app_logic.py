@@ -883,13 +883,10 @@ class MainAppLogic(QObject):
                     "merge_gamma": self._t("label_merge_gamma"),
                     "merge_sigma": self._t("label_merge_sigma"),
                     "merge_edge_ratio_threshold": self._t("label_merge_edge_ratio_threshold"),
+                    "merge_special_require_full_wrap": self._t("label_merge_special_require_full_wrap"),
                     "detector": self._t("label_detector"),
                     "detection_size": self._t("label_detection_size"),
                     "text_threshold": self._t("label_text_threshold"),
-                    "det_rotate": self._t("label_det_rotate"),
-                    "det_auto_rotate": self._t("label_det_auto_rotate"),
-                    "det_invert": self._t("label_det_invert"),
-                    "det_gamma_correct": self._t("label_det_gamma_correct"),
                     "use_yolo_obb": self._t("label_use_yolo_obb"),
                     "yolo_obb_conf": self._t("label_yolo_obb_conf"),
                     "yolo_obb_iou": self._t("label_yolo_obb_iou"),
@@ -1932,13 +1929,22 @@ class FileScannerWorker(QObject):
             
             # 处理压缩包文件
             if archive_files:
-                from desktop_qt_ui.utils.archive_extractor import extract_images_from_archive
+                from desktop_qt_ui.utils.archive_extractor import extract_images_from_archive, get_output_extract_dir
+                output_base_dir = ''
+                try:
+                    output_base_dir = self.file_service.config_service.get_config().app.last_output_path
+                except Exception:
+                    output_base_dir = ''
                 for archive_path in archive_files:
                     try:
                         self.progress.emit(f"正在解压: {os.path.basename(archive_path)}")
-                        images, temp_dir = extract_images_from_archive(archive_path)
+                        if output_base_dir and os.path.isdir(output_base_dir):
+                            extract_dir = get_output_extract_dir(output_base_dir, archive_path)
+                            images, extracted_dir = extract_images_from_archive(archive_path, extract_dir)
+                        else:
+                            images, extracted_dir = extract_images_from_archive(archive_path)
                         if images:
-                            self.archive_to_temp_map[archive_path] = temp_dir
+                            self.archive_to_temp_map[archive_path] = extracted_dir
                             # 将解压出的图片添加到处理列表
                             for img_path in images:
                                 resolved_files.append(img_path)
@@ -2187,6 +2193,30 @@ class TranslationWorker(QObject):
             friendly_msg += "      - 位置：高级设置 → 批量大小\n"
             friendly_msg += "      - 建议：将批量大小减小（如从 3 减到 1 或 2）\n"
             friendly_msg += "      - 说明：批量处理的文本越少，AI翻译质量越稳定\n\n"
+
+        # 检查是否是 OpenAI/Gemini 空响应错误（统一处理）
+        elif (
+            (("NoneType" in real_error or "NoneType" in error_traceback) and
+             ("strip" in real_error.lower() or "strip" in error_traceback.lower()))
+            or ("returned empty content" in real_error.lower())
+            or ("returned empty text" in real_error.lower())
+            or ("响应text为空" in real_error)
+        ):
+            friendly_msg += "🔍 错误原因：AI接口返回空文本（空回）\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   当前请求没有返回可解析的文本内容（OpenAI/Gemini 都可能出现）。\n"
+            friendly_msg += "   可能是触发了内容审核，或者服务器繁忙导致临时空回。\n\n"
+            friendly_msg += "💡 解决方案：\n"
+            friendly_msg += "   1. ⭐ 更换模型（推荐）\n"
+            friendly_msg += "      - OpenAI：gpt-5.2、gpt-5.2-mini\n"
+            friendly_msg += "      - Gemini：gemini-3-pro、gemini-3-flash\n\n"
+            friendly_msg += "   2. 更换站点（API地址）\n"
+            friendly_msg += "      - Gemini 官方地址： https://generativelanguage.googleapis.com\n"
+            friendly_msg += "      - OpenAI 官方地址： https://api.openai.com/v1\n"
+            friendly_msg += "      - 若使用第三方中转，尝试更换服务商或改用官方 API\n\n"
+            friendly_msg += "   3. 更换翻译图片的内容后再试\n"
+            friendly_msg += "      - 避免敏感画面或高风险词汇，降低审核拦截概率\n\n"
+            friendly_msg += "   4. 稍后重试（服务器繁忙时常见）\n\n"
 
         # 检查是否是模型不支持多模态
         elif ("不支持多模态" in real_error or
@@ -2851,8 +2881,7 @@ class TranslationWorker(QObject):
                             
                             # 强制垃圾回收
                             import gc
-                            gc.collect()
-                    
+                            pass
                     # 非并发模式：所有批次处理完成
                 
                 # 并发模式和非并发模式都会到这里
@@ -3137,13 +3166,22 @@ class FileScannerRunnable(QRunnable):
             
             # 处理压缩包文件
             if archive_files:
-                from desktop_qt_ui.utils.archive_extractor import extract_images_from_archive
+                from desktop_qt_ui.utils.archive_extractor import extract_images_from_archive, get_output_extract_dir
+                output_base_dir = ''
+                try:
+                    output_base_dir = self.file_service.config_service.get_config().app.last_output_path
+                except Exception:
+                    output_base_dir = ''
                 for archive_path in archive_files:
                     try:
                         self._emit_progress(f"正在解压: {os.path.basename(archive_path)}")
-                        images, temp_dir = extract_images_from_archive(archive_path)
+                        if output_base_dir and os.path.isdir(output_base_dir):
+                            extract_dir = get_output_extract_dir(output_base_dir, archive_path)
+                            images, extracted_dir = extract_images_from_archive(archive_path, extract_dir)
+                        else:
+                            images, extracted_dir = extract_images_from_archive(archive_path)
                         if images:
-                            self.archive_to_temp_map[archive_path] = temp_dir
+                            self.archive_to_temp_map[archive_path] = extracted_dir
                             for img_path in images:
                                 resolved_files.append(img_path)
                                 self.file_to_folder_map[img_path] = archive_path
@@ -3365,3 +3403,4 @@ class TranslationRunnable(QRunnable):
     def _emit_file_processed(self, data):
         """线程安全地发送文件处理完成信号"""
         self.signals.file_processed.emit(data)
+

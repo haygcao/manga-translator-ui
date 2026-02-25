@@ -1558,6 +1558,9 @@ class GraphicsView(QGraphicsView):
             xs = [p[0] for p in image_points]
             ys = [p[1] for p in image_points]
             white_frame_rect_local = [min(xs) - cx, min(ys) - cy, max(xs) - cx, max(ys) - cy]
+            box_w = max(xs) - min(xs)
+            box_h = max(ys) - min(ys)
+            inferred_direction = 'vertical' if box_h > box_w else 'horizontal'
             
             # 使用之前获取的模板区域数据
             template_data = {}
@@ -1603,7 +1606,7 @@ class GraphicsView(QGraphicsView):
                 'font_color': template_data.get('font_color', '#000000'),
                 'bg_colors': template_data.get('bg_colors', [255, 255, 255]),
                 'alignment': template_data.get('alignment', 'center'),
-                'direction': template_data.get('direction', 'auto'),
+                'direction': inferred_direction,
                 'angle': template_data.get('angle', 0),
                 'line_spacing': default_line_spacing,
                 'stroke_width': default_stroke_width,

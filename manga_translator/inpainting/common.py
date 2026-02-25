@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from abc import abstractmethod
 
@@ -29,15 +30,42 @@ class OfflineInpainter(CommonInpainter, ModelWrapper):
         
         # 清理CUDA缓存（多次确保彻底）
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-        
+            pass
+            pass
         # 强制垃圾回收（3次确保彻底）
         for _ in range(3):
-            gc.collect()
+            pass
             if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                pass
 
     @abstractmethod
     async def _infer(self, image: np.ndarray, mask: np.ndarray, config: InpainterConfig, inpainting_size: int = 1024, verbose: bool = False) -> np.ndarray:
         pass
+
+    def _get_inpaint_canvas_hw(self, h: int, w: int, base_align: int = 8) -> tuple[int, int]:
+        """
+        Normalize inpainting model input shape on GPU to reduce dynamic-shape plan growth.
+        Env vars:
+        - MANGA_INPAINT_FIXED_SIZE: force min H/W when > 0
+        - MANGA_INPAINT_SIZE_BUCKET: round H/W up to this bucket on GPU (default: 128)
+        """
+        base_align = max(1, int(base_align))
+        h = base_align * ((int(h) + base_align - 1) // base_align)
+        w = base_align * ((int(w) + base_align - 1) // base_align)
+
+        if not (hasattr(self, 'device') and isinstance(self.device, str) and self.device.startswith('cuda')):
+            return h, w
+
+        fixed_size = int(os.environ.get("MANGA_INPAINT_FIXED_SIZE", "0") or 0)
+        if fixed_size > 0:
+            return max(h, fixed_size), max(w, fixed_size)
+
+        bucket = int(os.environ.get("MANGA_INPAINT_SIZE_BUCKET", "128") or 128)
+        if bucket <= 1:
+            return h, w
+        return (
+            bucket * ((h + bucket - 1) // bucket),
+            bucket * ((w + bucket - 1) // bucket),
+        )
+
+

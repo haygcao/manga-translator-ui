@@ -377,7 +377,7 @@ class UpCunet2x(nn.Module):
                 else:
                     res[:, :, i * 2:i * 2 + h1 * 2 - 72, j * 2:j * 2 + w1 * 2 - 72] = (x*255).round().clamp_(0, 255).byte()
         del tmp_dict
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*2,:w0*2]
         return res
     def forward_gap_sync(self, x,tile_mode,alpha,pro):
@@ -504,7 +504,7 @@ class UpCunet2x(nn.Module):
                     res[:, :, i * 2:i * 2 + h1 * 2 - 72, j * 2:j * 2 + w1 * 2 - 72] = ((x_crop-0.15) * (255/0.7)).round().clamp_(0, 255).byte()
                 else:
                     res[:, :, i * 2:i * 2 + h1 * 2 - 72, j * 2:j * 2 + w1 * 2 - 72] = (x_crop* 255.0).round().clamp_(0, 255).byte()
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*2,:w0*2]
         return res
     def forward_fast_rough(self, x,tile_mode,alpha,pro):
@@ -574,7 +574,7 @@ class UpCunet2x(nn.Module):
                     res[:, :, i * 2:i * 2 + h1 * 2 - 72, j * 2:j * 2 + w1 * 2 - 72] = ((x_crop-0.15) * (255/0.7)).round().clamp_(0, 255).byte()
                 else:
                     res[:, :, i * 2:i * 2 + h1 * 2 - 72, j * 2:j * 2 + w1 * 2 - 72] = (x_crop* 255.0).round().clamp_(0, 255).byte()
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*2,:w0*2]
         return res
 class UpCunet3x(nn.Module):
@@ -704,7 +704,7 @@ class UpCunet3x(nn.Module):
                 else:
                     res[:, :, i * 3:i * 3 + h1 * 3 - 84, j * 3:j * 3 + w1 * 3 - 84] = (x*255).round().clamp_(0, 255).byte()
         del tmp_dict
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*3,:w0*3]
         return res
     def forward_gap_sync(self, x,tile_mode,alpha,pro):
@@ -829,7 +829,7 @@ class UpCunet3x(nn.Module):
                     res[:, :, i * 3:i * 3 + h1 * 3 - 84, j * 3:j * 3 + w1 * 3 - 84] = ((x_crop-0.15) * (255/0.7)).round().clamp_(0, 255).byte()
                 else:
                     res[:, :, i * 3:i * 3 + h1 * 3 - 84, j * 3:j * 3 + w1 * 3 - 84] = (x_crop* 255.0).round().clamp_(0, 255).byte()
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*3,:w0*3]
         return res
     def forward_fast_rough(self, x,tile_mode,alpha,pro):#1.7G
@@ -899,7 +899,7 @@ class UpCunet3x(nn.Module):
                     res[:, :, i * 3:i * 3 + h1 * 3 - 84, j * 3:j * 3 + w1 * 3 - 84] = ((x_crop-0.15) * (255/0.7)).round().clamp_(0, 255).byte()
                 else:
                     res[:, :, i * 3:i * 3 + h1 * 3 - 84, j * 3:j * 3 + w1 * 3 - 84] = (x_crop* 255.0).round().clamp_(0, 255).byte()
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*3,:w0*3]
         return res
 class UpCunet4x(nn.Module):
@@ -1043,7 +1043,7 @@ class UpCunet4x(nn.Module):
                 else:
                     res[:, :, i * 4:i * 4 + h1 * 4 - 152, j * 4:j * 4 + w1 * 4 - 152] = (x*255).round().clamp_(0, 255).byte()
         del tmp_dict
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*4,:w0*4]
         return res
     def forward_gap_sync(self, x,tile_mode,alpha,pro):
@@ -1179,7 +1179,7 @@ class UpCunet4x(nn.Module):
                     res[:, :, i * 4:i * 4 + h1 * 4 - 152, j * 4:j * 4 + w1 * 4 - 152] = ((x_crop-0.15) * (255/0.7)).round().clamp_(0, 255).byte()
                 else:
                     res[:, :, i * 4:i * 4 + h1 * 4 - 152, j * 4:j * 4 + w1 * 4 - 152] = (x_crop*255).round().clamp_(0, 255).byte()
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*4,:w0*4]
         return res
     def forward_fast_rough(self, x,tile_mode,alpha,pro):#1.7G
@@ -1256,7 +1256,7 @@ class UpCunet4x(nn.Module):
                     res[:, :, i * 4:i * 4 + h1 * 4 - 152, j * 4:j * 4 + w1 * 4 - 152] = ((x_crop-0.15) * (255/0.7)).round().clamp_(0, 255).byte()
                 else:
                     res[:, :, i * 4:i * 4 + h1 * 4 - 152, j * 4:j * 4 + w1 * 4 - 152] = (x_crop*255).round().clamp_(0, 255).byte()
-        #torch.cuda.empty_cache()
+        #pass
         if(w0!=pw or h0!=ph):res=res[:,:,:h0*4,:w0*4]
         return res
 class RealWaifuUpScaler(object):
@@ -1334,3 +1334,4 @@ if __name__ == "__main__":
                         final_opt_path=os.path.join(output_dir, prefix + suffix)
                         os.rename(tmp_opt_path,final_opt_path)
                         os.remove(tmp_path)
+

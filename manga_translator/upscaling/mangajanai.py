@@ -584,7 +584,19 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
         
         processed_tiles = []
         for tile, pos in tiles_with_pos:
-            processed_tile = self._process_single(tile, device)
+            orig_w, orig_h = tile.size
+            # Pad edge tiles to canonical size so model input shapes stay stable.
+            if orig_w != tile_size or orig_h != tile_size:
+                padded_tile = Image.new('RGB', (tile_size, tile_size), (0, 0, 0))
+                padded_tile.paste(tile, (0, 0))
+                tile_for_infer = padded_tile
+            else:
+                tile_for_infer = tile
+            processed_tile = self._process_single(tile_for_infer, device)
+            expected_w = orig_w * self.scale
+            expected_h = orig_h * self.scale
+            if processed_tile.size != (expected_w, expected_h):
+                processed_tile = processed_tile.crop((0, 0, expected_w, expected_h))
             processed_tiles.append((processed_tile, pos))
         
         return merge_tiles_into_image(processed_tiles, img.size, self.scale, overlap=16)

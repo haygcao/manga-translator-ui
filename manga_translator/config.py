@@ -306,14 +306,6 @@ class DetectorConfig(BaseModel):
     """Size of image used for detection"""
     text_threshold: float = 0.5
     """Threshold for text detection"""
-    det_rotate: bool = False
-    """Rotate the image for detection. Might improve detection."""
-    det_auto_rotate: bool = False
-    """Rotate the image for detection to prefer vertical textlines. Might improve detection."""
-    det_invert: bool = False
-    """Invert the image colors for detection. Might improve detection."""
-    det_gamma_correct: bool = False
-    """Applies gamma correction for detection. Might improve detection."""
     use_yolo_obb: bool = False
     """Enable YOLO OBB auxiliary detector for hybrid detection"""
     yolo_obb_conf: float = 0.4
@@ -409,6 +401,8 @@ class OcrConfig(BaseModel):
     """Textline merge deviation tolerance, higher is more tolerant."""
     merge_edge_ratio_threshold: float = 0.0
     """If a box has two neighbors with edge distance ratio > this value, disconnect the larger distance edge. 0 means disabled."""
+    merge_special_require_full_wrap: bool = True
+    """Require unlabeled boxes to be fully wrapped by target-labeled boxes in special pre-merge groups."""
 
 class Config(BaseModel):
     # General

@@ -256,13 +256,12 @@ class ExportService:
                 pass
             
             # 强制垃圾回收
-            gc.collect()
-            
+            pass
             # 清理GPU显存
             try:
                 import torch
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    pass
             except:
                 pass
     
@@ -831,3 +830,5 @@ def get_export_service() -> ExportService:
     if _export_service is None:
         _export_service = ExportService()
     return _export_service
+
+

@@ -354,13 +354,12 @@ def reset_global_translator():
             
             # 强制垃圾回收
             import gc
-            gc.collect()
-            
+            pass
             # 清理 GPU 显存
             try:
                 import torch
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    pass
                     logger.info("GPU 显存已清理")
             except Exception:
                 pass
@@ -448,13 +447,12 @@ def cleanup_after_request():
                 logger.warning(f"[MEMORY] 清理翻译器状态时出错: {e}")
     
     # 5. 强制垃圾回收
-    gc.collect()
-    
+    pass
     # 6. 清理 GPU 显存
     try:
         import torch
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            pass
     except Exception:
         pass
     
@@ -519,4 +517,4 @@ def cleanup_context(ctx):
     # result 单独处理（通常需要保留给前端）
     # 调用方负责在使用完result后调用此函数清理
     
-    gc.collect()
+    pass

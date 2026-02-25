@@ -16,11 +16,19 @@ ARCHIVE_EXTENSIONS = {'.pdf', '.epub', '.cbz', '.cbr', '.cb7', '.zip'}
 # 支持的图片格式
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.webp', '.avif', '.gif', '.tiff', '.tif', '.heic', '.heif'}
 
+ORIGINAL_IMAGE_DIRNAME = '原图目录'
+
 
 def is_archive_file(file_path: str) -> bool:
     """检查文件是否是支持的压缩包/文档格式"""
     ext = os.path.splitext(file_path)[1].lower()
     return ext in ARCHIVE_EXTENSIONS
+
+
+def get_output_extract_dir(output_base_dir: str, archive_path: str) -> str:
+    """获取解压到输出目录下的目录：<输出目录>/<文件名>/原图目录"""
+    archive_name = os.path.splitext(os.path.basename(archive_path))[0]
+    return os.path.join(output_base_dir, archive_name, ORIGINAL_IMAGE_DIRNAME)
 
 
 def get_temp_extract_dir(archive_path: str) -> str:

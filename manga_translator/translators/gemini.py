@@ -3,7 +3,6 @@ import os
 import asyncio
 # import json
 from typing import List, Dict, Any
-from google import genai
 from google.genai import types
 
 from .common import CommonTranslator, VALID_LANGUAGES, parse_json_or_text_response, parse_hq_response, get_glossary_extraction_prompt, merge_glossary_to_file, validate_gemini_response, AsyncGeminiCurlCffi
@@ -112,9 +111,7 @@ class GeminiTranslator(CommonTranslator):
             self.logger.info(f"Setting Gemini max requests per minute to: {max_rpm}")
         
         # 读取自定义API参数配置
-        use_custom_params = getattr(args, 'use_custom_api_params', False)
-        if use_custom_params:
-            self._load_custom_api_params()
+        self._configure_custom_api_params(args)
         
         # 从配置中读取用户级 API Key（优先于环境变量）
         # 这允许 Web 服务器为每个用户使用不同的 API Key
@@ -157,44 +154,26 @@ class GeminiTranslator(CommonTranslator):
             )
 
             if is_custom_api:
-                # 自定义 API Base - 尝试使用 curl_cffi 绕过 TLS 指纹检测
-                try:
-                    self.client = AsyncGeminiCurlCffi(
-                        api_key=self.api_key,
-                        base_url=self.base_url,
-                        default_headers=BROWSER_HEADERS,
-                        impersonate="chrome110",
-                        timeout=300
-                    )
-                    self._use_curl_cffi = True
-                    self.logger.info(f"Gemini客户端初始化完成（自定义API Base + curl_cffi TLS 指纹伪装）。Base URL: {self.base_url}")
-                except ImportError:
-                    # 回退到标准客户端
-                    self.client = genai.Client(
-                        api_key=self.api_key,
-                        http_options=types.HttpOptions(
-                            base_url=self.base_url,
-                            headers=BROWSER_HEADERS
-                        )
-                    )
-                    self._use_curl_cffi = False
-                    self.logger.info(f"Gemini客户端初始化完成（自定义API Base，标准模式）。Base URL: {self.base_url}")
+                self.client = AsyncGeminiCurlCffi(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    default_headers=BROWSER_HEADERS,
+                    impersonate="chrome110",
+                    timeout=600,
+                    stream_timeout=300
+                )
+                self._use_curl_cffi = True
+                self.logger.info(f"Gemini客户端初始化完成（强制 curl_cffi，自定义API Base）。Base URL: {self.base_url}")
             else:
-                # 官方 API - 尝试使用 curl_cffi 绕过 TLS 指纹检测
-                try:
-                    self.client = AsyncGeminiCurlCffi(
-                        api_key=self.api_key,
-                        default_headers=BROWSER_HEADERS,
-                        impersonate="chrome110",
-                        timeout=300
-                    )
-                    self._use_curl_cffi = True
-                    self.logger.info("Gemini客户端初始化完成（使用 curl_cffi TLS 指纹伪装）")
-                except ImportError:
-                    # 回退到标准客户端
-                    self.client = genai.Client(api_key=self.api_key)
-                    self._use_curl_cffi = False
-                    self.logger.info("Gemini客户端初始化完成（标准模式）")
+                self.client = AsyncGeminiCurlCffi(
+                    api_key=self.api_key,
+                    default_headers=BROWSER_HEADERS,
+                    impersonate="chrome110",
+                    timeout=600,
+                    stream_timeout=300
+                )
+                self._use_curl_cffi = True
+                self.logger.info("Gemini客户端初始化完成（强制 curl_cffi 模式）")
 
             self.logger.info("安全设置策略：默认发送 OFF，如遇错误自动回退")
 
@@ -386,7 +365,6 @@ class GeminiTranslator(CommonTranslator):
                 for key, value in self._custom_api_params.items():
                     if hasattr(generation_config, key):
                         setattr(generation_config, key, value)
-                self.logger.debug(f"使用自定义API参数: {self._custom_api_params}")
 
 
             try:
@@ -404,60 +382,106 @@ class GeminiTranslator(CommonTranslator):
                 if retry_attempt > 0 and current_temperature != self.temperature:
                     self.logger.info(f"[重试] 温度调整: {self.temperature} -> {current_temperature}")
 
-                # 根据客户端类型调用不同的 API
-                if getattr(self, '_use_curl_cffi', False):
-                    # 使用 curl_cffi 异步客户端
-                    response = await self._await_with_cancel_polling(
-                        self.client.models.generate_content(
-                            model=self.model_name,
-                            contents=combined_prompt,
-                            generation_config=generation_config,
-                            safety_settings=None if should_retry_without_safety else self.safety_settings
-                        ),
-                        poll_interval=0.2,
-                        on_cancel=self._abort_inflight_request,
-                    )
-                else:
-                    # 使用标准 SDK（同步调用包装为异步）
-                    response = await self._await_with_cancel_polling(
-                        asyncio.to_thread(
-                            self.client.models.generate_content,
+                def _extract_gemini_stream_text(chunk):
+                    return getattr(chunk, "text", "") or ""
+
+                def _extract_gemini_stream_finish_reason(chunk):
+                    if not (hasattr(chunk, 'candidates') and chunk.candidates):
+                        return None
+                    candidate = chunk.candidates[0]
+                    return getattr(candidate, 'finish_reason', None)
+                
+                def _on_stream_chunk(delta_text, _full_text):
+                    self._emit_stream_json_preview("[Gemini Stream]", _full_text, source_texts=texts)
+
+                response = None
+                streamed_text = None
+                streamed_finish_reason = None
+
+                try:
+                    self._reset_stream_json_preview()
+                    # 自动尝试流式；不支持时回退普通请求
+                    streamed_text, streamed_finish_reason = await self._run_unified_stream_transport(
+                        create_stream=lambda: self.client.models.generate_content_stream(
                             model=self.model_name,
                             contents=combined_prompt,
                             config=generation_config
                         ),
-                        poll_interval=0.2,
+                        extract_text=_extract_gemini_stream_text,
+                        extract_finish_reason=_extract_gemini_stream_finish_reason,
+                        on_chunk=_on_stream_chunk,
                         on_cancel=self._abort_inflight_request,
+                        poll_interval=0.2,
+                        sync_iter_in_thread=not getattr(self, '_use_curl_cffi', False),
                     )
+                    self._finish_stream_inline()
+                except Exception as stream_error:
+                    self._finish_stream_inline()
+                    self.logger.warning(f"流式请求不可用，已回退普通请求: {stream_error}")
+                    # 使用标准 SDK（同步调用包装为异步）
+                    if getattr(self, '_use_curl_cffi', False):
+                        response = await self._await_with_cancel_polling(
+                            self.client.models.generate_content(
+                                model=self.model_name,
+                                contents=combined_prompt,
+                                generation_config=generation_config,
+                                safety_settings=None if should_retry_without_safety else self.safety_settings
+                            ),
+                            poll_interval=0.2,
+                            on_cancel=self._abort_inflight_request,
+                        )
+                    else:
+                        response = await self._await_with_cancel_polling(
+                            asyncio.to_thread(
+                                self.client.models.generate_content,
+                                model=self.model_name,
+                                contents=combined_prompt,
+                                config=generation_config
+                            ),
+                            poll_interval=0.2,
+                            on_cancel=self._abort_inflight_request,
+                        )
                 
                 if self._MAX_REQUESTS_PER_MINUTE > 0:
                     import time
                     GeminiTranslator._GLOBAL_LAST_REQUEST_TS[self._last_request_ts_key] = time.time()
 
-                # 验证响应对象是否有效
-                validate_gemini_response(response, self.logger)
+                if streamed_text is None:
+                    # 验证响应对象是否有效
+                    validate_gemini_response(response, self.logger)
+
+                finish_reason = streamed_finish_reason if streamed_text is not None else None
 
                 # 检查finish_reason
-                if hasattr(response, 'candidates') and response.candidates:
+                if streamed_text is None and hasattr(response, 'candidates') and response.candidates:
                     candidate = response.candidates[0]
                     if hasattr(candidate, 'finish_reason'):
                         finish_reason = candidate.finish_reason
-                        # 新版 SDK 的 finish_reason 是枚举类型
-                        finish_reason_str = str(finish_reason) if finish_reason else ""
-                        if "STOP" not in finish_reason_str.upper():  # 不是成功
-                            attempt += 1
-                            log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
-                            self.logger.warning(f"Gemini API失败 ({log_attempt}): finish_reason={finish_reason}")
-                            if not is_infinite and attempt >= max_retries:
-                                break
-                            await self._sleep_with_cancel_polling(1)
-                            continue
 
-                result_text = response.text.strip()
+                finish_reason_str = str(finish_reason) if finish_reason else ""
+                if finish_reason and "STOP" not in finish_reason_str.upper():  # 不是成功
+                    attempt += 1
+                    log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+                    self.logger.warning(f"Gemini API失败 ({log_attempt}): finish_reason={finish_reason}")
+                    if not is_infinite and attempt >= max_retries:
+                        break
+                    await self._sleep_with_cancel_polling(1)
+                    continue
+
+                if streamed_text is not None:
+                    result_text = streamed_text.strip()
+                else:
+                    raw_text = getattr(response, "text", "")
+                    result_text = (raw_text if isinstance(raw_text, str) else str(raw_text or "")).strip()
                 
                 # 统一的编码清理（处理UTF-16-LE等编码问题）
                 from .common import sanitize_text_encoding
                 result_text = sanitize_text_encoding(result_text)
+
+                if not result_text:
+                    log_attempt = f"{attempt}/{max_retries}" if not is_infinite else f"Attempt {attempt}"
+                    self.logger.warning(f"Gemini返回空内容 (finish_reason: '{finish_reason}') ({log_attempt})。正在重试...")
+                    raise Exception(f"Gemini returned empty content (finish_reason: {finish_reason})")
                 
                 self.logger.debug(f"--- Gemini Raw Response ---\n{result_text}\n---------------------------")
 
@@ -466,6 +490,7 @@ class GeminiTranslator(CommonTranslator):
                 
                 # 处理术语提取
                 if extract_glossary and new_terms:
+                    self._emit_terms_from_list(new_terms)
                     prompt_path = None
                     if ctx and hasattr(ctx, 'config') and hasattr(ctx.config, 'translator'):
                         prompt_path = getattr(ctx.config.translator, 'high_quality_prompt_path', None)
@@ -511,9 +536,10 @@ class GeminiTranslator(CommonTranslator):
                     continue
 
                 # 打印原文和译文的对应关系
-                self.logger.info("--- Translation Results ---")
-                for original, translated in zip(texts, translations):
-                    self.logger.info(f'{original} -> {translated}')
+                if not self._has_stream_result_pairs():
+                    self.logger.info("--- Translation Results ---")
+                    for original, translated in zip(texts, translations):
+                        self.logger.info(f'{original} -> {translated}')
                 self.logger.info("---------------------------")
 
                 # BR检查：检查翻译结果是否包含必要的[BR]标记

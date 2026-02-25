@@ -256,7 +256,7 @@ class ModelPaddleOCRVL(OfflineOCR):
             del self.color_model
             self.color_model = None
         if self.use_gpu:
-            torch.cuda.empty_cache()
+            pass
 
     def _recognize_single(self, img: np.ndarray) -> str:
         """
@@ -348,9 +348,11 @@ class ModelPaddleOCRVL(OfflineOCR):
 
             region_resized = cv2.resize(region, (new_w, text_height), interpolation=cv2.INTER_AREA)
 
-            # 转换为 tensor
-            image_tensor = (torch.from_numpy(region_resized).float() - 127.5) / 127.5
-            image_tensor = einops.rearrange(image_tensor, 'H W C -> 1 C H W')
+            canvas_w = self._get_ocr_canvas_width([new_w], base_align=4)
+            batch_region = np.zeros((1, text_height, canvas_w, 3), dtype=np.uint8)
+            batch_region[0, :, :new_w, :] = region_resized
+            image_tensor = (torch.from_numpy(batch_region).float() - 127.5) / 127.5
+            image_tensor = einops.rearrange(image_tensor, 'N H W C -> N C H W')
 
             # GPU 加速
             if self.use_gpu:
@@ -477,6 +479,8 @@ class ModelPaddleOCRVL(OfflineOCR):
 
         # 清理 GPU 显存
         if self.use_gpu:
-            torch.cuda.empty_cache()
+            pass
 
         return output_regions
+
+

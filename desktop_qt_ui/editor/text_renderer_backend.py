@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 import cv2
 import numpy as np
@@ -141,11 +142,6 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
 
         config_obj = Config(render=RenderConfig(**config_data)) if config_data else Config()
         line_spacing_multiplier = render_params.get('line_spacing', 1.0)
-        
-        # 将倍率转换为实际比例：横排基础 0.01，竖排基础 0.2
-        is_horizontal = text_block.horizontal
-        base_spacing = 0.01 if is_horizontal else 0.2
-        line_spacing_from_params = base_spacing * line_spacing_multiplier
 
         # 获取区域数（lines数组的长度），用于智能排版模式的换行判断
         region_count = 1
@@ -159,11 +155,16 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
         if config_obj:
             config_obj._current_region = text_block
 
+        # 渲染文本预处理：不在 UI 层自动添加 <H> 标签
+        text_for_render = text_block.get_translation_for_rendering()
+        if text_block.horizontal:
+            text_for_render = re.sub(r'<H>(.*?)</H>', r'\1', text_for_render, flags=re.IGNORECASE | re.DOTALL)
+
         # 使用 freetype 渲染器（稳定可靠）
         if text_block.horizontal:
             rendered_surface = text_render.put_text_horizontal(
                 font_size, 
-                text_block.get_translation_for_rendering(), 
+                text_for_render, 
                 render_w, 
                 render_h, 
                 text_block.alignment, 
@@ -172,7 +173,7 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
                 bg_color, 
                 text_block.target_lang, 
                 True, 
-                line_spacing_from_params, 
+                line_spacing_multiplier, 
                 config=config_obj, 
                 region_count=region_count,
                 stroke_width=stroke_width
@@ -180,12 +181,12 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
         else:
             rendered_surface = text_render.put_text_vertical(
                 font_size, 
-                text_block.get_translation_for_rendering(), 
+                text_for_render, 
                 render_h, 
                 text_block.alignment, 
                 fg_color, 
                 bg_color, 
-                line_spacing_from_params, 
+                line_spacing_multiplier, 
                 config=config_obj, 
                 region_count=region_count,
                 stroke_width=stroke_width

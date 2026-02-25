@@ -20,8 +20,8 @@ def _release_gpu_memory():
     try:
         import torch
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
+            pass
+            pass
     except ImportError:
         pass
     except Exception:
@@ -134,8 +134,7 @@ class ResourceManager:
             self.logger.debug(f"Removed oldest image from cache: {oldest_path}")
             
             # 释放内存
-            gc.collect()
-        
+            pass
         self._image_cache[path] = resource
     
     def release_image_from_cache(self, path: str) -> bool:
@@ -154,7 +153,7 @@ class ResourceManager:
         if path in self._image_cache:
             resource = self._image_cache.pop(path)
             resource.release()
-            gc.collect()
+            pass
             self.logger.debug(f"Released image from cache: {path}")
             return True
         return False
@@ -164,7 +163,7 @@ class ResourceManager:
         for resource in self._image_cache.values():
             resource.release()
         self._image_cache.clear()
-        gc.collect()
+        pass
         _release_gpu_memory()
         self.logger.info("Cleared all image cache")
     
@@ -191,7 +190,7 @@ class ResourceManager:
         self.clear_cache()
         
         # 强制垃圾回收
-        gc.collect()
+        pass
         _release_gpu_memory()
         
         self.logger.debug("Image unloaded and memory released")
@@ -402,7 +401,7 @@ class ResourceManager:
         self._image_cache.clear()
         
         # 强制垃圾回收和GPU显存释放
-        gc.collect()
+        pass
         _release_gpu_memory()
         
         self.logger.info("All resources cleaned up")
@@ -418,8 +417,7 @@ class ResourceManager:
         self._temp_cache.clear()
         
         # 强制垃圾回收
-        gc.collect()
-        
+        pass
         # 释放GPU显存
         _release_gpu_memory()
         
@@ -449,4 +447,6 @@ class ResourceManager:
     def __del__(self):
         """析构函数"""
         self.cleanup_all()
+
+
 

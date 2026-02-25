@@ -99,7 +99,7 @@ class ReplaceTranslationCTD:
         if self.detector.device.startswith('cuda') or self.detector.device == 'mps':
             try:
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    pass
             except Exception:
                 pass
         
@@ -125,3 +125,4 @@ async def detect_for_replace_translation(
     return await wrapper.detect_with_winpy_refine(
         image, detect_size, text_threshold, box_threshold, unclip_ratio, verbose
     )
+
