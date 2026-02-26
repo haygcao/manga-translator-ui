@@ -219,7 +219,7 @@ def auto_add_horizontal_tags(text: str) -> str:
     """自动为竖排文本中的短英文单词或连续符号添加<H>标签，使其横向显示。
 
     处理规则：
-    - 先按 [BR]/\n 等断句符分段，再逐段处理，避免 <H> 标签横跨断句边界
+    - 整段文本统一处理，不按 [BR]/\n 分段
     - 多词英文词组（如 "Tek Tok"）：整体横排显示
     - 独立的短英文单词：添加<H>标签
     - 符号（!?）2-3个：横排显示，4个以上不包裹
@@ -232,48 +232,34 @@ def auto_add_horizontal_tags(text: str) -> str:
     if '<H>' in text or '<h>' in text.lower():
         return text
 
-    # 按 BR 标记和换行符分段，保留分隔符
-    segment_pattern = r'(\[BR\]|【BR】|<br>|\n)'
-    segments = re.split(segment_pattern, text, flags=re.IGNORECASE)
+    seg = text
 
-    result_parts = []
-    for segment in segments:
-        # 如果是分隔符本身，直接保留
-        if re.match(segment_pattern, segment, flags=re.IGNORECASE):
-            result_parts.append(segment)
-            continue
+    # 步骤1：为多词英文词组添加<H>标签（至少2个单词，用空格分隔）
+    multi_word_pattern = r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+(?:\s+[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+)+'
+    seg = re.sub(multi_word_pattern, r'<H>\g<0></H>', seg)
 
-        # 对每个文本段分别应用标签处理
-        seg = segment
+    # 步骤2：对剩余的独立英文单词添加<H>标签
+    word_pattern = r'(?<![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-])([a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]{2,})(?![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-])'
 
-        # 步骤1：为多词英文词组添加<H>标签（至少2个单词，用空格分隔）
-        multi_word_pattern = r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+(?:\s+[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+)+'
-        seg = re.sub(multi_word_pattern, r'<H>\g<0></H>', seg)
+    # 用闭包捕获当前 seg 的值
+    def _make_replace_word(current_seg):
+        def replace_word(match):
+            start_pos = match.start()
+            text_before = current_seg[:start_pos]
+            last_open = text_before.rfind('<H>')
+            last_close = text_before.rfind('</H>')
+            if last_open > last_close:
+                return match.group(0)
+            return f'<H>{match.group(1)}</H>'
+        return replace_word
 
-        # 步骤2：对剩余的独立英文单词添加<H>标签
-        word_pattern = r'(?<![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-])([a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]{2,})(?![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-])'
+    seg = re.sub(word_pattern, _make_replace_word(seg), seg)
 
-        # 用闭包捕获当前 seg 的值
-        def _make_replace_word(current_seg):
-            def replace_word(match):
-                start_pos = match.start()
-                text_before = current_seg[:start_pos]
-                last_open = text_before.rfind('<H>')
-                last_close = text_before.rfind('</H>')
-                if last_open > last_close:
-                    return match.group(0)
-                return f'<H>{match.group(1)}</H>'
-            return replace_word
+    # 步骤3：匹配符号（2-4个，同时支持半角和全角，5个以上不包裹）
+    symbol_pattern = r'[!?！？]{2,4}'
+    seg = re.sub(symbol_pattern, r'<H>\g<0></H>', seg)
 
-        seg = re.sub(word_pattern, _make_replace_word(seg), seg)
-
-        # 步骤3：匹配符号（2-3个，同时支持半角和全角，4个以上不包裹）
-        symbol_pattern = r'[!?！？]{2,3}'
-        seg = re.sub(symbol_pattern, r'<H>\g<0></H>', seg)
-
-        result_parts.append(seg)
-
-    return ''.join(result_parts)
+    return seg
 
 
 def should_rotate_horizontal_block_90(content: str) -> bool:
