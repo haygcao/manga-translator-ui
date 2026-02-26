@@ -43,7 +43,6 @@ class YOLOOBBDetector(OfflineDetector):
         # 使用 1600 作为默认推理尺寸（会在预处理阶段 letterbox 到方形输入）
         self.input_size = 1600
         self.using_cuda = False  # 初始化标志
-        self.nms_iou_threshold = 0.6
     
     async def _load(self, device: str):
         """加载ONNX模型"""
@@ -121,7 +120,7 @@ class YOLOOBBDetector(OfflineDetector):
         self, 
         img: np.ndarray, 
         new_shape: Tuple[int, int] = (1600, 1600),
-        color: Tuple[int, int, int] = (114, 114, 114)
+        color: Tuple[int, int, int] = (0, 0, 0)
     ) -> Tuple[np.ndarray, float, Tuple[float, float]]:
         """
         调整图像大小并添加边框（保持宽高比）- YOLO风格
@@ -162,16 +161,13 @@ class YOLOOBBDetector(OfflineDetector):
                 raise ValueError("resize前图像变为空")
             img = cv2.resize(img, (new_unpad_w, new_unpad_h), interpolation=cv2.INTER_LINEAR)
         
-        # 计算需要的总padding
-        dw = new_shape[1] - new_unpad_w  # 宽度方向需要的总padding
-        dh = new_shape[0] - new_unpad_h  # 高度方向需要的总padding
-        
-        # 将padding分配到两边（确保总和精确）
-        # 一边向下取整，一边是剩余部分，确保 left + right = dw
-        left = dw // 2
-        right = dw - left
-        top = dh // 2
-        bottom = dh - top
+        # 计算需要的总padding（与主检测 square_pad_resize 对齐：只向右/下补边）
+        dw = new_shape[1] - new_unpad_w
+        dh = new_shape[0] - new_unpad_h
+        left = 0
+        top = 0
+        right = dw
+        bottom = dh
         
         # 添加边框
         img = cv2.copyMakeBorder(
@@ -182,7 +178,7 @@ class YOLOOBBDetector(OfflineDetector):
         assert img.shape[0] == new_shape[0] and img.shape[1] == new_shape[1], \
             f"Letterbox failed: expected {new_shape}, got {img.shape[:2]}"
         
-        # 返回左和上的padding（用于后续坐标转换）
+        # 返回左和上的padding（右/下补边时均为0）
         return img, gain, (float(left), float(top))
     
     def preprocess(self, img: np.ndarray) -> Tuple[np.ndarray, float, Tuple[float, float]]:
@@ -386,7 +382,6 @@ class YOLOOBBDetector(OfflineDetector):
         gain: float,
         pad: Tuple[float, float],
         conf_threshold: float,
-        iou_threshold: float
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         后处理模型输出
@@ -411,25 +406,18 @@ class YOLOOBBDetector(OfflineDetector):
         if len(predictions) == 0:
             return np.array([]), np.array([]), np.array([])
         
-        # 支持两种输出格式：
-        # 1) 新格式（yolo26obb）: [cx, cy, w, h, conf, class_id, angle]
-        # 2) 旧格式: [cx, cy, w, h, class0..classN, angle]
-        if predictions.shape[1] == 7:
-            box = predictions[:, :4]
-            conf = predictions[:, 4:5]
-            j = predictions[:, 5:6]
-            angle = predictions[:, 6:7]
-            x = np.concatenate((box, conf, j, angle), axis=1)
-        else:
-            nc = len(self.classes)
-            box = predictions[:, :4]  # [cx, cy, w, h]
-            cls = predictions[:, 4:4+nc]  # 类别分数
-            angle = predictions[:, -1:]  # angle（最后一列）
-            # 获取最高置信度的类别
-            conf = np.max(cls, axis=1, keepdims=True)
-            j = np.argmax(cls, axis=1, keepdims=True).astype(float)
-            # 组合：[box, conf, class_id, angle]
-            x = np.concatenate((box, conf, j, angle), axis=1)
+        # 仅支持 yolo26obb end-to-end 输出格式:
+        # [cx, cy, w, h, conf, class_id, angle]
+        if predictions.shape[1] != 7:
+            self.logger.warning(
+                f"YOLO OBB输出格式异常，预期7列(yolo26obb)，实际: {predictions.shape}"
+            )
+            return np.array([]), np.array([]), np.array([])
+        box = predictions[:, :4]
+        conf = predictions[:, 4:5]
+        j = predictions[:, 5:6]
+        angle = predictions[:, 6:7]
+        x = np.concatenate((box, conf, j, angle), axis=1)
         
         # 应用置信度阈值
         x = x[conf.flatten() > conf_threshold]
@@ -448,12 +436,6 @@ class YOLOOBBDetector(OfflineDetector):
             xywh=True
         )
         x[:, :4] = boxes_to_scale
-        
-        # NMS
-        boxes_xywhr = np.concatenate((x[:, :4], x[:, -1:]), axis=-1)
-        scores = x[:, 4]
-        keep_indices = self.nms_rotated(boxes_xywhr, scores, iou_threshold)
-        x = x[keep_indices]
         
         # 提取结果
         boxes_xywhr = np.concatenate((x[:, :4], x[:, -1:]), axis=-1)
@@ -479,13 +461,6 @@ class YOLOOBBDetector(OfflineDetector):
             boxes_corners[:, :, 0] = np.clip(boxes_corners[:, :, 0], 0, img_w)
             boxes_corners[:, :, 1] = np.clip(boxes_corners[:, :, 1], 0, img_h)
             
-            # 内部去重
-            boxes_corners, scores, class_ids = self.deduplicate_boxes(
-                boxes_corners, scores, class_ids,
-                distance_threshold=10.0,
-                iou_threshold=0.3
-            )
-            self.logger.info(f"YOLO OBB内部去重后: {len(boxes_corners)} 个框")
         else:
             boxes_corners = np.array([])
         
@@ -604,7 +579,6 @@ class YOLOOBBDetector(OfflineDetector):
                 gain,
                 pad,
                 text_threshold,
-                float(getattr(self, 'nms_iou_threshold', 0.6))
             )
             
             if len(boxes) > 0:
@@ -792,7 +766,6 @@ class YOLOOBBDetector(OfflineDetector):
                 gain,
                 pad,
                 text_threshold,
-                float(getattr(self, 'nms_iou_threshold', 0.6))
             )
         
         # 转换为Quadrilateral对象

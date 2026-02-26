@@ -62,6 +62,10 @@ class CommonDetector(InfererModule):
             points[:,0] = np.clip(points[:,0], 0, old_w)
             points[:,1] = np.clip(points[:,1], 0, old_h)
             new_txtln = Quadrilateral(points, txtln.text, txtln.prob)
+            # 保留自定义属性（如 det_label, yolo_label, is_yolo_box）
+            for attr in ('det_label', 'yolo_label', 'is_yolo_box'):
+                if hasattr(txtln, attr):
+                    setattr(new_txtln, attr, getattr(txtln, attr))
             new_textlines.append(new_txtln)
         return new_textlines, raw_mask, mask
 

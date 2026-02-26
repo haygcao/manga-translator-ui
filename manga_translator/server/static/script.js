@@ -1207,6 +1207,10 @@ function generateConfigUI(config) {
                     } else if (key === 'target_lang') {
                         // 如果是目标语言，使用翻译
                         option.textContent = t(`lang_${opt}`, opt);
+                    } else if (key === 'ocr_vl_language_hint') {
+                        // OCR 语言提示显示翻译后的全称
+                        const langKey = `ocr_lang_${String(opt).toLowerCase().replace(/\s+/g, '_')}`;
+                        option.textContent = t(langKey, opt);
                     } else if (key === 'font_path' || key === 'high_quality_prompt_path') {
                         // 字体和提示词显示简短文件名
                         option.textContent = opt.includes('/') ? opt.split('/').pop() : opt;

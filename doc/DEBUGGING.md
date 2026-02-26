@@ -70,8 +70,8 @@
 
 ### 渲染阶段
 
-- **`balloon_fill_boxes.png`**：气泡填充模式的文本框（如果使用 balloon_fill 排版）
-  - 显示气泡填充排版的文本框位置
+- **`balloon_fill_boxes.png`**：智能气泡模式的文本框（如果使用 balloon_fill 排版）
+  - 显示智能气泡排版的文本框位置
 
 - **`final.png`**：最终翻译结果
   - 渲染译文后的完整图片

@@ -437,6 +437,8 @@ class PermissionEditor {
                 ${this.createFormRow(this.t('label_merge_sigma', '合并-离群容忍度'), this.createInput('ocr', 'merge_sigma', 'number'), '值越高越宽容，默认2.5', 'ocr', 'merge_sigma')}
                 ${this.createFormRow(this.t('label_merge_edge_ratio_threshold', '合并-边缘距离比例阈值'), this.createInput('ocr', 'merge_edge_ratio_threshold', 'number'), '0表示禁用，默认0.0', 'ocr', 'merge_edge_ratio_threshold')}
                 ${this.createFormRow(this.t('label_merge_special_require_full_wrap', '模型辅助合并'), this.createCheckbox('ocr', 'merge_special_require_full_wrap'), '开启后：无标签框必须被目标标签框完全包裹才参与特殊预合并', 'ocr', 'merge_special_require_full_wrap')}
+                ${this.createFormRow(this.t('label_ocr_vl_language_hint', 'PaddleOCR-VL 语言提示'), this.createSelect('ocr', 'ocr_vl_language_hint', opts.ocr_vl_language_hint), '', 'ocr', 'ocr_vl_language_hint')}
+                ${this.createFormRow(this.t('label_ocr_vl_custom_prompt', 'PaddleOCR-VL 自定义提示词（优先）'), this.createInput('ocr', 'ocr_vl_custom_prompt', 'text'), '', 'ocr', 'ocr_vl_custom_prompt')}
             </div>
             <div class="form-section">
                 <h3>${this.t('label_detector', '文本检测器')}</h3>
@@ -448,7 +450,6 @@ class PermissionEditor {
                 ${this.createFormRow(this.t('label_min_box_area_ratio', '最小检测框面积占比'), this.createInput('detector', 'min_box_area_ratio', 'number'), '相对图片总像素，默认0.0009(0.09%)', 'detector', 'min_box_area_ratio')}
                 ${this.createFormRow(this.t('label_use_yolo_obb', '启用YOLO辅助检测'), this.createCheckbox('detector', 'use_yolo_obb'), '启用YOLO旋转边界框辅助检测', 'detector', 'use_yolo_obb')}
                 ${this.createFormRow(this.t('label_yolo_obb_conf', 'YOLO置信度阈值'), this.createInput('detector', 'yolo_obb_conf', 'number'), '默认0.4', 'detector', 'yolo_obb_conf')}
-                ${this.createFormRow(this.t('label_yolo_obb_iou', 'YOLO交叉比(IoU)'), this.createInput('detector', 'yolo_obb_iou', 'number'), 'NMS的IoU阈值，默认0.6', 'detector', 'yolo_obb_iou')}
                 ${this.createFormRow(this.t('label_yolo_obb_overlap_threshold', 'YOLO辅助检测重叠率删除阈值'), this.createInput('detector', 'yolo_obb_overlap_threshold', 'number'), '重叠比例阈值(0.0-1.0)，默认0.1', 'detector', 'yolo_obb_overlap_threshold')}
             </div>
         `;

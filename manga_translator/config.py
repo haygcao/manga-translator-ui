@@ -310,8 +310,6 @@ class DetectorConfig(BaseModel):
     """Enable YOLO OBB auxiliary detector for hybrid detection"""
     yolo_obb_conf: float = 0.4
     """Confidence threshold for YOLO OBB detector"""
-    yolo_obb_iou: float = 0.6
-    """IoU threshold for YOLO OBB detector NMS"""
     yolo_obb_overlap_threshold: float = 0.1
     """Overlap ratio threshold for removing YOLO boxes (0.0-1.0). YOLO boxes with overlap >= threshold will be removed if they don't meet replacement criteria. Set to 1.0 to keep all overlapping boxes."""
     box_threshold: float = 0.7
@@ -403,6 +401,10 @@ class OcrConfig(BaseModel):
     """If a box has two neighbors with edge distance ratio > this value, disconnect the larger distance edge. 0 means disabled."""
     merge_special_require_full_wrap: bool = True
     """Require unlabeled boxes to be fully wrapped by target-labeled boxes in special pre-merge groups."""
+    ocr_vl_language_hint: str = 'auto'
+    """PaddleOCR-VL language hint. Options: auto, multilingual, ja, ko, zh, en, fr, de, es, ru, ar."""
+    ocr_vl_custom_prompt: Optional[str] = None
+    """Custom PaddleOCR-VL prompt. If set, it overrides built-in prompt mode/language hint."""
 
 class Config(BaseModel):
     # General
