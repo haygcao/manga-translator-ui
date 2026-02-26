@@ -1484,9 +1484,11 @@ class CommonTranslator(InfererModule):
             for i, data in enumerate(batch_data):
                 prompt += f"=== Image {i+1} ===\n"
                 prompt += f"Text regions ({len(data['original_texts'])} regions):\n"
+                text_order = data.get('text_order', [])
                 for j, text in enumerate(data['original_texts']):
                     if text is not None:
-                        prompt += f"  {j+1}. {text}\n"
+                        display_id = text_order[j] if j < len(text_order) else (j + 1)
+                        prompt += f"  {display_id}. {text}\n"
                 prompt += "\n"
         else:
             prompt += "Please translate the following manga text regions:\n\n"
@@ -1497,6 +1499,7 @@ class CommonTranslator(InfererModule):
         for img_idx, data in enumerate(batch_data):
             # 获取 text_regions 用于 AI 断句
             text_regions = data.get('text_regions', [])
+            text_order = data.get('text_order', [])
             
             for region_idx, text in enumerate(data['original_texts']):
                 # 跳过 None 值
@@ -1507,8 +1510,10 @@ class CommonTranslator(InfererModule):
                 # 预处理文本：移除换行符
                 text_clean = text.replace('\n', ' ').replace('\ufffd', '')
                 
+                # HQ 模式优先使用 text_order，确保与图片编号一致
+                item_id = text_order[region_idx] if region_idx < len(text_order) else text_index
                 item = {
-                    "id": text_index,
+                    "id": item_id,
                     "text": text_clean
                 }
                 

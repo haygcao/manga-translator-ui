@@ -30,6 +30,8 @@ class OcrSettings(BaseModel):
     merge_sigma: float = 2.5
     merge_edge_ratio_threshold: float = 0.0
     merge_special_require_full_wrap: bool = True
+    ocr_vl_language_hint: str = "auto"
+    ocr_vl_custom_prompt: Optional[str] = None
 
 class DetectorSettings(BaseModel):
     detector: str = "default"
@@ -39,7 +41,6 @@ class DetectorSettings(BaseModel):
     unclip_ratio: float = 2.5
     use_yolo_obb: bool = False
     yolo_obb_conf: float = 0.4
-    yolo_obb_iou: float = 0.6
     yolo_obb_overlap_threshold: float = 0.1
     min_box_area_ratio: float = 0.0009  # 最小检测框面积占比（相对图片总像素），默认0.09%
 

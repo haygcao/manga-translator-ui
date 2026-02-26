@@ -420,6 +420,28 @@ async def get_config_options(
         'font_path': all_font_paths,
         'high_quality_prompt_path': all_prompt_paths,
         'layout_mode': ['default', 'smart_scaling', 'strict', 'fixed_font', 'disable_all', 'balloon_fill'],
+        'ocr_vl_language_hint': [
+            'auto',
+            'multilingual',
+            'Arabic',
+            'Simplified Chinese',
+            'Traditional Chinese',
+            'English',
+            'Japanese',
+            'Korean',
+            'Spanish',
+            'French',
+            'German',
+            'Russian',
+            'Portuguese',
+            'Italian',
+            'Thai',
+            'Vietnamese',
+            'Indonesian',
+            'Turkish',
+            'Polish',
+            'Ukrainian'
+        ],
         'format': ['png', 'webp', 'jpg', 'avif']  # 移除了 xcf, psd, pdf（使用 export_editable_psd 配置项代替）
     }
 

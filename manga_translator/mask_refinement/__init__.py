@@ -3,7 +3,12 @@ import cv2
 import numpy as np
 
 from .text_mask_utils import complete_mask_fill, complete_mask
-from ..utils import TextBlock, Quadrilateral, detect_bubbles_with_mangalens
+from ..utils import (
+    TextBlock,
+    Quadrilateral,
+    detect_bubbles_with_mangalens,
+    build_bubble_mask_from_mangalens_result,
+)
 from ..utils.log import get_logger
 
 logger = get_logger('mask_refinement')
@@ -34,66 +39,14 @@ def _erode_bubble_mask(bubble_mask: np.ndarray) -> np.ndarray:
 
 
 def _build_model_bubble_mask(image_shape: Tuple[int, int], result: Any) -> Tuple[np.ndarray, str]:
-    h, w = image_shape
-    bubble_mask = np.zeros((h, w), dtype=np.uint8)
+    bubble_mask = build_bubble_mask_from_mangalens_result(result, image_shape)
+    if np.count_nonzero(bubble_mask) == 0:
+        return bubble_mask, 'none'
 
     raw_result = getattr(result, 'raw_result', None) if result is not None else None
     raw_masks = getattr(raw_result, 'masks', None) if raw_result is not None else None
-
-    # Prefer segmentation masks from the model output.
-    if raw_masks is not None:
-        polygons = getattr(raw_masks, 'xy', None)
-        if polygons is not None:
-            for polygon in polygons:
-                pts = np.asarray(polygon, dtype=np.int32)
-                if pts.ndim != 2 or pts.shape[0] < 3:
-                    continue
-                pts[:, 0] = np.clip(pts[:, 0], 0, w - 1)
-                pts[:, 1] = np.clip(pts[:, 1], 0, h - 1)
-                cv2.fillPoly(bubble_mask, [pts], 255)
-            if np.count_nonzero(bubble_mask) > 0:
-                return _erode_bubble_mask(bubble_mask), 'mask'
-
-        mask_data = getattr(raw_masks, 'data', None)
-        if mask_data is not None:
-            try:
-                if hasattr(mask_data, 'detach'):
-                    mask_data = mask_data.detach().cpu().numpy()
-                mask_data = np.asarray(mask_data)
-                if mask_data.ndim == 3 and mask_data.shape[0] > 0:
-                    merged_mask = (mask_data > 0.5).any(axis=0).astype(np.uint8) * 255
-                    if merged_mask.shape != bubble_mask.shape:
-                        merged_mask = cv2.resize(
-                            merged_mask,
-                            (w, h),
-                            interpolation=cv2.INTER_NEAREST,
-                        )
-                    bubble_mask = np.maximum(bubble_mask, merged_mask)
-                    if np.count_nonzero(bubble_mask) > 0:
-                        return _erode_bubble_mask(bubble_mask), 'mask'
-            except Exception:
-                pass
-
-    # Fallback for non-segmentation results.
-    detections: Sequence = getattr(result, 'detections', []) if result is not None else []
-    for det in detections:
-        try:
-            x1, y1, x2, y2 = det.xyxy
-        except Exception:
-            continue
-
-        ix1 = max(0, min(w - 1, int(round(x1))))
-        iy1 = max(0, min(h - 1, int(round(y1))))
-        ix2 = max(0, min(w, int(round(x2))))
-        iy2 = max(0, min(h, int(round(y2))))
-
-        if ix2 <= ix1 or iy2 <= iy1:
-            continue
-        cv2.rectangle(bubble_mask, (ix1, iy1), (ix2, iy2), 255, -1)
-
-    if np.count_nonzero(bubble_mask) > 0:
-        return _erode_bubble_mask(bubble_mask), 'box'
-    return bubble_mask, 'none'
+    source = 'mask' if raw_masks is not None else 'box'
+    return _erode_bubble_mask(bubble_mask), source
 
 
 def _keep_bubble_components_intersecting_refined_mask(

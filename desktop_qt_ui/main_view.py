@@ -508,6 +508,7 @@ class MainView(QWidget):
                         super().showPopup()
                 
                 combo = RefreshableComboBox()
+                combo.setMinimumWidth(260)
                 try:
                     fonts_dir = resource_path('fonts')
                     if os.path.isdir(fonts_dir):
@@ -550,6 +551,7 @@ class MainView(QWidget):
                         super().showPopup()
                 
                 combo = RefreshablePromptComboBox(self.controller)
+                combo.setMinimumWidth(260)
                 prompt_files = self.controller.get_hq_prompt_options()
                 if prompt_files:
                     combo.addItems(prompt_files)
@@ -655,8 +657,8 @@ class MainView(QWidget):
                 widget = QLineEdit(str(value))
                 widget.editingFinished.connect(lambda k=full_key, w=widget: self._on_numeric_input_changed(w.text(), k, float if isinstance(value, float) else int))
 
-            elif value is None and key in ['tile_size', 'line_spacing', 'font_size', 'psd_font']:
-                # 处理值为 None 的数值类型参数（Optional[int] 或 Optional[float]）
+            elif value is None and key in ['tile_size', 'line_spacing', 'font_size', 'psd_font', 'ocr_vl_custom_prompt']:
+                # 处理值为 None 的可选参数（数值/字符串）
                 widget = QLineEdit("")
                 # 根据参数名设置提示文本
                 if key == 'tile_size':
@@ -671,12 +673,20 @@ class MainView(QWidget):
                 elif key == 'psd_font':
                     widget.setPlaceholderText(self._t("Photoshop Font Name (e.g. AdobeHeitiStd-Regular)"))
                     widget.editingFinished.connect(lambda k=full_key, w=widget: self._on_setting_changed(w.text(), k, None))
+                elif key == 'ocr_vl_custom_prompt':
+                    widget.setMinimumWidth(320)
+                    widget.setPlaceholderText("OCR: Extract all Arabic text.")
+                    widget.editingFinished.connect(lambda k=full_key, w=widget: self._on_setting_changed(w.text(), k, None))
 
             elif (isinstance(value, str) or value is None) and (options or display_map):
                 widget = QComboBox()
                 if key == "translator":
                     widget.setObjectName("translator.translator")
                     widget.setMinimumWidth(180)  # 设置翻译器下拉框最小宽度
+                elif full_key == "ocr.ocr_vl_language_hint":
+                    widget.setMinimumWidth(260)  # OCR语言全称较长，避免被截断
+                else:
+                    widget.setMinimumWidth(180)
                 
                 if display_map:
                     widget.addItems(list(display_map.values()))
@@ -696,6 +706,9 @@ class MainView(QWidget):
 
             elif isinstance(value, str):
                 widget = QLineEdit(value)
+                if full_key == "ocr.ocr_vl_custom_prompt":
+                    widget.setMinimumWidth(320)
+                    widget.setPlaceholderText("OCR: Extract all Arabic text.")
                 widget.editingFinished.connect(lambda k=full_key, w=widget: self._on_setting_changed(w.text(), k, None))
             
             if widget:
@@ -1142,7 +1155,9 @@ class MainView(QWidget):
             value = current_values.get(key, "")
             label_text = self.controller.get_display_mapping('labels').get(key, key)
             label = QLabel(f"{label_text}:")
-            widget = QLineEdit(value)
+            # 有值时显示真实值；空值时显示默认占位符
+            widget = QLineEdit(str(value) if value else "")
+            widget.setPlaceholderText(self._get_env_default_placeholder(key))
             widget.textChanged.connect(partial(self._debounced_save_env_var, key))
             
             # 使用 GridLayout 的 addWidget 而不是 FormLayout 的 addRow
@@ -1168,6 +1183,30 @@ class MainView(QWidget):
             else:
                 self.env_layout.addRow(label, widget)
             self.env_widgets[key] = (label, widget)
+
+    def _get_env_default_placeholder(self, key: str) -> str:
+        """返回环境变量输入框应显示的默认占位符。"""
+        key_placeholder = self._t("placeholder_paste_key")
+        token_placeholder = self._t("placeholder_paste_token")
+        default_placeholders = {
+            "OPENAI_API_BASE": "https://api.openai.com/v1",
+            "CUSTOM_OPENAI_API_BASE": "https://api.openai.com/v1",
+            "GEMINI_API_BASE": "https://generativelanguage.googleapis.com/v1beta/openai",
+            "SAKURA_API_BASE": "http://127.0.0.1:8080/v1",
+            "OPENAI_MODEL": "gpt-4o",
+            "CUSTOM_OPENAI_MODEL": "qwen2.5:7b",
+            "GEMINI_MODEL": "gemini-1.5-flash-002",
+            "GROQ_MODEL": "mixtral-8x7b-32768",
+            "DEEPSEEK_MODEL": "deepseek-chat",
+            "OPENAI_API_KEY": key_placeholder,
+            "CUSTOM_OPENAI_API_KEY": key_placeholder,
+            "GEMINI_API_KEY": key_placeholder,
+            "GROQ_API_KEY": key_placeholder,
+            "DEEPSEEK_API_KEY": key_placeholder,
+            "DEEPL_AUTH_KEY": key_placeholder,
+            "CAIYUN_TOKEN": token_placeholder,
+        }
+        return default_placeholders.get(key.upper(), "")
 
     def _debounced_save_env_var(self, key: str, text: str):
         """防抖保存.env变量"""
@@ -1600,7 +1639,8 @@ class MainView(QWidget):
                 new_value = current_env_values.get(key, "")
                 # 阻止信号触发，避免循环保存
                 widget.blockSignals(True)
-                widget.setText(new_value)
+                widget.setText(str(new_value) if new_value else "")
+                widget.setPlaceholderText(self._get_env_default_placeholder(key))
                 widget.blockSignals(False)
 
     def update_output_path_display(self, path: str):

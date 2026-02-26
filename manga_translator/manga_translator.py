@@ -1130,7 +1130,6 @@ class MangaTranslator:
             self.verbose,
             config.detector.use_yolo_obb,
             config.detector.yolo_obb_conf,
-            config.detector.yolo_obb_iou,
             config.detector.yolo_obb_overlap_threshold,
             config.detector.min_box_area_ratio,
             self._result_path,
@@ -1228,6 +1227,28 @@ class MangaTranslator:
                 pass
         # --- END NON-MAXIMUM SUPPRESSION (NMS) ---
 
+        # 拆分检测框：
+        # - 前向流程（OCR/翻译）不包含 other
+        # - 保留 other 供 textline_merge 的模型辅助合并阶段使用
+        if result and result[0]:
+            all_textlines = result[0]
+            forward_textlines = []
+            other_textlines = []
+            for txtln in all_textlines:
+                det_label = getattr(txtln, 'det_label', None) or getattr(txtln, 'yolo_label', None)
+                if isinstance(det_label, str) and det_label.strip().lower() == 'other':
+                    other_textlines.append(txtln)
+                else:
+                    forward_textlines.append(txtln)
+            ctx.model_assisted_other_textlines = other_textlines
+            ctx.all_detected_textlines = all_textlines
+            if other_textlines:
+                logger.info(
+                    f"Detection split: total={len(all_textlines)}, "
+                    f"forward={len(forward_textlines)}, other_for_model_assisted_merge={len(other_textlines)}"
+                )
+            result = (forward_textlines, result[1], result[2])
+
         return result
 
     def _save_labeled_textline_debug_image(self, img_rgb: np.ndarray, textlines: List, filename: str = 'bboxes_unfiltered_labeled.png'):
@@ -1265,9 +1286,6 @@ class MangaTranslator:
                 label = str(label).strip().lower() if label is not None else 'unlabeled'
                 if not label:
                     label = 'unlabeled'
-                # other 仅用于包裹辅助，不在调试图中显示
-                if label == 'other':
-                    continue
                 color = label_colors.get(label, (80, 80, 255))  # 未知标签：红
 
                 cv2.polylines(canvas_bgr, [pts], True, color=color, thickness=2)
@@ -1601,11 +1619,6 @@ class MangaTranslator:
     async def _run_textline_merge(self, config: Config, ctx: Context):
         current_time = time.time()
         self._model_usage_timestamps[("textline_merge", "textline_merge")] = current_time
-        text_regions = await dispatch_textline_merge(ctx.textlines, ctx.img_rgb.shape[1], ctx.img_rgb.shape[0],
-                                                     config, verbose=self.verbose)
-        for region in text_regions:
-            if not hasattr(region, "text_raw"):
-                region.text_raw = region.text      # <- Save the initial OCR results to expand the render detection box. Also, prevent affecting the forbidden translation function.       
         # Filter out languages to skip  
         if config.translator.skip_lang is not None:  
             skip_langs = [lang.strip().upper() for lang in config.translator.skip_lang.split(',')]
@@ -1629,8 +1642,23 @@ class MangaTranslator:
                 filtered_textlines.append(txtln)  
             ctx.textlines = filtered_textlines  
     
-        text_regions = await dispatch_textline_merge(ctx.textlines, ctx.img_rgb.shape[1], ctx.img_rgb.shape[0],  
+        merge_input_textlines = list(ctx.textlines)
+        enable_model_assisted_merge = bool(getattr(config.ocr, 'merge_special_require_full_wrap', True))
+        if enable_model_assisted_merge:
+            other_textlines = getattr(ctx, 'model_assisted_other_textlines', None) or []
+            if other_textlines:
+                merge_input_textlines.extend(other_textlines)
+                logger.info(
+                    f"Textline merge input extended for model-assisted merge: "
+                    f"ocr_textlines={len(ctx.textlines)}, other_textlines={len(other_textlines)}, "
+                    f"total={len(merge_input_textlines)}"
+                )
+
+        text_regions = await dispatch_textline_merge(merge_input_textlines, ctx.img_rgb.shape[1], ctx.img_rgb.shape[0],  
                                                      config, verbose=self.verbose)  
+        for region in text_regions:
+            if not hasattr(region, "text_raw"):
+                region.text_raw = region.text      # Save initial OCR results for downstream processing.
 
         # 应用合并后的面积过滤（基于合并后的大框）
         # 只过滤单个检测框的小区域，保留包含多个检测框的合并区域
@@ -3434,9 +3462,20 @@ class MangaTranslator:
         if self.verbose:
             img_bbox_raw = np.copy(ctx.img_rgb)
             for txtln in ctx.textlines:
+                det_label = getattr(txtln, 'det_label', None) or getattr(txtln, 'yolo_label', None)
+                if isinstance(det_label, str) and det_label.strip().lower() == 'other':
+                    continue
                 cv2.polylines(img_bbox_raw, [txtln.pts], True, color=(255, 0, 0), thickness=2)
             imwrite_unicode(self._result_path('bboxes_unfiltered.png'), cv2.cvtColor(img_bbox_raw, cv2.COLOR_RGB2BGR), logger)
-            self._save_labeled_textline_debug_image(ctx.img_rgb, ctx.textlines, 'bboxes_unfiltered_labeled.png')
+            # 仅在开启模型辅助合并时输出标签调试图，避免开关关闭时仍生成该文件。
+            # 调试图优先使用检测原始全集（含 other），用于排查标签分流逻辑。
+            if bool(getattr(config.ocr, 'merge_special_require_full_wrap', True)):
+                labeled_debug_textlines = getattr(ctx, 'all_detected_textlines', None) or ctx.textlines
+                self._save_labeled_textline_debug_image(
+                    ctx.img_rgb,
+                    labeled_debug_textlines,
+                    'bboxes_unfiltered_labeled.png'
+                )
 
         # -- OCR
         await self._report_progress('ocr')

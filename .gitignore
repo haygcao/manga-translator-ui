@@ -252,6 +252,11 @@ CLAUDE.md
 
 # Cherry Studio (外部项目)
 cherry-studio-main/
+X-AnyLabeling-main/
 
 # Local temp history
 .tmp_history/
+
+# External projects (外部项目源码)
+PaddleOCR-main/
+Saber-Translator-main/

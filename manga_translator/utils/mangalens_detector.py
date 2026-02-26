@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import os
 import threading
 from pathlib import Path
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -815,6 +815,8 @@ class MangaLensBubbleDetector(ModelWrapper):
 
 
 _default_detector: Optional[MangaLensBubbleDetector] = None
+_mangalens_result_cache: Dict[Tuple[Any, ...], BubbleDetectionResult] = {}
+_MANGALENS_RESULT_CACHE_MAX = 8
 
 
 def get_mangalens_detector(model_path: Optional[Union[str, Path]] = None) -> MangaLensBubbleDetector:
@@ -824,10 +826,128 @@ def get_mangalens_detector(model_path: Optional[Union[str, Path]] = None) -> Man
     return _default_detector
 
 
+def _normalize_cache_classes(classes: Any) -> Optional[Tuple[int, ...]]:
+    if classes is None:
+        return None
+    if isinstance(classes, np.ndarray):
+        classes = classes.tolist()
+    if isinstance(classes, (list, tuple, set)):
+        out = []
+        for c in classes:
+            try:
+                out.append(int(c))
+            except Exception:
+                continue
+        return tuple(sorted(out))
+    try:
+        return (int(classes),)
+    except Exception:
+        return None
+
+
+def _make_cache_image_key(image: ImageInput) -> Tuple[Any, ...]:
+    if isinstance(image, np.ndarray):
+        try:
+            ptr = int(image.__array_interface__['data'][0])
+        except Exception:
+            ptr = id(image)
+        return ("ndarray", ptr, tuple(image.shape), str(image.dtype), tuple(image.strides))
+    return ("path", str(image))
+
+
+def _make_mangalens_cache_key(
+    image: ImageInput,
+    model_path: Optional[Union[str, Path]],
+    kwargs: Dict[str, Any],
+) -> Tuple[Any, ...]:
+    return (
+        _make_cache_image_key(image),
+        str(model_path) if model_path is not None else None,
+        kwargs.get("imgsz", None),
+        kwargs.get("conf", None),
+        kwargs.get("iou", None),
+        kwargs.get("device", None),
+        _normalize_cache_classes(kwargs.get("classes", None)),
+    )
+
+
+def _put_cache(key: Tuple[Any, ...], value: BubbleDetectionResult):
+    _mangalens_result_cache[key] = value
+    # Keep cache bounded and simple.
+    while len(_mangalens_result_cache) > _MANGALENS_RESULT_CACHE_MAX:
+        oldest_key = next(iter(_mangalens_result_cache))
+        _mangalens_result_cache.pop(oldest_key, None)
+
+
+def build_bubble_mask_from_mangalens_result(
+    result: Optional[BubbleDetectionResult],
+    image_shape: Tuple[int, int],
+) -> np.ndarray:
+    h, w = int(image_shape[0]), int(image_shape[1])
+    mask = np.zeros((h, w), dtype=np.uint8)
+    if result is None or h <= 0 or w <= 0:
+        return mask
+
+    raw_result = getattr(result, "raw_result", None)
+    raw_masks = getattr(raw_result, "masks", None) if raw_result is not None else None
+
+    # Prefer full segmentation masks from model output.
+    if raw_masks is not None:
+        mask_data = getattr(raw_masks, "data", None)
+        if mask_data is not None:
+            try:
+                if hasattr(mask_data, "detach"):
+                    mask_data = mask_data.detach().cpu().numpy()
+                mask_data = np.asarray(mask_data)
+                if mask_data.ndim == 3 and mask_data.shape[0] > 0:
+                    merged = (mask_data > 0).any(axis=0).astype(np.uint8) * 255
+                    if merged.shape != (h, w):
+                        merged = cv2.resize(merged, (w, h), interpolation=cv2.INTER_NEAREST)
+                    mask = np.maximum(mask, merged)
+            except Exception:
+                pass
+
+        polygons = getattr(raw_masks, "xy", None)
+        if polygons is not None:
+            for polygon in polygons:
+                pts = np.asarray(polygon, dtype=np.int32)
+                if pts.ndim != 2 or pts.shape[0] < 3:
+                    continue
+                pts[:, 0] = np.clip(pts[:, 0], 0, max(w - 1, 0))
+                pts[:, 1] = np.clip(pts[:, 1], 0, max(h - 1, 0))
+                cv2.fillPoly(mask, [pts], 255)
+
+    # Fallback to boxes if segmentation is unavailable.
+    if np.count_nonzero(mask) == 0:
+        for det in getattr(result, "detections", []):
+            try:
+                x1, y1, x2, y2 = det.xyxy
+            except Exception:
+                continue
+            ix1 = max(0, min(w - 1, int(round(x1))))
+            iy1 = max(0, min(h - 1, int(round(y1))))
+            ix2 = max(0, min(w, int(round(x2))))
+            iy2 = max(0, min(h, int(round(y2))))
+            if ix2 > ix1 and iy2 > iy1:
+                cv2.rectangle(mask, (ix1, iy1), (ix2, iy2), 255, -1)
+
+    return mask
+
+
 def detect_bubbles_with_mangalens(
     image: ImageInput,
     model_path: Optional[Union[str, Path]] = None,
     **kwargs,
 ) -> BubbleDetectionResult:
+    use_cache = not bool(kwargs.get("return_annotated", False))
+    cache_key = _make_mangalens_cache_key(image, model_path, kwargs) if use_cache else None
+    if use_cache and cache_key is not None:
+        cached = _mangalens_result_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
     detector = get_mangalens_detector(model_path=model_path)
-    return detector.detect(image, **kwargs)
+    result = detector.detect(image, **kwargs)
+    if use_cache and cache_key is not None:
+        _put_cache(cache_key, result)
+    return result

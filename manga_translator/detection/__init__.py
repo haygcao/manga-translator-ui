@@ -38,7 +38,7 @@ async def prepare(detector_key: Detector):
 
 async def dispatch(detector_key: Detector, image: np.ndarray, detect_size: int, text_threshold: float, box_threshold: float, unclip_ratio: float,
                    device: str = 'cpu', verbose: bool = False,
-                   use_yolo_obb: bool = False, yolo_obb_conf: float = 0.4, yolo_obb_iou: float = 0.6, yolo_obb_overlap_threshold: float = 0.1, min_box_area_ratio: float = 0.0009,
+                   use_yolo_obb: bool = False, yolo_obb_conf: float = 0.4, yolo_obb_overlap_threshold: float = 0.1, min_box_area_ratio: float = 0.0009,
                    result_path_fn=None):
     """
     检测调度函数，支持混合检测模式
@@ -46,7 +46,6 @@ async def dispatch(detector_key: Detector, image: np.ndarray, detect_size: int, 
     Args:
         use_yolo_obb: 是否启用YOLO OBB辅助检测器
         yolo_obb_conf: YOLO OBB检测器的置信度阈值
-        yolo_obb_iou: YOLO OBB检测器的IoU阈值（交叉比）
         min_box_area_ratio: 最小检测框面积占比（相对图片总像素）
         result_path_fn: 结果路径生成函数（用于保存调试图）
     """
@@ -65,8 +64,6 @@ async def dispatch(detector_key: Detector, image: np.ndarray, detect_size: int, 
     # YOLO OBB辅助检测
     try:
         yolo_detector = get_detector_instance('yolo_obb', YOLOOBBDetector)
-        # 透传 YOLO OBB NMS IoU 参数（用于模型内部后处理）
-        yolo_detector.nms_iou_threshold = float(yolo_obb_iou)
         await yolo_detector.load(device)
         
         # YOLO OBB检测（使用yolo_obb_conf作为text_threshold）

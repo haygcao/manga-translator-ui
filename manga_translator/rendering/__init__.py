@@ -1,10 +1,11 @@
 import math
 import os
 import re
+import copy
 import cv2
 # import logging
 import numpy as np
-from typing import List
+from typing import List, Optional, Tuple
 from shapely import affinity
 from shapely.geometry import Polygon
 from tqdm import tqdm
@@ -14,13 +15,14 @@ from . import text_render_hq
 from .auto_linebreak import solve_no_br_layout
 from .text_render_eng import render_textblock_list_eng
 from .text_render_pillow_eng import render_textblock_list_eng as render_textblock_list_eng_pillow
-from .ballon_extractor import extract_ballon_region
 
 # 只使用 freetype 渲染器（稳定可靠）
 from ..utils import (
     BASE_PATH,
     TextBlock,
+    build_bubble_mask_from_mangalens_result,
     color_difference,
+    detect_bubbles_with_mangalens,
     fg_bg_compare,
     get_logger,
     rotate_polygons,
@@ -676,6 +678,193 @@ def optimize_line_breaks_for_region(region: TextBlock, config: Config, target_fo
         # 即使数量相同，也返回标准化后的文本（全角变半角）
         return best_text, best_font_size
 
+def _resolve_region_render_horizontal(region: TextBlock) -> bool:
+    forced_direction = region._direction if hasattr(region, '_direction') else region.direction
+    if forced_direction != 'auto':
+        if forced_direction in ['horizontal', 'h']:
+            return True
+        if forced_direction in ['vertical', 'v']:
+            return False
+    return region.horizontal
+
+
+def _polygon_fully_inside_mask(points: np.ndarray, bubble_mask: np.ndarray) -> bool:
+    if points is None or points.size == 0 or bubble_mask is None:
+        return False
+    h, w = bubble_mask.shape[:2]
+    if h <= 0 or w <= 0:
+        return False
+
+    pts = np.asarray(points, dtype=np.int32)
+    if pts.ndim != 2 or pts.shape[0] < 3:
+        return False
+    pts[:, 0] = np.clip(pts[:, 0], 0, max(w - 1, 0))
+    pts[:, 1] = np.clip(pts[:, 1], 0, max(h - 1, 0))
+
+    poly_mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(poly_mask, [pts], 255)
+    poly_pixels = poly_mask > 0
+    if not np.any(poly_pixels):
+        return False
+    return bool(np.all(bubble_mask[poly_pixels] > 0))
+
+
+def _region_lines_fully_inside_mask(region: TextBlock, bubble_mask: np.ndarray) -> bool:
+    lines = np.asarray(region.lines)
+    if lines.size == 0:
+        return False
+
+    if lines.ndim == 2 and lines.shape[1] == 8:
+        polys = lines.reshape(-1, 4, 2)
+    elif lines.ndim == 3 and lines.shape[1:] == (4, 2):
+        polys = lines
+    else:
+        return False
+
+    for poly in polys:
+        if not _polygon_fully_inside_mask(poly, bubble_mask):
+            return False
+    return True
+
+
+def _extract_region_polygons(region: TextBlock) -> List[np.ndarray]:
+    lines = np.asarray(region.lines)
+    polygons: List[np.ndarray] = []
+
+    if lines.size > 0:
+        if lines.ndim == 2 and lines.shape[1] == 8:
+            polygons.extend(np.asarray(poly, dtype=np.float32) for poly in lines.reshape(-1, 4, 2))
+        elif lines.ndim == 3 and lines.shape[1:] == (4, 2):
+            polygons.extend(np.asarray(poly, dtype=np.float32) for poly in lines)
+
+    if not polygons:
+        rect = np.asarray(region.min_rect)
+        if rect.ndim == 3 and rect.shape[0] > 0 and rect.shape[1:] == (4, 2):
+            polygons.append(np.asarray(rect[0], dtype=np.float32))
+        elif rect.ndim == 2 and rect.shape == (4, 2):
+            polygons.append(np.asarray(rect, dtype=np.float32))
+
+    return polygons
+
+
+def _build_region_reference_mask(
+    region: TextBlock,
+    bubble_mask: np.ndarray,
+    label_map: Optional[np.ndarray],
+) -> np.ndarray:
+    if bubble_mask is None or np.count_nonzero(bubble_mask) == 0:
+        return np.zeros((0, 0), dtype=np.uint8)
+
+    h, w = bubble_mask.shape[:2]
+    region_mask = np.zeros((h, w), dtype=np.uint8)
+    for poly in _extract_region_polygons(region):
+        pts = np.asarray(poly, dtype=np.int32)
+        if pts.ndim != 2 or pts.shape[0] < 3:
+            continue
+        pts[:, 0] = np.clip(pts[:, 0], 0, max(w - 1, 0))
+        pts[:, 1] = np.clip(pts[:, 1], 0, max(h - 1, 0))
+        cv2.fillPoly(region_mask, [pts], 255)
+
+    overlap_pixels = (region_mask > 0) & (bubble_mask > 0)
+    if not np.any(overlap_pixels):
+        return np.zeros((h, w), dtype=np.uint8)
+
+    if label_map is None or label_map.shape[:2] != bubble_mask.shape[:2]:
+        return np.where(bubble_mask > 0, 255, 0).astype(np.uint8)
+
+    labels = np.unique(label_map[overlap_pixels])
+    labels = labels[labels > 0]
+    if labels.size == 0:
+        return np.zeros((h, w), dtype=np.uint8)
+
+    selected = np.isin(label_map, labels)
+    return np.where(selected, 255, 0).astype(np.uint8)
+
+
+def _resolve_line_spacing_multiplier(region: TextBlock, config: Config) -> float:
+    region_line_spacing = getattr(region, 'line_spacing', None)
+    if isinstance(region_line_spacing, (int, float)) and region_line_spacing > 0:
+        return float(region_line_spacing)
+    cfg_val = config.render.line_spacing if config and hasattr(config, 'render') else None
+    if isinstance(cfg_val, (int, float)) and cfg_val > 0:
+        return float(cfg_val)
+    return 1.0
+
+
+def _calc_region_dst_points_for_font(
+    region: TextBlock,
+    font_size: int,
+    render_horizontally: bool,
+    line_spacing_multiplier: float,
+    config: Config,
+) -> Optional[np.ndarray]:
+    return calc_box_from_font(
+        int(max(font_size, 1)),
+        region.translation,
+        render_horizontally,
+        line_spacing_multiplier,
+        config,
+        region.target_lang,
+        center=tuple(region.center),
+        angle=region.angle,
+    )
+
+
+def _font_size_fits_bubble_mask(
+    region: TextBlock,
+    font_size: int,
+    render_horizontally: bool,
+    line_spacing_multiplier: float,
+    config: Config,
+    bubble_mask: np.ndarray,
+) -> Tuple[bool, Optional[np.ndarray]]:
+    dst_points = _calc_region_dst_points_for_font(
+        region=region,
+        font_size=font_size,
+        render_horizontally=render_horizontally,
+        line_spacing_multiplier=line_spacing_multiplier,
+        config=config,
+    )
+    if dst_points is None or dst_points.size == 0:
+        return False, None
+    fits = _polygon_fully_inside_mask(np.asarray(dst_points[0]), bubble_mask)
+    return fits, dst_points
+
+
+def _binary_search_font_for_bubble_mask(
+    region: TextBlock,
+    start_font_size: int,
+    min_font_size: int,
+    render_horizontally: bool,
+    line_spacing_multiplier: float,
+    config: Config,
+    bubble_mask: np.ndarray,
+) -> Tuple[Optional[int], Optional[np.ndarray]]:
+    lo = max(int(min_font_size), 1)
+    hi = max(int(start_font_size), lo)
+    best_font: Optional[int] = None
+    best_dst_points: Optional[np.ndarray] = None
+
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        fits, dst_points = _font_size_fits_bubble_mask(
+            region=region,
+            font_size=mid,
+            render_horizontally=render_horizontally,
+            line_spacing_multiplier=line_spacing_multiplier,
+            config=config,
+            bubble_mask=bubble_mask,
+        )
+        if fits:
+            best_font = mid
+            best_dst_points = dst_points
+            lo = mid + 1
+        else:
+            hi = mid - 1
+
+    return best_font, best_dst_points
+
+
 def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock'], config: Config, original_img: np.ndarray = None, return_debug_img: bool = False, editor_mode: bool = False, skip_font_scaling: bool = False):
     """
     Resize text regions based on layout mode.
@@ -694,6 +883,31 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
     if mode == 'balloon_fill' and original_img is not None and return_debug_img:
         debug_img = original_img.copy()
         logger.debug("Created debug image for balloon_fill visualization")
+
+    balloon_fill_mask = None
+    balloon_fill_label_map = None
+    if mode == 'balloon_fill' and original_img is not None:
+        try:
+            model_result = detect_bubbles_with_mangalens(original_img, return_annotated=False, verbose=False)
+            balloon_fill_mask = build_bubble_mask_from_mangalens_result(model_result, original_img.shape[:2])
+            mask_pixels = int(np.count_nonzero(balloon_fill_mask))
+            detected = len(model_result.detections) if model_result is not None else 0
+            logger.info(
+                f"balloon_fill model mask prepared: detections={detected}, mask_pixels={mask_pixels}"
+            )
+            if mask_pixels > 0:
+                _, balloon_fill_label_map = cv2.connectedComponents(
+                    np.where(balloon_fill_mask > 0, 1, 0).astype(np.uint8),
+                    connectivity=8,
+                )
+                if debug_img is not None:
+                    contours, _ = cv2.findContours(balloon_fill_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if contours:
+                        cv2.drawContours(debug_img, contours, -1, (255, 0, 0), 1)
+        except Exception as exc:
+            logger.warning(f"balloon_fill model mask failed, fallback to existing behavior: {exc}")
+            balloon_fill_mask = np.zeros(original_img.shape[:2], dtype=np.uint8)
+            balloon_fill_label_map = None
 
     dst_points_list = []
     for region_idx, region in enumerate(text_regions):
@@ -766,166 +980,244 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
         if mode == 'balloon_fill':
             logger.info(f"=== balloon_fill mode activated for region {region_idx} ===")
             logger.info(f"OCR box (xywh): {region.xywh}")
-            
-            if original_img is None:
-                # Fallback to default if no original image
-                logger.warning("balloon_fill mode requires original_img, falling back to OCR box")
-                dst_points_list.append(region.min_rect)
-                region.font_size = target_font_size
-                continue
-            
-            try:
-                # Step 1: Extract balloon region
-                enlarge_ratio = min(max(region.xywh[2] / region.xywh[3], region.xywh[3] / region.xywh[2]) * 1.5, 3)
-                logger.info(f"Enlarge ratio: {enlarge_ratio}")
-                
-                ballon_mask, xyxy = extract_ballon_region(original_img, region.xywh, enlarge_ratio=enlarge_ratio)
-                ballon_area = (ballon_mask > 0).sum()
-                
-                if ballon_area == 0:
-                    # Balloon detection failed, use original OCR box
-                    logger.warning(f"Balloon detection failed for region {region_idx}, using OCR box")
-                    dst_points_list.append(region.min_rect)
-                    region.font_size = target_font_size
-                    continue
-                
-                # Calculate balloon bounding rect (minimum bounding rectangle)
-                region_x, region_y, region_w, region_h = cv2.boundingRect(cv2.findNonZero(ballon_mask))
-                
-                # Convert to absolute coordinates
-                balloon_x1 = xyxy[0] + region_x
-                balloon_y1 = xyxy[1] + region_y
-                balloon_width = region_w
-                balloon_height = region_h
-                
-                logger.info(f"Balloon size: {balloon_width}x{balloon_height} at ({balloon_x1}, {balloon_y1})")
-                
-                # Optimize line breaks if enabled
-                has_br = bool(re.search(r'(\[BR\]|【BR】|<br>)', region.translation, flags=re.IGNORECASE))
-                if config.render.optimize_line_breaks and config.render.disable_auto_wrap and has_br:
-                    logger.debug("[OPTIMIZE] Optimizing line breaks for balloon_fill mode")
-                    optimized_text, _ = optimize_line_breaks_for_region(
-                        region, config, target_font_size, balloon_width, balloon_height
-                    )
-                    region.translation = optimized_text
-                    logger.debug(f"[OPTIMIZE] Optimized text: {region.translation}")
-                
-                # Step 2: Calculate required text dimensions
-                required_width = 0
-                required_height = 0
-                
-                # Determine max dimensions for text calculation (following smart_scaling logic)
-                text_for_calc = region.translation
-                if config.render.disable_auto_wrap:
-                    # AI line breaking enabled
-                    text_for_calc = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text_for_calc, flags=re.IGNORECASE)
-                    use_unlimited_dimension = True
-                elif '\n' not in text_for_calc and len(text_regions) <= 1:
-                    # Smart scaling: no manual breaks and single region
-                    use_unlimited_dimension = True
-                else:
-                    use_unlimited_dimension = False
-                
-                logger.info(f"Use unlimited dimension: {use_unlimited_dimension}")
-                
-                if region.horizontal:
-                    # Horizontal text
-                    max_width_for_calc = 99999 if use_unlimited_dimension else balloon_width
-                    max_height_for_calc = 99999  # Height is always unlimited for horizontal
-                    
-                    lines, widths = text_render.calc_horizontal(
-                        target_font_size, 
-                        text_for_calc, 
-                        max_width=max_width_for_calc, 
-                        max_height=max_height_for_calc, 
 
-                        language=region.target_lang
-                    )
-                    if widths:
-                        spacing_y = int(target_font_size * 0.01 * (config.render.line_spacing or 1.0))
-                        required_width = max(widths)
-                        required_height = target_font_size * len(lines) + spacing_y * max(0, len(lines) - 1)
-                else:
-                    # Vertical text
-                    text_for_calc = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text_for_calc, flags=re.IGNORECASE)
-                    if config.render.auto_rotate_symbols:
-                        text_for_calc = text_render.auto_add_horizontal_tags(text_for_calc)
-                    
-                    max_height_for_calc = 99999 if use_unlimited_dimension else balloon_height
-                    
-                    lines, heights = text_render.calc_vertical(
-                        target_font_size, 
-                        text_for_calc, 
-                        max_height=max_height_for_calc
-                    )
-                    if heights:
-                        spacing_x = int(target_font_size * 0.2 * (config.render.line_spacing or 1.0))
-                        required_height = max(heights)
-                        required_width = target_font_size * len(lines) + spacing_x * max(0, len(lines) - 1)
-                
-                logger.info(f"Required text size: {required_width}x{required_height}")
-                
-                # Step 3: Calculate font scale factor
-                if required_width > 0 and required_height > 0:
-                    width_scale = balloon_width / required_width
-                    height_scale = balloon_height / required_height
-                    font_scale_factor = min(width_scale, height_scale)
-                    
-                    # Clamp to reasonable range
-                    font_scale_factor = max(min(font_scale_factor, 2.0), 0.3)
-                    
-                    logger.info(f"Font scale factor: {font_scale_factor} (width_scale={width_scale:.2f}, height_scale={height_scale:.2f})")
-                    
-                    # Apply font scaling
-                    target_font_size = int(target_font_size * font_scale_factor)
-                else:
-                    logger.warning("Invalid required dimensions, keeping original font size")
-                
-                # Step 4: Create dst_points based on balloon rectangle
-                new_dst_points = np.array([
-                    [balloon_x1, balloon_y1],
-                    [balloon_x1 + balloon_width, balloon_y1],
-                    [balloon_x1 + balloon_width, balloon_y1 + balloon_height],
-                    [balloon_x1, balloon_y1 + balloon_height]
-                ], dtype=np.float32).reshape(1, 4, 2)
-                
-                # Apply final font size adjustments
-                final_font_size = int(max(target_font_size, min_font_size) * config.render.font_scale_ratio)
+            if original_img is None:
+                logger.warning("balloon_fill mode requires original_img, fallback to geometry-based dst_points")
+                fallback_font_size = int(max(target_font_size, min_font_size) * config.render.font_scale_ratio)
                 if config.render.max_font_size > 0:
-                    final_font_size = min(final_font_size, config.render.max_font_size)
-                
-                region.font_size = final_font_size
-                dst_points_list.append(new_dst_points)
-                
-                logger.info(f"Final font size: {final_font_size}, dst_points: {new_dst_points[0]}")
-                
-                # === DEBUG: Draw rectangles on shared debug image ===
+                    fallback_font_size = min(fallback_font_size, config.render.max_font_size)
+                fallback_dst_points = _calc_region_dst_points_for_font(
+                    region=region,
+                    font_size=fallback_font_size,
+                    render_horizontally=_resolve_region_render_horizontal(region),
+                    line_spacing_multiplier=_resolve_line_spacing_multiplier(region, config),
+                    config=config,
+                )
+                if fallback_dst_points is None:
+                    fallback_dst_points = region.min_rect
+                region.font_size = int(max(fallback_font_size, 1))
+                dst_points_list.append(fallback_dst_points)
+                continue
+
+            try:
+                render_horizontally = _resolve_region_render_horizontal(region)
+                line_spacing_multiplier = _resolve_line_spacing_multiplier(region, config)
+
+                has_br = bool(re.search(r'(\[BR\]|【BR】|<br>)', region.translation, flags=re.IGNORECASE))
+                region_bubble_mask = np.zeros(original_img.shape[:2], dtype=np.uint8)
+                if balloon_fill_mask is not None and np.count_nonzero(balloon_fill_mask) > 0:
+                    region_bubble_mask = _build_region_reference_mask(region, balloon_fill_mask, balloon_fill_label_map)
+
+                lines_fully_enclosed = (
+                    np.count_nonzero(region_bubble_mask) > 0
+                    and _region_lines_fully_inside_mask(region, region_bubble_mask)
+                )
+                used_smart_scaling_fallback = False
+                chosen_dst_points = None
+                chosen_font_size = int(max(target_font_size, min_font_size))
+
+                if not lines_fully_enclosed:
+                    used_smart_scaling_fallback = True
+                    smart_scaling_config = copy.deepcopy(config)
+                    smart_scaling_config.render.layout_mode = 'smart_scaling'
+                    smart_result = resize_regions_to_font_size(
+                        img=img,
+                        text_regions=[region],
+                        config=smart_scaling_config,
+                        original_img=None,
+                        return_debug_img=False,
+                        editor_mode=editor_mode,
+                        skip_font_scaling=skip_font_scaling,
+                    )
+                    if isinstance(smart_result, list) and len(smart_result) > 0:
+                        chosen_dst_points = smart_result[0]
+                    if chosen_dst_points is None:
+                        chosen_dst_points = region.min_rect
+                    chosen_font_size = region.font_size if region.font_size > 0 else chosen_font_size
+                    logger.info(f"balloon_fill region {region_idx}: not fully enclosed, fallback to smart_scaling")
+                else:
+                    bubble_width, bubble_height = region.unrotated_size
+                    mask_nonzero = cv2.findNonZero(region_bubble_mask)
+                    if mask_nonzero is not None:
+                        _, _, bubble_width, bubble_height = cv2.boundingRect(mask_nonzero)
+                    if not (isinstance(bubble_width, (int, float)) and np.isfinite(bubble_width) and bubble_width > 0):
+                        bubble_width = float(max(region.xywh[2], 1))
+                    if not (isinstance(bubble_height, (int, float)) and np.isfinite(bubble_height) and bubble_height > 0):
+                        bubble_height = float(max(region.xywh[3], 1))
+
+                    layout_target_font_size = int(target_font_size)
+                    if not has_br:
+                        no_br_max_font_size = int(layout_target_font_size)
+                        if render_horizontally:
+                            total_width = text_render.get_string_width(layout_target_font_size, region.translation)
+                            spacing_y = int(layout_target_font_size * 0.01 * line_spacing_multiplier)
+                            ratio = bubble_width / bubble_height if bubble_height > 0 else 1.0
+
+                            a = layout_target_font_size + spacing_y
+                            b = -spacing_y
+                            c = -total_width / ratio if ratio > 0 else -total_width
+
+                            discriminant = b * b - 4 * a * c
+                            if discriminant >= 0 and a > 0:
+                                n_float = (-b + np.sqrt(discriminant)) / (2 * a)
+                                n_floor = max(1, int(np.floor(n_float)))
+                                n_ceil = max(1, int(np.ceil(n_float)))
+                            else:
+                                n_floor = n_ceil = 1
+
+                            def calc_max_font_horizontal(n, total_w, bw, bh, lsm, target_fs):
+                                height_factor = n + (n - 1) * 0.01 * lsm
+                                max_by_height = int(bh / height_factor) if height_factor > 0 else target_fs
+                                max_by_width = int(bw * n * target_fs / total_w) if total_w > 0 else target_fs
+                                return min(max_by_height, max_by_width)
+
+                            font_floor = calc_max_font_horizontal(
+                                n_floor, total_width, bubble_width, bubble_height, line_spacing_multiplier, layout_target_font_size
+                            )
+                            font_ceil = calc_max_font_horizontal(
+                                n_ceil, total_width, bubble_width, bubble_height, line_spacing_multiplier, layout_target_font_size
+                            )
+
+                            if font_floor >= font_ceil:
+                                seed_segments = n_floor
+                                seed_font_size = font_floor
+                            else:
+                                seed_segments = n_ceil
+                                seed_font_size = font_ceil
+                        else:
+                            total_height = text_render.get_string_height(layout_target_font_size, region.translation)
+                            spacing_x = int(layout_target_font_size * 0.2 * line_spacing_multiplier)
+                            ratio = bubble_width / bubble_height if bubble_height > 0 else 1.0
+
+                            a = layout_target_font_size + spacing_x
+                            b = -spacing_x
+                            c = -total_height * ratio
+
+                            discriminant = b * b - 4 * a * c
+                            if discriminant >= 0 and a > 0:
+                                n_float = (-b + np.sqrt(discriminant)) / (2 * a)
+                                n_floor = max(1, int(np.floor(n_float)))
+                                n_ceil = max(1, int(np.ceil(n_float)))
+                            else:
+                                n_floor = n_ceil = 1
+
+                            def calc_max_font_vertical(n, total_h, bw, bh, lsm, target_fs):
+                                width_factor = n + (n - 1) * 0.2 * lsm
+                                max_by_width = int(bw / width_factor) if width_factor > 0 else target_fs
+                                max_by_height = int(bh * n * target_fs / total_h) if total_h > 0 else target_fs
+                                return min(max_by_width, max_by_height)
+
+                            font_floor = calc_max_font_vertical(
+                                n_floor, total_height, bubble_width, bubble_height, line_spacing_multiplier, layout_target_font_size
+                            )
+                            font_ceil = calc_max_font_vertical(
+                                n_ceil, total_height, bubble_width, bubble_height, line_spacing_multiplier, layout_target_font_size
+                            )
+
+                            if font_floor >= font_ceil:
+                                seed_segments = n_floor
+                                seed_font_size = font_floor
+                            else:
+                                seed_segments = n_ceil
+                                seed_font_size = font_ceil
+
+                        seed_font_size = int(max(min(seed_font_size, layout_target_font_size), min_font_size))
+                        no_br_result = solve_no_br_layout(
+                            text=region.translation,
+                            horizontal=render_horizontally,
+                            seed_segments=seed_segments,
+                            seed_font_size=seed_font_size,
+                            bubble_width=bubble_width,
+                            bubble_height=bubble_height,
+                            min_font_size=min_font_size,
+                            max_font_size=no_br_max_font_size,
+                            line_spacing_multiplier=line_spacing_multiplier,
+                            target_lang=region.target_lang,
+                            config=config,
+                        )
+                        region.translation = no_br_result.text_with_br
+                        layout_target_font_size = int(no_br_result.font_size)
+                        logger.debug(
+                            f"balloon_fill region {region_idx}: no_br layout merged, segments={no_br_result.n_segments}, "
+                            f"font={layout_target_font_size}, required={no_br_result.required_width:.1f}x{no_br_result.required_height:.1f}"
+                        )
+
+                    preferred_font_size = int(max(layout_target_font_size, min_font_size) * config.render.font_scale_ratio)
+                    preferred_font_size = max(preferred_font_size, 1)
+                    if config.render.max_font_size > 0:
+                        preferred_font_size = min(preferred_font_size, config.render.max_font_size)
+
+                    best_font_size, best_dst_points = _binary_search_font_for_bubble_mask(
+                        region=region,
+                        start_font_size=preferred_font_size,
+                        min_font_size=min_font_size,
+                        render_horizontally=render_horizontally,
+                        line_spacing_multiplier=line_spacing_multiplier,
+                        config=config,
+                        bubble_mask=region_bubble_mask,
+                    )
+                    if best_font_size is None and min_font_size > 1:
+                        best_font_size, best_dst_points = _binary_search_font_for_bubble_mask(
+                            region=region,
+                            start_font_size=preferred_font_size,
+                            min_font_size=1,
+                            render_horizontally=render_horizontally,
+                            line_spacing_multiplier=line_spacing_multiplier,
+                            config=config,
+                            bubble_mask=region_bubble_mask,
+                        )
+                    if best_font_size is not None and best_dst_points is not None:
+                        chosen_font_size = int(best_font_size)
+                        chosen_dst_points = best_dst_points
+                        logger.info(
+                            f"balloon_fill region {region_idx}: enclosed lines, binary-search font {preferred_font_size}->{chosen_font_size}"
+                        )
+                    else:
+                        chosen_font_size = preferred_font_size
+                        chosen_dst_points = _calc_region_dst_points_for_font(
+                            region=region,
+                            font_size=chosen_font_size,
+                            render_horizontally=render_horizontally,
+                            line_spacing_multiplier=line_spacing_multiplier,
+                            config=config,
+                        )
+
+                if chosen_dst_points is None:
+                    chosen_dst_points = region.min_rect
+
+                region.font_size = int(max(chosen_font_size, 1))
+                dst_points_list.append(chosen_dst_points)
+
                 if debug_img is not None:
-                    # Draw OCR box (red) - convert to int
                     ocr_x1, ocr_y1, ocr_w, ocr_h = map(int, region.xywh)
                     cv2.rectangle(debug_img, (ocr_x1, ocr_y1), (ocr_x1 + ocr_w, ocr_y1 + ocr_h), (0, 0, 255), 2)
-                    cv2.putText(debug_img, f'OCR{region_idx}', (ocr_x1, ocr_y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                    
-                    # Draw enlarged search area (yellow) - convert to int
-                    search_x1, search_y1, search_x2, search_y2 = map(int, xyxy)
-                    cv2.rectangle(debug_img, (search_x1, search_y1), (search_x2, search_y2), (0, 255, 255), 2)
-                    
-                    # Draw balloon mask contour (blue) - actual detected balloon shape
-                    contours, _ = cv2.findContours(ballon_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    if contours:
-                        # Offset contours to original image coordinates
-                        offset_contours = [cnt + np.array([[[xyxy[0], xyxy[1]]]]) for cnt in contours]
-                        cv2.drawContours(debug_img, offset_contours, -1, (255, 0, 0), 2)
-                    
-                    # Draw balloon bounding box (green) - the rectangle used for text rendering
-                    cv2.rectangle(debug_img, (int(balloon_x1), int(balloon_y1)), (int(balloon_x1 + balloon_width), int(balloon_y1 + balloon_height)), (0, 255, 0), 3)
-                    cv2.putText(debug_img, f'B{region_idx}', (int(balloon_x1), int(balloon_y1) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                
+
+                    if np.count_nonzero(region_bubble_mask) > 0:
+                        component_contours, _ = cv2.findContours(region_bubble_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        if component_contours:
+                            cv2.drawContours(debug_img, component_contours, -1, (0, 255, 255), 1)
+
+                    render_poly = np.asarray(chosen_dst_points).reshape(-1, 2).astype(np.int32)
+                    if render_poly.shape[0] >= 4:
+                        cv2.polylines(debug_img, [render_poly], True, (0, 255, 0), 2)
+                        label = f'B{region_idx}:{region.font_size}'
+                        if used_smart_scaling_fallback:
+                            label += ':SS'
+                        elif lines_fully_enclosed:
+                            label += ':S'
+                        cv2.putText(
+                            debug_img,
+                            label,
+                            tuple(render_poly[0]),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.45,
+                            (0, 255, 0),
+                            1,
+                        )
             except Exception as e:
                 logger.error(f"Error in balloon_fill mode: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
-                # Fallback to OCR box
                 dst_points_list.append(region.min_rect)
                 region.font_size = target_font_size
 
@@ -1382,8 +1674,8 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
         legend_y = 30
         cv2.putText(debug_img, 'Balloon Fill Debug:', (10, legend_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.putText(debug_img, 'Red = OCR Box', (10, legend_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        cv2.putText(debug_img, 'Yellow = Search Area', (10, legend_y + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-        cv2.putText(debug_img, 'Blue = Balloon Mask', (10, legend_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        cv2.putText(debug_img, 'Yellow = Region Bubble Component', (10, legend_y + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+        cv2.putText(debug_img, 'Blue = Global Bubble Mask', (10, legend_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
         cv2.putText(debug_img, 'Green = Render Box', (10, legend_y + 105), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         return dst_points_list, debug_img
     

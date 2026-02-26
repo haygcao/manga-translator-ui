@@ -825,11 +825,8 @@ class MainAppLogic(QObject):
                 "mangajanai": "MangaJaNai"
             },
             "layout_mode": {
-                'default': self._t("layout_mode_default"),
                 'smart_scaling': self._t("layout_mode_smart_scaling"),
                 'strict': self._t("layout_mode_strict"),
-                'fixed_font': self._t("layout_mode_fixed_font"),
-                'disable_all': self._t("layout_mode_disable_all"),
                 'balloon_fill': self._t("layout_mode_balloon_fill")
             },
                 "realcugan_model": {
@@ -860,6 +857,28 @@ class MainAppLogic(QObject):
                     "original": self._t("translator_original"),
                 },
                 "target_lang": self.translation_service.get_target_languages(),
+                "ocr_vl_language_hint": {
+                    "auto": self._t("ocr_lang_auto"),
+                    "multilingual": self._t("ocr_lang_multilingual"),
+                    "Arabic": self._t("ocr_lang_arabic"),
+                    "Simplified Chinese": self._t("ocr_lang_simplified_chinese"),
+                    "Traditional Chinese": self._t("ocr_lang_traditional_chinese"),
+                    "English": self._t("ocr_lang_english"),
+                    "Japanese": self._t("ocr_lang_japanese"),
+                    "Korean": self._t("ocr_lang_korean"),
+                    "Spanish": self._t("ocr_lang_spanish"),
+                    "French": self._t("ocr_lang_french"),
+                    "German": self._t("ocr_lang_german"),
+                    "Russian": self._t("ocr_lang_russian"),
+                    "Portuguese": self._t("ocr_lang_portuguese"),
+                    "Italian": self._t("ocr_lang_italian"),
+                    "Thai": self._t("ocr_lang_thai"),
+                    "Vietnamese": self._t("ocr_lang_vietnamese"),
+                    "Indonesian": self._t("ocr_lang_indonesian"),
+                    "Turkish": self._t("ocr_lang_turkish"),
+                    "Polish": self._t("ocr_lang_polish"),
+                    "Ukrainian": self._t("ocr_lang_ukrainian"),
+                },
                 "labels": {
                     "filter_text_enabled": self._t("label_filter_text_enabled"),
                     "kernel_size": self._t("label_kernel_size"),
@@ -884,12 +903,13 @@ class MainAppLogic(QObject):
                     "merge_sigma": self._t("label_merge_sigma"),
                     "merge_edge_ratio_threshold": self._t("label_merge_edge_ratio_threshold"),
                     "merge_special_require_full_wrap": self._t("label_merge_special_require_full_wrap"),
+                    "ocr_vl_language_hint": self._t("label_ocr_vl_language_hint"),
+                    "ocr_vl_custom_prompt": self._t("label_ocr_vl_custom_prompt"),
                     "detector": self._t("label_detector"),
                     "detection_size": self._t("label_detection_size"),
                     "text_threshold": self._t("label_text_threshold"),
                     "use_yolo_obb": self._t("label_use_yolo_obb"),
                     "yolo_obb_conf": self._t("label_yolo_obb_conf"),
-                    "yolo_obb_iou": self._t("label_yolo_obb_iou"),
                     "yolo_obb_overlap_threshold": self._t("label_yolo_obb_overlap_threshold"),
                     "box_threshold": self._t("label_box_threshold"),
                     "unclip_ratio": self._t("label_unclip_ratio"),
@@ -1003,7 +1023,29 @@ class MainAppLogic(QObject):
             "inpainter": [member.value for member in Inpainter],
             "inpainting_precision": [member.value for member in InpaintPrecision],
             "ocr": [member.value for member in Ocr],
-            "secondary_ocr": [member.value for member in Ocr]
+            "secondary_ocr": [member.value for member in Ocr],
+            "ocr_vl_language_hint": [
+                "auto",
+                "multilingual",
+                "Arabic",
+                "Simplified Chinese",
+                "Traditional Chinese",
+                "English",
+                "Japanese",
+                "Korean",
+                "Spanish",
+                "French",
+                "German",
+                "Russian",
+                "Portuguese",
+                "Italian",
+                "Thai",
+                "Vietnamese",
+                "Indonesian",
+                "Turkish",
+                "Polish",
+                "Ukrainian",
+            ],
         }
         return options_map.get(key)
     @pyqtSlot()
@@ -1566,6 +1608,25 @@ class MainAppLogic(QObject):
                 self._t("Please add image files to translate!")
             )
             return
+
+        # API Keys 最少填写一项（仅当当前翻译器需要环境变量时）
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            if hasattr(self, 'main_view') and self.main_view and getattr(self.main_view, 'env_widgets', None):
+                has_any_env_input = any(
+                    (widget.text().strip() != "")
+                    for _, widget in self.main_view.env_widgets.values()
+                )
+                if not has_any_env_input:
+                    self._ui_log("API Keys 未填写，已阻止开始翻译。", "WARNING")
+                    QMessageBox.warning(
+                        None,
+                        self._t("API Keys Required"),
+                        self._t("Please fill at least one field in API Keys (.env) before starting translation.")
+                    )
+                    return
+        except Exception as e:
+            self._ui_log(f"API Keys 校验失败，跳过校验: {e}", "WARNING")
 
         # 启动后台文件扫描
         self.start_file_scanning()

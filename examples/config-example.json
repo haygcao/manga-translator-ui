@@ -36,7 +36,9 @@
     "merge_gamma": 0.8,
     "merge_sigma": 2.5,
     "merge_edge_ratio_threshold": 0.0,
-    "merge_special_require_full_wrap": false
+    "merge_special_require_full_wrap": false,
+    "ocr_vl_language_hint": "auto",
+    "ocr_vl_custom_prompt": null
   },
   "detector": {
     "detector": "default",
@@ -46,7 +48,6 @@
     "unclip_ratio": 2.5,
     "use_yolo_obb": true,
     "yolo_obb_conf": 0.4,
-    "yolo_obb_iou": 0.6,
     "yolo_obb_overlap_threshold": 0.1,
     "min_box_area_ratio": 0
   },
