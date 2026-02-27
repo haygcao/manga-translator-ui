@@ -47,7 +47,6 @@ class OfflineInpainter(CommonInpainter, ModelWrapper):
         Normalize inpainting model input shape on GPU to reduce dynamic-shape plan growth.
         Env vars:
         - MANGA_INPAINT_FIXED_SIZE: force min H/W when > 0
-        - MANGA_INPAINT_SIZE_BUCKET: round H/W up to this bucket on GPU (default: 128)
         """
         base_align = max(1, int(base_align))
         h = base_align * ((int(h) + base_align - 1) // base_align)
@@ -60,12 +59,6 @@ class OfflineInpainter(CommonInpainter, ModelWrapper):
         if fixed_size > 0:
             return max(h, fixed_size), max(w, fixed_size)
 
-        bucket = int(os.environ.get("MANGA_INPAINT_SIZE_BUCKET", "128") or 128)
-        if bucket <= 1:
-            return h, w
-        return (
-            bucket * ((h + bucket - 1) // bucket),
-            bucket * ((w + bucket - 1) // bucket),
-        )
+        return h, w
 
 

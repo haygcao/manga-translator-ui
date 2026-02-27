@@ -237,13 +237,7 @@ class LamaMPEInpainter(OfflineInpainter):
         if new_h != h or new_w != w:
             image = cv2.resize(image, (new_w, new_h), interpolation = cv2.INTER_LINEAR)
             mask = cv2.resize(mask, (new_w, new_h), interpolation = cv2.INTER_LINEAR)
-        model_h, model_w = self._get_inpaint_canvas_hw(new_h, new_w, base_align=8)
-        extra_pad_h = max(0, model_h - new_h)
-        extra_pad_w = max(0, model_w - new_w)
-        if extra_pad_h or extra_pad_w:
-            image = np.pad(image, ((0, extra_pad_h), (0, extra_pad_w), (0, 0)), mode='symmetric')
-            mask = np.pad(mask, ((0, extra_pad_h), (0, extra_pad_w)), mode='constant', constant_values=0)
-        self.logger.info(f'Inpainting resolution: {model_w}x{model_h}')
+        self.logger.info(f'Inpainting resolution: {new_w}x{new_h}')
         if isinstance(self.model, LamaFourier):
             img_torch = torch.from_numpy(image).permute(2, 0, 1).unsqueeze_(0).float() / 255.
         else:
@@ -272,20 +266,12 @@ class LamaMPEInpainter(OfflineInpainter):
                 with torch.autocast(device_type="cuda", dtype=precision):
                     img_inpainted_torch = self.model(img_torch, mask_torch)
                 
-                # ✅ autocast后立即清理缓存（防止bf16中间激活累积）
-                try:
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
-
         if isinstance(self.model, LamaFourier):
             img_inpainted_torch = img_inpainted_torch.to(torch.float32)
             img_inpainted = (img_inpainted_torch.cpu().squeeze_(0).permute(1, 2, 0).numpy() * 255.).astype(np.uint8)
         else:
             img_inpainted_torch = img_inpainted_torch.to(torch.float32)
             img_inpainted = ((img_inpainted_torch.cpu().squeeze_(0).permute(1, 2, 0).numpy() + 1.0) * 127.5).astype(np.uint8)
-        if extra_pad_h or extra_pad_w:
-            img_inpainted = img_inpainted[:new_h, :new_w, :]
         if new_h != height or new_w != width:
             img_inpainted = cv2.resize(img_inpainted, (width, height), interpolation = cv2.INTER_LINEAR)
         

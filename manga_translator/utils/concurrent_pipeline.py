@@ -119,7 +119,7 @@ class ConcurrentPipeline:
     
     def _run_async_in_thread(self, coro):
         """在当前线程中创建事件循环并运行协程"""
-        loop = asyncio.new_event_loop()
+        loop = self._create_worker_event_loop()
         asyncio.set_event_loop(loop)
         try:
             return loop.run_until_complete(coro)
@@ -144,6 +144,18 @@ class ConcurrentPipeline:
 
             asyncio.set_event_loop(None)
             loop.close()
+
+    def _create_worker_event_loop(self):
+        """
+        为工作线程创建事件循环。
+        在 Windows 下优先使用 SelectorEventLoop，避免 Proactor 在线程场景下的兼容性问题。
+        """
+        if os.name == 'nt' and hasattr(asyncio, 'SelectorEventLoop'):
+            try:
+                return asyncio.SelectorEventLoop()
+            except Exception as e:
+                logger.warning(f"[并发流水线] SelectorEventLoop 创建失败，回退默认事件循环: {e}")
+        return asyncio.new_event_loop()
     
     def _detection_ocr_thread(self, file_paths: List[str], configs: List):
         """
