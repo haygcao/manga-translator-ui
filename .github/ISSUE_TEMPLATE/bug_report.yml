@@ -9,6 +9,7 @@ body:
     attributes:
       value: |
         为了提高定位效率，请尽量完整填写。
+        提交前请先搜索现有 Issues，确认不是重复问题。
         涉及隐私或密钥请先脱敏（例如 API Key、账号、路径中的用户名）。
         
         常用文件路径（当前版本）：
@@ -152,6 +153,8 @@ body:
     attributes:
       label: 提交检查
       options:
+        - label: 我已搜索现有 Issues，确认这不是重复问题
+          required: true
         - label: 我已确认提供了可复现步骤与最小样例
           required: true
         - label: 我已尽量提供源文件、配置文件、日志与 JSON 数据（如无法提供，已在上文说明原因）
