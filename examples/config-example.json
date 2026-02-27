@@ -74,7 +74,7 @@
     "line_spacing": null,
     "font_size": null,
     "auto_rotate_symbols": false,
-    "rtl": false,
+    "rtl": true,
     "layout_mode": "balloon_fill",
     "max_font_size": 0,
     "font_scale_ratio": 1.0,
