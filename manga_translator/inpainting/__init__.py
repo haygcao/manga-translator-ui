@@ -79,7 +79,9 @@ async def dispatch(inpainter_key: Inpainter, image: np.ndarray, mask: np.ndarray
     )
 
 async def unload(inpainter_key: Inpainter):
-    inpainter_cache.pop(inpainter_key, None)
+    inpainter = inpainter_cache.pop(inpainter_key, None)
+    if isinstance(inpainter, OfflineInpainter):
+        await inpainter.unload()
 
 async def _dispatch_with_det_rearrange(
     inpainter: CommonInpainter,

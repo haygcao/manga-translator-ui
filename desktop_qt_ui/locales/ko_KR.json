@@ -152,6 +152,7 @@
   "label_max_requests_per_minute": "분당 최대 요청 수",
   "label_ignore_errors": "오류 무시",
   "label_use_gpu": "GPU 사용",
+  "label_disable_onnx_gpu": "ONNX GPU 가속 비활성화",
   "label_context_size": "컨텍스트 페이지 수",
   "label_format": "출력 형식",
   "label_overwrite": "기존 파일 덮어쓰기",

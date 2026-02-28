@@ -2,6 +2,11 @@ import argparse
 import sys
 import os
 
+
+def _env_true(name: str) -> bool:
+    return os.getenv(name, '').strip().lower() in ('true', '1', 'yes', 'on')
+
+
 def create_parser():
     """创建命令行参数解析器"""
     parser = argparse.ArgumentParser(
@@ -23,8 +28,12 @@ def create_parser():
                            help='服务器端口（默认：8000，环境变量：MT_WEB_PORT）')
     web_parser.add_argument('--use-gpu', 
                            action='store_true',
-                           default=os.getenv('MT_USE_GPU', '').lower() in ('true', '1', 'yes'),
+                           default=_env_true('MT_USE_GPU'),
                            help='使用 GPU（环境变量：MT_USE_GPU=true）')
+    web_parser.add_argument('--disable-onnx-gpu',
+                           action='store_true',
+                           default=_env_true('MT_DISABLE_ONNX_GPU'),
+                           help='禁用 ONNX Runtime GPU 加速（环境变量：MT_DISABLE_ONNX_GPU=true）')
     web_parser.add_argument('--models-ttl', 
                            default=int(os.getenv('MT_MODELS_TTL', '0')), 
                            type=int,
@@ -52,6 +61,8 @@ def create_parser():
                              help='覆盖已存在的文件')
     local_parser.add_argument('--use-gpu', action='store_true', default=None,
                              help='使用 GPU 加速（覆盖配置文件）')
+    local_parser.add_argument('--disable-onnx-gpu', action='store_true', default=None,
+                             help='禁用 ONNX Runtime GPU 加速（覆盖配置文件）')
     local_parser.add_argument('--format', default=None,
                              help='输出格式：png/jpg/webp/avif（覆盖配置文件）')
     local_parser.add_argument('--batch-size', type=int, default=None,
@@ -86,6 +97,9 @@ def create_parser():
                           help='显示详细日志')
     ws_parser.add_argument('--use-gpu', action='store_true',
                           help='使用 GPU')
+    ws_parser.add_argument('--disable-onnx-gpu', action='store_true',
+                          default=_env_true('MT_DISABLE_ONNX_GPU'),
+                          help='禁用 ONNX Runtime GPU 加速')
     
     # ===== Shared 模式（API 实例） =====
     shared_parser = subparsers.add_parser('shared', help='API 模式')
@@ -103,6 +117,9 @@ def create_parser():
                               help='显示详细日志')
     shared_parser.add_argument('--use-gpu', action='store_true',
                               help='使用 GPU')
+    shared_parser.add_argument('--disable-onnx-gpu', action='store_true',
+                              default=_env_true('MT_DISABLE_ONNX_GPU'),
+                              help='禁用 ONNX Runtime GPU 加速')
     
     return parser
 

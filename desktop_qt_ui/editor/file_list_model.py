@@ -7,6 +7,10 @@ from typing import List, Optional, Dict, Tuple
 from enum import Enum
 from dataclasses import dataclass
 
+SUPPORTED_IMAGE_EXTENSIONS = {
+    '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.avif', '.tiff', '.tif', '.heic', '.heif'
+}
+
 
 class FileType(Enum):
     """文件类型枚举"""
@@ -39,6 +43,12 @@ class FileListModel:
     def __init__(self):
         self.files: List[FileItem] = []
         self._map_cache: Dict[str, dict] = {}  # 缓存 translation_map.json
+
+    @staticmethod
+    def is_supported_image_file(file_path: str) -> bool:
+        """检查是否是编辑器支持的图片文件。"""
+        ext = os.path.splitext(file_path)[1].lower()
+        return ext in SUPPORTED_IMAGE_EXTENSIONS
     
     def clear(self):
         """清空文件列表"""
@@ -59,6 +69,10 @@ class FileListModel:
         
         for file_path in file_paths:
             if not os.path.exists(file_path):
+                continue
+            if not os.path.isfile(file_path):
+                continue
+            if not self.is_supported_image_file(file_path):
                 continue
             
             # 检查是否已存在

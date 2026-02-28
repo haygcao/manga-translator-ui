@@ -225,7 +225,7 @@ def auto_add_horizontal_tags(text: str) -> str:
     - 符号（!?）2-3个：横排显示，4个以上不包裹
 
     渲染规则：
-    - 仅字母/数字且长度>=3：旋转90度显示
+    - 字母/数字块：旋转90度显示
     - 其他情况（含符号）：保持横排显示
     """
     # 如果文本中已有<H>标签，则不进行处理，以尊重手动设置
@@ -335,7 +335,6 @@ def _normalize_horizontal_block_content(content: str) -> str:
     """Normalize content inside <H>...</H> for rotation/measurement/rendering."""
     if not content:
         return ""
-    content = content.replace('__ROT90__', '')
     content = re.sub(r'\s*(\[BR\]|<br\s*/?>|【BR】)\s*', '', content, flags=re.IGNORECASE)
     content = content.replace('\r', '').replace('\n', '')
     return content
@@ -357,17 +356,11 @@ def _convert_br_outside_h_tags(text: str) -> str:
                 converted.append(part)
                 continue
 
-            full_content = _normalize_horizontal_block_content(content)
-            # If combined alnum length across BR reaches 2, force each split line to rotate.
-            force_rotate = bool(re.fullmatch(r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19]+', full_content)) and len(full_content) >= 2
-
             split_blocks = []
             for chunk in chunks:
                 chunk_clean = _normalize_horizontal_block_content(chunk)
                 if not chunk_clean:
                     continue
-                if force_rotate:
-                    chunk_clean = '__ROT90__' + chunk_clean
                 split_blocks.append(f'<H>{chunk_clean}</H>')
             converted.append('\n'.join(split_blocks))
         else:
@@ -375,17 +368,15 @@ def _convert_br_outside_h_tags(text: str) -> str:
     return ''.join(converted)
 
 def should_rotate_horizontal_block_90(content: str) -> bool:
-    """Only rotate 90 degrees for alphanumeric blocks in vertical layout."""
+    """Rotate 90 degrees for alphanumeric <H> blocks in vertical layout."""
     if not content:
         return False
-    force_rotate = '__ROT90__' in content
     content = _normalize_horizontal_block_content(content)
     if not content:
         return False
-    if force_rotate:
-        return True
-    alnum_only = re.fullmatch(r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19]+', content)
-    return bool(alnum_only) and len(content) >= 3
+    # 字母/数字块一律旋转90度；符号块保持横排
+    alnum_only = re.fullmatch(r'[a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_-]+', content)
+    return bool(alnum_only)
     
 def rotate_image(image, angle):
     if angle == 0:
@@ -706,7 +697,6 @@ def _get_vertical_column_char_width(font_size: int, cdpt: str) -> int:
 
 def _measure_horizontal_block_render_height(font_size: int, content: str, border_size: int, config=None, stroke_ratio: float = 0.07, rotate_90: bool = False) -> int:
     """Measure the actual rendered pixel height of a horizontal block used in vertical text."""
-    # preserve force-rotate marker by deciding rotation before normalization
     if not rotate_90:
         rotate_90 = should_rotate_horizontal_block_90(content)
     content = _normalize_horizontal_block_content(content)
@@ -840,7 +830,7 @@ def calc_horizontal_block_height(font_size: int, content: str) -> int:
     用于准确计算竖排文本的总高度，特别是在智能缩放模式下
 
     注意：需要与 put_text_vertical 中的渲染逻辑保持一致
-    - 字母/数字块且长度>=3：旋转90度，返回旋转后的实际高度
+    - 字母/数字块：旋转90度，返回旋转后的实际高度
     - 其他情况（含符号）：横排显示，返回横排块的实际高度
     """
     rotate_90 = should_rotate_horizontal_block_90(content)
@@ -848,7 +838,7 @@ def calc_horizontal_block_height(font_size: int, content: str) -> int:
     if not content:
         return font_size
 
-    # 仅对字母/数字块启用90度旋转
+    # 对字母/数字块启用90度旋转
     if rotate_90:
         # --- 计算竖排旋转块的高度 ---
         # 使用与渲染相同的方式：横排渲染后旋转90度
@@ -997,7 +987,7 @@ def calc_vertical(font_size: int, text: str, max_height: int, config=None):
 
     return line_text_list, line_height_list
 
-def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_text: np.ndarray, canvas_border: np.ndarray, border_size: int, config=None, line_width: int = 0, force_rotate_90: bool = False, stroke_width: float = None):
+def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_text: np.ndarray, canvas_border: np.ndarray, border_size: int, config=None, line_width: int = 0, stroke_width: float = None):
     if cdpt == '＿':
         # For the placeholder, just advance the pen vertically and do nothing else.
         return font_size
@@ -1005,11 +995,7 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
     pen = pen_l.copy()
     _is_pun = is_punctuation(cdpt)
 
-    # 如果 force_rotate_90=True，强制旋转90度（用于英文数字）
-    if force_rotate_90:
-        rot_degree = 90
-    else:
-        cdpt, rot_degree = CJK_Compatibility_Forms_translate(cdpt, 1)
+    cdpt, rot_degree = CJK_Compatibility_Forms_translate(cdpt, 1)
 
     slot = get_char_glyph(cdpt, font_size, 1)
     bitmap = slot.bitmap
@@ -1047,7 +1033,7 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
     original_bitmap_width = char_bitmap_width
     
     # 如果需要旋转90度
-    if force_rotate_90:
+    if rot_degree == 90:
         # 顺时针旋转90度 (相当于逆时针旋转270度或使用 cv2.ROTATE_90_CLOCKWISE)
         bitmap_char = cv2.rotate(bitmap_char, cv2.ROTATE_90_CLOCKWISE)
         # 旋转后更新尺寸
@@ -1068,7 +1054,7 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
     # --- END FIX ---
 
     # 计算Y位置，考虑旋转后的位置补偿
-    if force_rotate_90:
+    if rot_degree == 90:
         # 旋转后需要调整Y位置：原来的宽度变成了高度
         # 使用原始宽度的一半作为垂直偏移的基准
         char_place_y = pen[1] + round((original_bitmap_width - char_bitmap_rows) / 2.0)
@@ -1104,7 +1090,7 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
             bitmap_border = np.array(bitmap_b.buffer, dtype=np.uint8).reshape((border_bitmap_rows, border_bitmap_width))
 
             # 如果需要旋转90度，边框也要旋转
-            if force_rotate_90:
+            if rot_degree == 90:
                 bitmap_border = cv2.rotate(bitmap_border, cv2.ROTATE_90_CLOCKWISE)
                 border_bitmap_rows, border_bitmap_width = bitmap_border.shape
 
@@ -1233,10 +1219,10 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
                 if not content:
                     continue
 
-                # 仅字母/数字块（长度>=3）旋转90度；符号块保持横排
+                # 字母/数字块旋转90度；符号块保持横排
                 if rotate_90:
                     # --- RENDER ROTATED BLOCK (字母/数字块旋转90度) ---
-                    # 使用与2个字符横排相同的渲染方式，确保字符间距一致
+                    # 先横排渲染，再整体旋转，保持字符间距一致
                     r_font_size = font_size
                     
                     # 先在临时画布上横排渲染
@@ -1305,7 +1291,7 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
                     pen_line[1] += rh
                     # --- END ROTATED BLOCK RENDER ---
                 else:
-                    # --- RENDER HORIZONTAL BLOCK (2个字符横排) ---
+                    # --- RENDER HORIZONTAL BLOCK (符号/非字母数字块横排) ---
                     h_font_size = font_size
 
                     h_width = get_string_width(h_font_size, content) + h_font_size

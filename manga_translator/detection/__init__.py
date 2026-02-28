@@ -390,4 +390,11 @@ def draw_detection_debug_image(image: np.ndarray, main_boxes: List[Quadrilateral
     return debug_img
 
 async def unload(detector_key: Detector):
-    detector_cache.pop(detector_key, None)
+    detector = detector_cache.pop(detector_key, None)
+    if isinstance(detector, OfflineDetector):
+        await detector.unload()
+
+    # YOLO OBB 作为辅助检测器使用字符串 key 缓存，主检测器卸载时一并释放。
+    yolo_detector = detector_cache.pop('yolo_obb', None)
+    if isinstance(yolo_detector, OfflineDetector):
+        await yolo_detector.unload()

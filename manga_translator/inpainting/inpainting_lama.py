@@ -13,6 +13,11 @@ import random
 from kornia.geometry.transform import rotate
 
 from .inpainting_lama_mpe import LamaMPEInpainter
+from ..utils.onnx_runtime import (
+    create_inference_session,
+    create_session_options,
+    import_onnxruntime,
+)
 
 # Currently not used
 class LamaInpainter(LamaMPEInpainter):
@@ -42,21 +47,26 @@ class LamaInpainter(LamaMPEInpainter):
         # ✅ CPU模式使用ONNX（解决虚拟内存泄漏）
         if not device.startswith('cuda') and device != 'mps':
             try:
-                import onnxruntime as ort
+                ort = import_onnxruntime(
+                    "onnxruntime is required for Lama ONNX inference. "
+                    "Install with: pip install onnxruntime-gpu (or onnxruntime)"
+                )
                 onnx_path = self._get_file_path('lamampe.onnx')
                 self.logger.info(f'使用ONNX模型（CPU优化，default模型）: {onnx_path}')
                 
                 # 🔧 内存优化配置
-                sess_options = ort.SessionOptions()
-                sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                sess_options.log_severity_level = 3  # 只显示 Error 级别
-                sess_options.enable_mem_pattern = False  # 禁用内存模式优化
-                sess_options.enable_cpu_mem_arena = False  # 禁用CPU内存池，按需分配
-                
-                self.session = ort.InferenceSession(
+                sess_options = create_session_options(
+                    ort,
+                    log_severity_level=3,
+                    enable_mem_pattern=False,
+                    enable_cpu_mem_arena=False,
+                )
+                self.session, _ = create_inference_session(
+                    ort,
                     onnx_path,
                     sess_options=sess_options,
-                    providers=['CPUExecutionProvider']
+                    device='cpu',
+                    logger=self.logger,
                 )
                 self.backend = 'onnx'
                 self.logger.info(f'ONNX Runtime版本: {ort.__version__}（内存优化模式）')
@@ -166,11 +176,6 @@ class LamaInpainter(LamaMPEInpainter):
                 mask_original_resized = mask_original_resized[:, :, None]
         
         ans = img_inpainted * mask_original_resized + img_original * (1 - mask_original_resized)
-        
-        # ✅ ONNX内存清理
-        import gc
-        del img, mask_input, ort_inputs, img_inpainted, img_original, mask_original, mask_original_resized
-        pass
         return ans
 
 

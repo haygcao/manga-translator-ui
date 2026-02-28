@@ -6,11 +6,15 @@ YOLO OBB (Oriented Bounding Box) 检测器
 import os
 import numpy as np
 import cv2
-import onnxruntime as ort
 from typing import List, Tuple, Optional
 
 from .common import OfflineDetector
 from ..utils import Quadrilateral, build_det_rearrange_plan, det_rearrange_patch_array
+from ....utils.onnx_runtime import (
+    create_inference_session,
+    create_session_options,
+    import_onnxruntime,
+)
 
 
 class YOLOOBBDetector(OfflineDetector):
@@ -41,68 +45,24 @@ class YOLOOBBDetector(OfflineDetector):
         model_path = self._get_file_path(self._MODEL_FILENAME)
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"YOLO OBB 模型不存在: {model_path}")
-        
-        # 设置会话选项
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        # 设置日志级别为 ERROR，隐藏 Memcpy 警告（这些警告是正常的，不影响性能）
-        sess_options.log_severity_level = 3  # 0=Verbose, 1=Info, 2=Warning, 3=Error, 4=Fatal
-        
-        # 配置ONNX Runtime providers
-        providers = []
-        use_cuda = False
-        
-        if device == 'cuda':
-            # 使用 onnxruntime.preload_dlls() 加载 PyTorch 的 CUDA 库（仅 1.21+ 版本支持）
-            if hasattr(ort, 'preload_dlls'):
-                try:
-                    ort.preload_dlls()
-                except Exception as e:
-                    self.logger.warning(f"preload_dlls() 失败: {e}")
-            
-            # 检查 CUDA 是否真的可用
-            try:
-                available_providers = ort.get_available_providers()
-                if 'CUDAExecutionProvider' in available_providers:
-                    # 只设置 device_id，不设置其他选项以避免 Fallback
-                    # 测试发现：额外的 CUDA 选项（如 cudnn_conv_algo_search）会导致 Fallback 模式
-                    cuda_options = {
-                        'device_id': 0,
-                    }
-                    providers.append(('CUDAExecutionProvider', cuda_options))
-                    use_cuda = True
-                else:
-                    self.logger.warning(f"CUDA 不在可用 providers 中: {available_providers}")
-            except Exception as e:
-                self.logger.warning(f"检查 CUDA 可用性时出错: {e}")
-        
-        providers.append('CPUExecutionProvider')
-        
-        # 先尝试使用 CUDA，如果失败则回退到 CPU
-        if use_cuda:
-            try:
-                self.session = ort.InferenceSession(model_path, sess_options=sess_options, providers=providers)
-                self.logger.info("YOLO OBB: CUDA 模式加载成功")
-            except Exception as cuda_e:
-                self.logger.warning(f"CUDA 模式加载失败: {cuda_e}")
-                self.logger.warning("将回退到 CPU 模式")
-                use_cuda = False
-        
-        # 如果 CUDA 失败或未启用，使用 CPU
-        if not use_cuda:
-            try:
-                self.session = ort.InferenceSession(
-                    model_path, 
-                    sess_options=sess_options, 
-                    providers=['CPUExecutionProvider']
-                )
-                self.logger.info("YOLO OBB: CPU 模式加载成功")
-            except Exception as cpu_e:
-                self.logger.error(f"CPU 模式加载也失败: {cpu_e}")
-                raise
-        
+
+        ort = import_onnxruntime(
+            "onnxruntime is required for YOLO OBB inference. "
+            "Install with: pip install onnxruntime-gpu (or onnxruntime)"
+        )
+        sess_options = create_session_options(ort, log_severity_level=3)
+        self.session, active_device = create_inference_session(
+            ort,
+            model_path,
+            device=device,
+            sess_options=sess_options,
+            cuda_options={"device_id": 0},
+            logger=self.logger,
+        )
+
         self.device = device
-        self.using_cuda = 'CUDAExecutionProvider' in self.session.get_providers()
+        self.using_cuda = active_device == "cuda"
+        self.logger.info(f"YOLO OBB: {active_device.upper()} 模式加载成功")
     
     async def _unload(self):
         """卸载模型"""

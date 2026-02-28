@@ -208,6 +208,7 @@
   "label_box_threshold": "边界框產生阈值",
   "label_BAIDU_SECRET_KEY": "百度翻譯金鑰",
   "label_use_gpu": "使用 GPU",
+  "label_disable_onnx_gpu": "停用 ONNX GPU 加速",
   "label_direction": "文本方向",
   "translator_baidu": "百度翻譯",
   "realcugan_3x_denoise3x_pro": "3倍-降噪3x-Pro",

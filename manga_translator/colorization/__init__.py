@@ -29,4 +29,6 @@ async def dispatch(key: Colorizer, device: str = 'cpu', **kwargs) -> Image.Image
     return await colorizer.colorize(**kwargs)
 
 async def unload(key: Colorizer):
-    colorizer_cache.pop(key, None)
+    colorizer = colorizer_cache.pop(key, None)
+    if isinstance(colorizer, OfflineColorizer):
+        await colorizer.unload()

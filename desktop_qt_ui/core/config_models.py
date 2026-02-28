@@ -96,6 +96,7 @@ class CliSettings(BaseModel):
     attempts: int = -1
     ignore_errors: bool = False
     use_gpu: bool = True
+    disable_onnx_gpu: bool = False  # 禁用 ONNX Runtime GPU 加速（强制 ONNX 走 CPU）
     context_size: int = 3
     format: str = "不指定"
     overwrite: bool = True

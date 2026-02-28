@@ -162,6 +162,7 @@
   "label_max_requests_per_minute": "Max Requests Per Minute",
   "label_ignore_errors": "Ignore Errors",
   "label_use_gpu": "Use GPU",
+  "label_disable_onnx_gpu": "Disable ONNX GPU Acceleration",
   "label_context_size": "Context Pages",
   "label_format": "Output Format",
   "label_overwrite": "Overwrite Existing Files",

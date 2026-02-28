@@ -163,6 +163,7 @@
   "label_max_requests_per_minute": "每分钟最大请求数",
   "label_ignore_errors": "忽略错误",
   "label_use_gpu": "使用 GPU",
+  "label_disable_onnx_gpu": "禁用 ONNX GPU 加速",
   "label_context_size": "上下文页数",
   "label_format": "输出格式",
   "label_overwrite": "覆盖已存在文件",

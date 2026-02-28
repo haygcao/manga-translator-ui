@@ -1,8 +1,6 @@
 import os
-# import gc
 import pandas as pd
 import numpy as np
-from onnxruntime import InferenceSession
 from typing import Tuple, List, Dict
 from io import BytesIO
 from PIL import Image
@@ -11,6 +9,11 @@ import cv2
 from pathlib import Path
 
 from tqdm import tqdm
+from ..utils.onnx_runtime import (
+    create_inference_session,
+    create_session_options,
+    import_onnxruntime,
+)
 
 def make_square(img, target_size):
     old_size = img.shape[:2]
@@ -39,7 +42,19 @@ def smart_resize(img, size):
 
 class Tagger :
     def __init__(self, filename) -> None:
-        self.model = InferenceSession(filename, providers=['CUDAExecutionProvider'])
+        ort = import_onnxruntime(
+            "onnxruntime is required for booru tagger inference. "
+            "Install with: pip install onnxruntime-gpu (or onnxruntime)"
+        )
+        sess_options = create_session_options(ort, log_severity_level=3)
+        self.model, _ = create_inference_session(
+            ort,
+            filename,
+            device="cuda",
+            sess_options=sess_options,
+            cuda_options={"device_id": 0},
+            fallback_to_cpu=True,
+        )
         [root, _] = os.path.split(filename)
         self.tags = pd.read_csv(os.path.join(root, 'selected_tags.csv') if root else 'selected_tags.csv')
         _, self.height, _, _ = self.model.get_inputs()[0].shape

@@ -48,6 +48,42 @@ class AppConfig:
     auto_save: bool = True
     max_recent_files: int = 10
 
+
+ARCHIVE_EXTRACT_IMAGE_DIRNAME = 'original_images'
+ARCHIVE_EXTRACT_META_FILENAME = '.extract_meta.json'
+
+
+def _resolve_archive_output_dir_from_extracted_image(image_path: str, output_folder: str) -> Optional[str]:
+    """
+    如果 image_path 指向输出目录中的压缩包解压图片，返回对应压缩包输出目录。
+    例如: <output>/A/B/1/original_images/page.png -> <output>/A/B/1
+    """
+    if not image_path or not output_folder:
+        return None
+
+    image_parent = os.path.normpath(os.path.dirname(image_path))
+    if os.path.basename(image_parent) != ARCHIVE_EXTRACT_IMAGE_DIRNAME:
+        return None
+
+    meta_path = os.path.join(image_parent, ARCHIVE_EXTRACT_META_FILENAME)
+    if not os.path.isfile(meta_path):
+        return None
+
+    archive_output_dir = os.path.normpath(os.path.dirname(image_parent))
+    output_root_abs = os.path.normcase(os.path.abspath(output_folder))
+    archive_output_abs = os.path.normcase(os.path.abspath(archive_output_dir))
+
+    try:
+        common = os.path.commonpath([output_root_abs, archive_output_abs])
+    except ValueError:
+        return None
+
+    if common != output_root_abs:
+        return None
+
+    return archive_output_dir
+
+
 class MainAppLogic(QObject):
     """主页面业务逻辑控制器"""
     files_added = pyqtSignal(list)
@@ -172,9 +208,16 @@ class MainAppLogic(QObject):
                 if source_folder:
                     # 检查是否来自压缩包
                     if self.file_service.is_archive_file(source_folder):
-                        # 文件来自压缩包，使用压缩包名称（不含扩展名）作为输出子目录
-                        archive_name = os.path.splitext(os.path.basename(source_folder))[0]
-                        final_output_folder = os.path.join(output_folder, archive_name)
+                        # 文件来自压缩包：
+                        # 优先复用解压目录的上级输出目录，避免文件夹扫描时被平铺到输出根目录
+                        archive_output_dir = _resolve_archive_output_dir_from_extracted_image(
+                            original_path, output_folder
+                        )
+                        if archive_output_dir:
+                            final_output_folder = archive_output_dir
+                        else:
+                            archive_name = os.path.splitext(os.path.basename(source_folder))[0]
+                            final_output_folder = os.path.join(output_folder, archive_name)
                     else:
                         # 文件来自文件夹，保持相对路径结构
                         parent_dir = os.path.normpath(os.path.dirname(original_path))
@@ -289,9 +332,14 @@ class MainAppLogic(QObject):
             if source_folder:
                 # 检查是否来自压缩包
                 if self.file_service.is_archive_file(source_folder):
-                    # 文件来自压缩包，使用压缩包名称（不含扩展名）作为输出子目录
-                    archive_name = os.path.splitext(os.path.basename(source_folder))[0]
-                    final_output_dir = os.path.join(output_folder, archive_name)
+                    archive_output_dir = _resolve_archive_output_dir_from_extracted_image(
+                        image_path, output_folder
+                    )
+                    if archive_output_dir:
+                        final_output_dir = archive_output_dir
+                    else:
+                        archive_name = os.path.splitext(os.path.basename(source_folder))[0]
+                        final_output_dir = os.path.join(output_folder, archive_name)
                 else:
                     # 文件来自文件夹，保持相对路径结构
                     relative_path = os.path.relpath(parent_dir, source_folder)
@@ -958,6 +1006,7 @@ class MainAppLogic(QObject):
                     "max_requests_per_minute": self._t("label_max_requests_per_minute"),
                     "ignore_errors": self._t("label_ignore_errors"),
                     "use_gpu": self._t("label_use_gpu"),
+                    "disable_onnx_gpu": self._t("label_disable_onnx_gpu"),
                     "context_size": self._t("label_context_size"),
                     "format": self._t("label_format"),
                     "overwrite": self._t("label_overwrite"),
@@ -1664,16 +1713,15 @@ class MainAppLogic(QObject):
                             elif result.get('image_data') is None:
                                 # 兼容旧代码：构造翻译后的图片路径
                                 original_path = result.get('original_path')
-                                source_folder = self.file_to_folder_map.get(original_path)
-
-                                if source_folder:
-                                    # 文件来自文件夹
-                                    folder_name = os.path.basename(source_folder)
-                                    final_output_folder = os.path.join(output_folder, folder_name)
-                                    translated_file = os.path.join(final_output_folder, os.path.basename(original_path))
-                                else:
-                                    # 单独添加的文件
-                                    translated_file = os.path.join(output_folder, os.path.basename(original_path))
+                                effective_format = output_format
+                                if not effective_format or effective_format == "不指定":
+                                    effective_format = None
+                                save_info = {
+                                    'output_folder': output_folder,
+                                    'format': effective_format,
+                                    'save_to_source_dir': config.cli.save_to_source_dir
+                                }
+                                translated_file = self._calculate_output_path(original_path, save_info)
 
                                 # 规范化路径，避免混合斜杠
                                 translated_file = os.path.normpath(translated_file)
@@ -1984,7 +2032,8 @@ class FileScannerWorker(QObject):
         try:
             self.progress.emit("正在扫描文件...")
             resolved_files = []
-            
+            processed_archives = set()
+             
             # 分离文件和文件夹
             folders = []
             individual_files = []
@@ -1998,35 +2047,93 @@ class FileScannerWorker(QObject):
                         archive_files.append(path)
                     elif self.file_service.validate_image_file(path):
                         individual_files.append(path)
-            
-            # 处理压缩包文件
-            if archive_files:
-                from desktop_qt_ui.utils.archive_extractor import extract_images_from_archive, get_output_extract_dir
+
+            from desktop_qt_ui.utils.archive_extractor import (
+                check_output_extract_conflict,
+                clear_output_extract_root,
+                extract_images_from_archive,
+                get_output_extract_dir,
+                write_output_extract_marker,
+            )
+
+            output_base_dir = ''
+            overwrite_extract = True
+            try:
+                cfg = self.file_service.config_service.get_config()
+                output_base_dir = cfg.app.last_output_path
+                overwrite_extract = bool(getattr(cfg.cli, 'overwrite', True))
+            except Exception:
                 output_base_dir = ''
-                try:
-                    output_base_dir = self.file_service.config_service.get_config().app.last_output_path
-                except Exception:
-                    output_base_dir = ''
-                for archive_path in archive_files:
+                overwrite_extract = True
+
+            def _is_excluded(file_path: str) -> bool:
+                if not self.excluded_subfolders:
+                    return False
+                for excluded_folder in self.excluded_subfolders:
                     try:
-                        self.progress.emit(f"正在解压: {os.path.basename(archive_path)}")
-                        if output_base_dir and os.path.isdir(output_base_dir):
-                            extract_dir = get_output_extract_dir(output_base_dir, archive_path)
-                            images, extracted_dir = extract_images_from_archive(archive_path, extract_dir)
-                        else:
-                            images, extracted_dir = extract_images_from_archive(archive_path)
+                        common = os.path.commonpath([excluded_folder, file_path])
+                        if common == excluded_folder:
+                            return True
+                    except ValueError:
+                        continue
+                return False
+
+            def _get_archive_output_base_dir(archive_path: str, scan_root: str = None) -> str:
+                if not (output_base_dir and os.path.isdir(output_base_dir)):
+                    return ''
+                if not scan_root:
+                    return output_base_dir
+
+                archive_parent = os.path.normpath(os.path.dirname(archive_path))
+                scan_root_norm = os.path.normpath(scan_root)
+                try:
+                    relative_parent = os.path.relpath(archive_parent, scan_root_norm)
+                except ValueError:
+                    return output_base_dir
+
+                nested_base = os.path.join(output_base_dir, os.path.basename(scan_root_norm))
+                if relative_parent != '.':
+                    nested_base = os.path.join(nested_base, relative_parent)
+                return os.path.normpath(nested_base)
+
+            def _extract_archive(archive_path: str, scan_root: str = None) -> None:
+                norm_archive = os.path.normcase(os.path.abspath(archive_path))
+                if norm_archive in processed_archives:
+                    return
+                processed_archives.add(norm_archive)
+
+                try:
+                    self.progress.emit(f"正在解压: {os.path.basename(archive_path)}")
+                    archive_output_base_dir = _get_archive_output_base_dir(archive_path, scan_root)
+                    if archive_output_base_dir:
+                        if check_output_extract_conflict(archive_output_base_dir, archive_path):
+                            if not overwrite_extract:
+                                self.progress.emit(
+                                    f"跳过解压(同名冲突且未开启覆盖): {os.path.basename(archive_path)}"
+                                )
+                                return
+                            clear_output_extract_root(archive_output_base_dir, archive_path)
+                        extract_dir = get_output_extract_dir(archive_output_base_dir, archive_path)
+                        images, extracted_dir = extract_images_from_archive(archive_path, extract_dir)
                         if images:
-                            self.archive_to_temp_map[archive_path] = extracted_dir
-                            # 将解压出的图片添加到处理列表
-                            for img_path in images:
-                                resolved_files.append(img_path)
-                                # 记录这些文件来自这个压缩包
-                                self.file_to_folder_map[img_path] = archive_path
-                            self.progress.emit(f"从 {os.path.basename(archive_path)} 提取了 {len(images)} 张图片")
-                        else:
-                            self.progress.emit(f"警告: {os.path.basename(archive_path)} 中没有找到图片")
-                    except Exception as e:
-                        self.progress.emit(f"解压 {os.path.basename(archive_path)} 失败: {e}")
+                            write_output_extract_marker(archive_output_base_dir, archive_path)
+                    else:
+                        images, extracted_dir = extract_images_from_archive(archive_path)
+
+                    if images:
+                        self.archive_to_temp_map[archive_path] = extracted_dir
+                        for img_path in images:
+                            resolved_files.append(img_path)
+                            self.file_to_folder_map[img_path] = archive_path
+                        self.progress.emit(f"从 {os.path.basename(archive_path)} 提取了 {len(images)} 张图片")
+                    else:
+                        self.progress.emit(f"警告: {os.path.basename(archive_path)} 中没有找到图片")
+                except Exception as e:
+                    self.progress.emit(f"解压 {os.path.basename(archive_path)} 失败: {e}")
+
+            # 处理顶层压缩包文件
+            for archive_path in archive_files:
+                _extract_archive(archive_path)
             
             # 清理排除列表
             if self.excluded_subfolders:
@@ -2053,24 +2160,17 @@ class FileScannerWorker(QObject):
                 self.progress.emit(f"正在扫描文件夹: {os.path.basename(folder)}")
                 # 获取文件夹中的所有图片
                 folder_files = self.file_service.get_image_files_from_folder(folder, recursive=True)
-                
+                folder_archives = self.file_service.get_archive_files_from_folder(folder, recursive=True)
+                 
                 # 过滤掉被排除的子文件夹中的文件
                 if self.excluded_subfolders:
-                    filtered_files = []
-                    for file_path in folder_files:
-                        is_excluded = False
-                        for excluded_folder in self.excluded_subfolders:
-                            try:
-                                common = os.path.commonpath([excluded_folder, file_path])
-                                if common == excluded_folder:
-                                    is_excluded = True
-                                    break
-                            except ValueError:
-                                continue
-                        if not is_excluded:
-                            filtered_files.append(file_path)
-                    folder_files = filtered_files
-                
+                    folder_files = [f for f in folder_files if not _is_excluded(f)]
+                    folder_archives = [f for f in folder_archives if not _is_excluded(f)]
+
+                # 处理文件夹内的压缩包文件
+                for archive_path in folder_archives:
+                    _extract_archive(archive_path, folder)
+                 
                 resolved_files.extend(folder_files)
                 # 记录这些文件来自这个文件夹
                 for file_path in folder_files:
@@ -2148,9 +2248,14 @@ class TranslationWorker(QObject):
             if source_folder:
                 # 检查是否来自压缩包
                 if self.file_service.is_archive_file(source_folder):
-                    # 文件来自压缩包，使用压缩包名称（不含扩展名）作为输出子目录
-                    archive_name = os.path.splitext(os.path.basename(source_folder))[0]
-                    final_output_dir = os.path.join(output_folder, archive_name)
+                    archive_output_dir = _resolve_archive_output_dir_from_extracted_image(
+                        image_path, output_folder
+                    )
+                    if archive_output_dir:
+                        final_output_dir = archive_output_dir
+                    else:
+                        archive_name = os.path.splitext(os.path.basename(source_folder))[0]
+                        final_output_dir = os.path.join(output_folder, archive_name)
                 else:
                     # 文件来自文件夹，保持相对路径结构
                     relative_path = os.path.relpath(parent_dir, source_folder)
@@ -3221,7 +3326,8 @@ class FileScannerRunnable(QRunnable):
         try:
             self._emit_progress("正在扫描文件...")
             resolved_files = []
-            
+            processed_archives = set()
+             
             # 分离文件和文件夹
             folders = []
             individual_files = []
@@ -3235,33 +3341,93 @@ class FileScannerRunnable(QRunnable):
                         archive_files.append(path)
                     elif self.file_service.validate_image_file(path):
                         individual_files.append(path)
-            
-            # 处理压缩包文件
-            if archive_files:
-                from desktop_qt_ui.utils.archive_extractor import extract_images_from_archive, get_output_extract_dir
+
+            from desktop_qt_ui.utils.archive_extractor import (
+                check_output_extract_conflict,
+                clear_output_extract_root,
+                extract_images_from_archive,
+                get_output_extract_dir,
+                write_output_extract_marker,
+            )
+
+            output_base_dir = ''
+            overwrite_extract = True
+            try:
+                cfg = self.file_service.config_service.get_config()
+                output_base_dir = cfg.app.last_output_path
+                overwrite_extract = bool(getattr(cfg.cli, 'overwrite', True))
+            except Exception:
                 output_base_dir = ''
-                try:
-                    output_base_dir = self.file_service.config_service.get_config().app.last_output_path
-                except Exception:
-                    output_base_dir = ''
-                for archive_path in archive_files:
+                overwrite_extract = True
+
+            def _is_excluded(file_path: str) -> bool:
+                if not self.excluded_subfolders:
+                    return False
+                for excluded_folder in self.excluded_subfolders:
                     try:
-                        self._emit_progress(f"正在解压: {os.path.basename(archive_path)}")
-                        if output_base_dir and os.path.isdir(output_base_dir):
-                            extract_dir = get_output_extract_dir(output_base_dir, archive_path)
-                            images, extracted_dir = extract_images_from_archive(archive_path, extract_dir)
-                        else:
-                            images, extracted_dir = extract_images_from_archive(archive_path)
+                        common = os.path.commonpath([excluded_folder, file_path])
+                        if common == excluded_folder:
+                            return True
+                    except ValueError:
+                        continue
+                return False
+
+            def _get_archive_output_base_dir(archive_path: str, scan_root: str = None) -> str:
+                if not (output_base_dir and os.path.isdir(output_base_dir)):
+                    return ''
+                if not scan_root:
+                    return output_base_dir
+
+                archive_parent = os.path.normpath(os.path.dirname(archive_path))
+                scan_root_norm = os.path.normpath(scan_root)
+                try:
+                    relative_parent = os.path.relpath(archive_parent, scan_root_norm)
+                except ValueError:
+                    return output_base_dir
+
+                nested_base = os.path.join(output_base_dir, os.path.basename(scan_root_norm))
+                if relative_parent != '.':
+                    nested_base = os.path.join(nested_base, relative_parent)
+                return os.path.normpath(nested_base)
+
+            def _extract_archive(archive_path: str, scan_root: str = None) -> None:
+                norm_archive = os.path.normcase(os.path.abspath(archive_path))
+                if norm_archive in processed_archives:
+                    return
+                processed_archives.add(norm_archive)
+
+                try:
+                    self._emit_progress(f"正在解压: {os.path.basename(archive_path)}")
+                    archive_output_base_dir = _get_archive_output_base_dir(archive_path, scan_root)
+                    if archive_output_base_dir:
+                        if check_output_extract_conflict(archive_output_base_dir, archive_path):
+                            if not overwrite_extract:
+                                self._emit_progress(
+                                    f"跳过解压(同名冲突且未开启覆盖): {os.path.basename(archive_path)}"
+                                )
+                                return
+                            clear_output_extract_root(archive_output_base_dir, archive_path)
+                        extract_dir = get_output_extract_dir(archive_output_base_dir, archive_path)
+                        images, extracted_dir = extract_images_from_archive(archive_path, extract_dir)
                         if images:
-                            self.archive_to_temp_map[archive_path] = extracted_dir
-                            for img_path in images:
-                                resolved_files.append(img_path)
-                                self.file_to_folder_map[img_path] = archive_path
-                            self._emit_progress(f"从 {os.path.basename(archive_path)} 提取了 {len(images)} 张图片")
-                        else:
-                            self._emit_progress(f"警告: {os.path.basename(archive_path)} 中没有找到图片")
-                    except Exception as e:
-                        self._emit_progress(f"解压 {os.path.basename(archive_path)} 失败: {e}")
+                            write_output_extract_marker(archive_output_base_dir, archive_path)
+                    else:
+                        images, extracted_dir = extract_images_from_archive(archive_path)
+
+                    if images:
+                        self.archive_to_temp_map[archive_path] = extracted_dir
+                        for img_path in images:
+                            resolved_files.append(img_path)
+                            self.file_to_folder_map[img_path] = archive_path
+                        self._emit_progress(f"从 {os.path.basename(archive_path)} 提取了 {len(images)} 张图片")
+                    else:
+                        self._emit_progress(f"警告: {os.path.basename(archive_path)} 中没有找到图片")
+                except Exception as e:
+                    self._emit_progress(f"解压 {os.path.basename(archive_path)} 失败: {e}")
+
+            # 处理顶层压缩包文件
+            for archive_path in archive_files:
+                _extract_archive(archive_path)
             
             # 清理排除列表
             if self.excluded_subfolders:
@@ -3287,24 +3453,17 @@ class FileScannerRunnable(QRunnable):
             for folder in folders:
                 self._emit_progress(f"正在扫描文件夹: {os.path.basename(folder)}")
                 folder_files = self.file_service.get_image_files_from_folder(folder, recursive=True)
-                
+                folder_archives = self.file_service.get_archive_files_from_folder(folder, recursive=True)
+                 
                 # 过滤掉被排除的子文件夹中的文件
                 if self.excluded_subfolders:
-                    filtered_files = []
-                    for file_path in folder_files:
-                        is_excluded = False
-                        for excluded_folder in self.excluded_subfolders:
-                            try:
-                                common = os.path.commonpath([excluded_folder, file_path])
-                                if common == excluded_folder:
-                                    is_excluded = True
-                                    break
-                            except ValueError:
-                                continue
-                        if not is_excluded:
-                            filtered_files.append(file_path)
-                    folder_files = filtered_files
-                
+                    folder_files = [f for f in folder_files if not _is_excluded(f)]
+                    folder_archives = [f for f in folder_archives if not _is_excluded(f)]
+
+                # 处理文件夹内的压缩包文件
+                for archive_path in folder_archives:
+                    _extract_archive(archive_path, folder)
+                 
                 resolved_files.extend(folder_files)
                 for file_path in folder_files:
                     self.file_to_folder_map[file_path] = folder

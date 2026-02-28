@@ -163,6 +163,10 @@ async def translate_files(input_paths, output_dir, config_service, verbose=False
     # use_gpu: 命令行参数优先
     if hasattr(args, 'use_gpu') and args.use_gpu is not None:
         cli_config['use_gpu'] = args.use_gpu
+
+    # disable_onnx_gpu: 命令行参数优先
+    if hasattr(args, 'disable_onnx_gpu') and args.disable_onnx_gpu is not None:
+        cli_config['disable_onnx_gpu'] = args.disable_onnx_gpu
     
     # format: 命令行参数优先
     if hasattr(args, 'format') and args.format is not None:
@@ -230,6 +234,7 @@ async def translate_files(input_paths, output_dir, config_service, verbose=False
     print(f"翻译器: {config_dict['translator']['translator']}")
     print(f"目标语言: {config_dict['translator']['target_lang']}")
     print(f"使用 GPU: {cli_config.get('use_gpu', True)}")
+    print(f"禁用 ONNX GPU: {cli_config.get('disable_onnx_gpu', False)}")
     print(f"批量大小: {cli_config.get('batch_size', 1)}")
     print(f"并发模式: {'启用' if cli_config.get('batch_concurrent', False) else '禁用'}")
     print(f"覆盖已存在文件: {overwrite}")
@@ -775,6 +780,12 @@ async def run_local_mode(args):
         
         try:
             config_dict = config_service.get_config().model_dump()
+            cli_config = config_dict.get('cli', {})
+            if hasattr(args, 'use_gpu') and args.use_gpu is not None:
+                cli_config['use_gpu'] = args.use_gpu
+            if hasattr(args, 'disable_onnx_gpu') and args.disable_onnx_gpu is not None:
+                cli_config['disable_onnx_gpu'] = args.disable_onnx_gpu
+            config_dict['cli'] = cli_config
             
             success_count, failed_count = await translate_with_subprocess(
                 all_files=all_files,

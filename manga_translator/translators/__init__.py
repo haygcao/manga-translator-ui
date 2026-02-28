@@ -138,4 +138,7 @@ LANGDETECT_MAP = {
 }
 
 async def unload(key: Translator):
-    translator_cache.pop(key, None)
+    translator = translator_cache.pop(key, None)
+    if isinstance(translator, OfflineTranslator):
+        # 参数仅为兼容 OfflineTranslator.unload(device) 签名，内部不依赖具体值。
+        await translator.unload('cuda')

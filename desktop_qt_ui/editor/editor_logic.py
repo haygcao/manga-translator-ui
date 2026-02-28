@@ -5,7 +5,7 @@ from typing import List, Optional
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QFileDialog
 
-from editor.file_list_model import FileListModel, FileType, FileItem
+from editor.file_list_model import FileListModel, FileType, FileItem, SUPPORTED_IMAGE_EXTENSIONS
 from services import get_config_service, get_logger
 from widgets.folder_dialog import select_folders
 
@@ -39,11 +39,7 @@ class EditorLogic(QObject):
             None, 
             "添加文件到编辑器", 
             last_dir, 
-            "All Supported Files (*.png *.jpg *.jpeg *.bmp *.webp *.avif *.heic *.heif *.pdf *.epub *.cbz *.cbr *.zip);;"
-            "Image Files (*.png *.jpg *.jpeg *.bmp *.webp *.avif *.heic *.heif);;"
-            "PDF Files (*.pdf);;"
-            "EPUB Files (*.epub);;"
-            "Comic Book Archives (*.cbz *.cbr *.zip)"
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.webp *.avif *.heic *.heif)"
         )
         if file_paths:
             self.add_files(file_paths)
@@ -100,7 +96,7 @@ class EditorLogic(QObject):
         is_first_add = len(self.file_model.files) == 0
         
         # 扫描文件夹中的所有图片
-        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.webp', '.avif'}
+        image_extensions = SUPPORTED_IMAGE_EXTENSIONS
         files_to_add = []
         
         try:
@@ -144,8 +140,7 @@ class EditorLogic(QObject):
         for path in paths:
             if os.path.isfile(path):
                 # 验证是否是图片文件
-                image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.webp', '.avif'}
-                if os.path.splitext(path)[1].lower() in image_extensions:
+                if os.path.splitext(path)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS:
                     files_to_add.append(path)
             elif os.path.isdir(path):
                 # 添加文件夹中的所有图片
@@ -298,12 +293,15 @@ class EditorLogic(QObject):
             from PyQt6.QtWidgets import QApplication
             QApplication.processEvents()
         
+        # 只向UI发送模型实际接收的图片文件，避免 PDF/压缩包残留在编辑器列表中
+        accepted_files = [item.path for item in self.file_model.files]
+
         # 如果有folder_tree，使用树形结构显示
         if folder_tree:
-            self.file_list_with_tree_changed.emit(files_to_show, folder_tree)
+            self.file_list_with_tree_changed.emit(accepted_files, folder_tree)
         else:
             # 否则使用平铺列表
-            self.file_list_changed.emit(files_to_show)
+            self.file_list_changed.emit(accepted_files)
 
     @pyqtSlot(str)
     def load_image_into_editor(self, file_path: str):
@@ -316,6 +314,10 @@ class EditorLogic(QObject):
         - 未翻译的图：提示进行翻译
         """
         # 获取文件项
+        if not FileListModel.is_supported_image_file(file_path):
+            self.logger.warning(f"不支持的编辑器文件类型，已忽略: {file_path}")
+            return
+
         file_item = self.file_model.get_file_item(file_path)
         
         if not file_item:

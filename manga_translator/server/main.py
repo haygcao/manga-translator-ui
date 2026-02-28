@@ -294,6 +294,8 @@ def start_translator_client_proc(host: str, port: int, nonce: str, params: Names
     ]
     if params.use_gpu:
         cmds.append('--use-gpu')
+    if getattr(params, 'disable_onnx_gpu', False):
+        cmds.append('--disable-onnx-gpu')
     if params.ignore_errors:
         cmds.append('--ignore-errors')
     if params.verbose:
@@ -346,6 +348,9 @@ def init_translator(use_gpu=False, verbose=False):
 def run_server(args):
     """启动 Web API 服务器（纯API模式，不带界面）"""
     import uvicorn
+
+    if getattr(args, 'disable_onnx_gpu', False):
+        os.environ['MT_DISABLE_ONNX_GPU'] = '1'
     
     # 设置服务器配置（在 prepare 之前）
     task_manager.server_config['use_gpu'] = getattr(args, 'use_gpu', False)

@@ -480,6 +480,7 @@ class PermissionEditor {
             <div class="form-section">
                 <h3>${this.t('GPU Settings', 'GPU设置')}</h3>
                 ${this.createFormRow(this.t('label_use_gpu', '使用GPU'), this.createCheckbox('cli', 'use_gpu'), '', 'cli', 'use_gpu')}
+                ${this.createFormRow(this.t('label_disable_onnx_gpu', '禁用ONNX GPU加速'), this.createCheckbox('cli', 'disable_onnx_gpu'), '开启后强制 ONNX Runtime 使用 CPUExecutionProvider', 'cli', 'disable_onnx_gpu')}
             </div>
         `;
     }

@@ -345,6 +345,8 @@ class CliConfig(BaseModel):
     """Enable verbose logging"""
     use_gpu: bool = True
     """Use GPU for processing"""
+    disable_onnx_gpu: bool = False
+    """Disable ONNX Runtime GPU acceleration and force CPUExecutionProvider."""
     context_size: int = 3
     """Context size for translation"""
     batch_size: int = 1

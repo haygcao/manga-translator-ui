@@ -510,29 +510,23 @@ class MainWindow(QMainWindow):
             # 从file_to_folder_map获取翻译后的图片路径
             translated_files = []
             translated_folder_map = {}  # 翻译后文件的文件夹映射
+            config = self.app_logic.config_service.get_config()
+            output_folder = config.app.last_output_path
+            output_format = config.cli.format
+            if not output_format or output_format == "不指定":
+                output_format = None
+            save_info = {
+                'output_folder': output_folder,
+                'format': output_format,
+                'save_to_source_dir': config.cli.save_to_source_dir,
+            }
             
             for source_file in expanded_files:
                 # 根据源文件路径构造翻译后的图片路径
-                source_folder = self.app_logic.file_to_folder_map.get(source_file)
-                if source_folder:
-                    # 文件来自文件夹
-                    folder_name = os.path.basename(source_folder)
-                    output_folder = self.app_logic.config_service.get_config().app.last_output_path
-                    final_output_folder = os.path.join(output_folder, folder_name)
-                    translated_file = os.path.join(final_output_folder, os.path.basename(source_file))
-                    
-                    if os.path.exists(translated_file):
-                        translated_files.append(translated_file)
-                        # 映射到翻译后文件的直接父文件夹（输出目录中的文件夹）
-                        translated_folder_map[translated_file] = final_output_folder
-                else:
-                    # 单独添加的文件
-                    output_folder = self.app_logic.config_service.get_config().app.last_output_path
-                    translated_file = os.path.join(output_folder, os.path.basename(source_file))
-
-                    if os.path.exists(translated_file):
-                        translated_files.append(translated_file)
-                        translated_folder_map[translated_file] = output_folder
+                translated_file = self.app_logic._calculate_output_path(source_file, save_info)
+                if os.path.exists(translated_file):
+                    translated_files.append(translated_file)
+                    translated_folder_map[translated_file] = os.path.dirname(translated_file)
 
             # 判断是否从翻译完成进入（有 files_to_load 参数）
             if files_to_load and len(files_to_load) > 0:

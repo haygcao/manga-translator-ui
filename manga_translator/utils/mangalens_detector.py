@@ -13,6 +13,11 @@ import numpy as np
 from .generic import BASE_PATH
 from .inference import ModelWrapper
 from .log import get_logger
+from .onnx_runtime import (
+    create_inference_session,
+    create_session_options,
+    import_onnxruntime,
+)
 
 ImageInput = Union[str, Path, np.ndarray]
 
@@ -181,38 +186,19 @@ class MangaLensBubbleDetector(ModelWrapper):
         return self._auto_select_device()
 
     def _create_ort_session(self, runtime_device: str):
-        try:
-            import onnxruntime as ort
-        except Exception as exc:
-            raise ImportError(
-                "onnxruntime is required for MangaLens ONNX inference. "
-                "Install with: pip install onnxruntime-gpu (or onnxruntime)"
-            ) from exc
-
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.log_severity_level = 3
-
-        wanted = self._normalize_device(runtime_device)
-        providers: list[Any] = ["CPUExecutionProvider"]
-
-        if wanted == "cuda":
-            if hasattr(ort, "preload_dlls"):
-                try:
-                    ort.preload_dlls()
-                except Exception as exc:
-                    self.logger.warning(f"onnxruntime.preload_dlls() failed: {exc}")
-            available = ort.get_available_providers()
-            if not self._provider_logged:
-                self.logger.debug(f"MangaLens ONNX available providers: {available}")
-                self._provider_logged = True
-            if "CUDAExecutionProvider" in available:
-                providers = [("CUDAExecutionProvider", {"device_id": 0}), "CPUExecutionProvider"]
-            else:
-                self.logger.warning("CUDAExecutionProvider not available, fallback to CPU")
-
-        session = ort.InferenceSession(str(self.model_path), sess_options=sess_options, providers=providers)
-        active = "cuda" if "CUDAExecutionProvider" in session.get_providers() else "cpu"
+        ort = import_onnxruntime(
+            "onnxruntime is required for MangaLens ONNX inference. "
+            "Install with: pip install onnxruntime-gpu (or onnxruntime)"
+        )
+        sess_options = create_session_options(ort, log_severity_level=3)
+        session, active = create_inference_session(
+            ort,
+            self.model_path,
+            device=runtime_device,
+            sess_options=sess_options,
+            cuda_options={"device_id": 0},
+            logger=self.logger,
+        )
         self.logger.debug(f"MangaLens ONNX session providers: {session.get_providers()}")
         return session, active
 

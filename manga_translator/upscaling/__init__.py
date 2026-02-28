@@ -68,12 +68,14 @@ async def unload(upscaler_key: Upscaler, **kwargs):
         
         # 统一的显存清理（适用于所有超分模型）
         import gc
-        pass
+        gc.collect()
         try:
             import torch
             if torch.cuda.is_available():
-                pass
-                pass
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, 'ipc_collect'):
+                    torch.cuda.ipc_collect()
+                torch.cuda.synchronize()
         except Exception:
             pass
 

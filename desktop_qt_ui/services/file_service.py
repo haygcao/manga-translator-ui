@@ -274,7 +274,8 @@ class FileService:
                     current_files = []
                     for file in files:
                         file_path = os.path.join(root, file)
-                        if self.validate_image_file(file_path):
+                        ext = os.path.splitext(file)[1].lower()
+                        if ext in self.supported_image_extensions and os.path.isfile(file_path):
                             current_files.append(file_path)
                     
                     # 对当前目录的文件进行自然排序
@@ -284,7 +285,8 @@ class FileService:
                 # 只搜索当前目录，忽略manga_translator_work目录
                 for file in os.listdir(folder_path):
                     file_path = os.path.join(folder_path, file)
-                    if os.path.isfile(file_path) and self.validate_image_file(file_path):
+                    ext = os.path.splitext(file)[1].lower()
+                    if os.path.isfile(file_path) and ext in self.supported_image_extensions:
                         image_files.append(file_path)
                 
                 # 使用自然排序（支持数字排序）
@@ -294,6 +296,43 @@ class FileService:
             self.logger.error(f"获取文件夹图片失败 {folder_path}: {e}")
             
         return image_files
+
+    def get_archive_files_from_folder(self, folder_path: str, recursive: bool = True) -> List[str]:
+        """从文件夹获取所有压缩包/文档文件（默认递归查找所有子文件夹），忽略manga_translator_work目录"""
+        archive_files = []
+
+        try:
+            if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+                return archive_files
+
+            if recursive:
+                for root, dirs, files in os.walk(folder_path):
+                    if 'manga_translator_work' in dirs:
+                        dirs.remove('manga_translator_work')
+                    dirs.sort(key=self._natural_sort_key)
+
+                    current_files = []
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        ext = os.path.splitext(file)[1].lower()
+                        if ext in self.supported_archive_extensions and os.path.isfile(file_path):
+                            current_files.append(file_path)
+
+                    current_files.sort(key=self._natural_sort_key)
+                    archive_files.extend(current_files)
+            else:
+                for file in os.listdir(folder_path):
+                    file_path = os.path.join(folder_path, file)
+                    ext = os.path.splitext(file)[1].lower()
+                    if os.path.isfile(file_path) and ext in self.supported_archive_extensions:
+                        archive_files.append(file_path)
+
+                archive_files.sort(key=self._natural_sort_key)
+
+        except Exception as e:
+            self.logger.error(f"获取文件夹压缩包失败 {folder_path}: {e}")
+
+        return archive_files
     
     def filter_valid_image_files(self, file_paths: List[str]) -> List[str]:
         """过滤出有效的图片文件"""

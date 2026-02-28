@@ -15,6 +15,11 @@ from typing import Tuple
 from .common import OfflineInpainter
 from ..config import InpainterConfig
 from ..utils import resize_keep_aspect
+from ..utils.onnx_runtime import (
+    create_inference_session,
+    create_session_options,
+    import_onnxruntime,
+)
 
 
 TORCH_DTYPE_MAP = {
@@ -159,21 +164,26 @@ class LamaMPEInpainter(OfflineInpainter):
         # ✅ CPU模式使用ONNX（解决虚拟内存泄漏）
         if not device.startswith('cuda') and device != 'mps':
             try:
-                import onnxruntime as ort
+                ort = import_onnxruntime(
+                    "onnxruntime is required for Lama MPE ONNX inference. "
+                    "Install with: pip install onnxruntime-gpu (or onnxruntime)"
+                )
                 onnx_path = self._get_file_path('lamampe.onnx')
                 self.logger.info(f'使用ONNX模型（CPU优化）: {onnx_path}')
                 
                 # 🔧 内存优化配置
-                sess_options = ort.SessionOptions()
-                sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                sess_options.log_severity_level = 3  # 只显示 Error 级别
-                sess_options.enable_mem_pattern = False  # 禁用内存模式优化可以减少内存占用
-                sess_options.enable_cpu_mem_arena = False  # 禁用CPU内存池，按需分配
-                
-                self.session = ort.InferenceSession(
+                sess_options = create_session_options(
+                    ort,
+                    log_severity_level=3,
+                    enable_mem_pattern=False,
+                    enable_cpu_mem_arena=False,
+                )
+                self.session, _ = create_inference_session(
+                    ort,
                     onnx_path,
                     sess_options=sess_options,
-                    providers=['CPUExecutionProvider']
+                    device='cpu',
+                    logger=self.logger,
                 )
                 self.backend = 'onnx'
                 self.logger.info(f'ONNX Runtime版本: {ort.__version__}（内存优化模式）')
@@ -490,7 +500,10 @@ class LamaLargeInpainter(LamaMPEInpainter):
         # ✅ CPU模式使用ONNX（除非强制使用PyTorch）
         if not device.startswith('cuda') and device != 'mps' and not force_torch:
             try:
-                import onnxruntime as ort
+                ort = import_onnxruntime(
+                    "onnxruntime is required for Lama Large ONNX inference. "
+                    "Install with: pip install onnxruntime-gpu (or onnxruntime)"
+                )
                 onnx_path = self._get_file_path('lamalarge.onnx')
                 ckpt_path = self._get_file_path('lama_large_512px.ckpt')
                 
@@ -520,18 +533,18 @@ class LamaLargeInpainter(LamaMPEInpainter):
                 self.logger.info(f'使用ONNX模型（CPU优化）: {onnx_path}')
                 
                 # 🔧 ONNX Runtime 配置
-                sess_options = ort.SessionOptions()
-                sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                sess_options.log_severity_level = 3  # 只显示 Error 级别
-                
-                # ✅ 限制线程数，减少并发内存压力
-                sess_options.intra_op_num_threads = 4  # 单个操作内的并行度
-                sess_options.inter_op_num_threads = 1  # 操作间的并行度
-                
-                self.session = ort.InferenceSession(
+                sess_options = create_session_options(
+                    ort,
+                    log_severity_level=3,
+                    intra_op_num_threads=4,
+                    inter_op_num_threads=1,
+                )
+                self.session, _ = create_inference_session(
+                    ort,
                     onnx_path,
                     sess_options=sess_options,
-                    providers=['CPUExecutionProvider']
+                    device='cpu',
+                    logger=self.logger,
                 )
                 self.backend = 'onnx'
                 self.logger.info(f'ONNX Runtime版本: {ort.__version__}')
@@ -592,14 +605,6 @@ class LamaLargeInpainter(LamaMPEInpainter):
     
     async def _infer_onnx(self, image: np.ndarray, mask: np.ndarray, inpainting_size: int = 1024, verbose: bool = False) -> np.ndarray:
         """ONNX专用推理方法 - 采用Rust策略：padding而非resize"""
-        import gc
-        
-        img_original = None
-        mask_original = None
-        img = None
-        mask_input = None
-        img_inpainted = None
-        
         try:
             img_original = np.copy(image)
             mask_original = np.copy(mask)
@@ -623,11 +628,6 @@ class LamaLargeInpainter(LamaMPEInpainter):
             new_w = w if w % pad_size == 0 else (pad_size - (w % pad_size)) + w
             
             self.logger.info(f'Inpainting resolution: {new_w}x{new_h}')
-            
-            # 记录内存使用情况
-            estimated_memory_mb = (new_h * new_w * 3 * 4 * 2) / (1024 * 1024)
-            if verbose:
-                self.logger.debug(f'ONNX推理尺寸: {new_w}x{new_h}, 预估内存: {estimated_memory_mb:.1f}MB')
             
             # ✅ 使用 padding 而非 resize（保持图像不变形）
             img_pad = np.pad(image, ((0, new_h - h), (0, new_w - w), (0, 0)), mode='symmetric')
@@ -674,23 +674,9 @@ class LamaLargeInpainter(LamaMPEInpainter):
                     mask_resized = mask_resized[:, :, None]
             
             ans = img_inpainted * mask_resized + img_original * (1 - mask_resized)
-            
-            # 清理临时变量
-            del img_original, mask_resized, img_inpainted
-            
-            # 强制垃圾回收
-            gc.collect()
             return ans
             
-        except Exception as e:
-            # 异常路径执行垃圾回收，避免大数组滞留
-            gc.collect()
-            # 记录详细错误
-            self.logger.error(f'ONNX推理异常: {type(e).__name__}: {str(e)}')
-            if 'bad allocation' in str(e) or 'allocation' in str(e).lower():
-                self.logger.error('内存分配失败 - 可能是内存碎片化导致')
-                self.logger.error(f'图片尺寸: {image.shape}')
-                self.logger.error('将自动降级到 PyTorch 模式')
+        except Exception:
             raise
 
 

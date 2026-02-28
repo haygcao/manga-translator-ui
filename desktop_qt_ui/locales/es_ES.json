@@ -152,6 +152,7 @@
   "label_max_requests_per_minute": "Máximo de solicitudes por minuto",
   "label_ignore_errors": "Ignorar errores",
   "label_use_gpu": "Usar GPU",
+  "label_disable_onnx_gpu": "Desactivar aceleración GPU de ONNX",
   "label_context_size": "Número de páginas de contexto",
   "label_format": "Formato de salida",
   "label_overwrite": "Sobrescribir archivos existentes",

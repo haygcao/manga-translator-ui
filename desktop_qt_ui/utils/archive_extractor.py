@@ -3,20 +3,22 @@
 支持 PDF、EPUB、CBZ 格式
 """
 import os
+import json
 import tempfile
 import zipfile
 import shutil
 from typing import List, Optional, Tuple
-from pathlib import Path
 
 
 # 支持的压缩包/文档格式
-ARCHIVE_EXTENSIONS = {'.pdf', '.epub', '.cbz', '.cbr', '.cb7', '.zip'}
+ARCHIVE_EXTENSIONS = {'.pdf', '.epub', '.cbz', '.cbr', '.zip'}
 
 # 支持的图片格式
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.webp', '.avif', '.gif', '.tiff', '.tif', '.heic', '.heif'}
 
-ORIGINAL_IMAGE_DIRNAME = '原图目录'
+ORIGINAL_IMAGE_DIRNAME = 'original_images'
+ARCHIVE_SOURCE_MARKER_FILENAME = '.archive_source.txt'
+EXTRACT_META_FILENAME = '.extract_meta.json'
 
 
 def is_archive_file(file_path: str) -> bool:
@@ -26,9 +28,101 @@ def is_archive_file(file_path: str) -> bool:
 
 
 def get_output_extract_dir(output_base_dir: str, archive_path: str) -> str:
-    """获取解压到输出目录下的目录：<输出目录>/<文件名>/原图目录"""
+    """获取解压到输出目录下的目录：<输出目录>/<文件名>/original_images"""
     archive_name = os.path.splitext(os.path.basename(archive_path))[0]
     return os.path.join(output_base_dir, archive_name, ORIGINAL_IMAGE_DIRNAME)
+
+def get_output_extract_root(output_base_dir: str, archive_path: str) -> str:
+    """获取解压根目录：<输出目录>/<文件名>"""
+    archive_name = os.path.splitext(os.path.basename(archive_path))[0]
+    return os.path.join(output_base_dir, archive_name)
+
+def get_output_extract_marker_path(output_base_dir: str, archive_path: str) -> str:
+    """获取压缩包来源标记文件路径。"""
+    return os.path.join(
+        get_output_extract_root(output_base_dir, archive_path),
+        ARCHIVE_SOURCE_MARKER_FILENAME
+    )
+
+def _normalize_abs_path(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+def _build_extract_meta(archive_path: str) -> dict:
+    return {
+        'archive_path': _normalize_abs_path(archive_path),
+        'archive_mtime': int(os.path.getmtime(archive_path)) if os.path.exists(archive_path) else 0,
+        'archive_size': int(os.path.getsize(archive_path)) if os.path.exists(archive_path) else 0,
+    }
+
+def _get_extract_meta_path(output_dir: str) -> str:
+    return os.path.join(output_dir, EXTRACT_META_FILENAME)
+
+def _read_extract_meta(output_dir: str) -> Optional[dict]:
+    meta_path = _get_extract_meta_path(output_dir)
+    if not os.path.exists(meta_path):
+        return None
+    try:
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return None
+    return None
+
+def _write_extract_meta(output_dir: str, archive_path: str) -> None:
+    os.makedirs(output_dir, exist_ok=True)
+    meta_path = _get_extract_meta_path(output_dir)
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(_build_extract_meta(archive_path), f, ensure_ascii=False, indent=2)
+
+def _clear_extract_output_dir(output_dir: str) -> None:
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir, ignore_errors=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+def check_output_extract_conflict(output_base_dir: str, archive_path: str) -> bool:
+    """
+    检查同名解压目录是否和当前压缩包冲突。
+    True 表示存在冲突（同名目录但来源不是当前 archive_path）。
+    """
+    root_dir = get_output_extract_root(output_base_dir, archive_path)
+    if not os.path.isdir(root_dir):
+        return False
+
+    marker_path = get_output_extract_marker_path(output_base_dir, archive_path)
+    if not os.path.exists(marker_path):
+        # 兼容旧版本：尝试读取解压目录元数据判断来源
+        extract_dir = get_output_extract_dir(output_base_dir, archive_path)
+        cached_meta = _read_extract_meta(extract_dir)
+        if cached_meta and cached_meta.get('archive_path') == _normalize_abs_path(archive_path):
+            return False
+        # 没有可用元数据时保守视为冲突，避免误复用同名目录
+        return True
+
+    try:
+        with open(marker_path, 'r', encoding='utf-8') as f:
+            recorded_source = f.read().strip()
+    except Exception:
+        return True
+
+    if not recorded_source:
+        return True
+
+    return _normalize_abs_path(recorded_source) != _normalize_abs_path(archive_path)
+
+def clear_output_extract_root(output_base_dir: str, archive_path: str) -> None:
+    """删除同名解压根目录（用于覆盖模式下的冲突处理）。"""
+    root_dir = get_output_extract_root(output_base_dir, archive_path)
+    if os.path.exists(root_dir):
+        shutil.rmtree(root_dir, ignore_errors=True)
+
+def write_output_extract_marker(output_base_dir: str, archive_path: str) -> None:
+    """写入压缩包来源标记，用于识别同名目录冲突。"""
+    marker_path = get_output_extract_marker_path(output_base_dir, archive_path)
+    os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+    with open(marker_path, 'w', encoding='utf-8') as f:
+        f.write(_normalize_abs_path(archive_path))
 
 
 def get_temp_extract_dir(archive_path: str) -> str:
@@ -187,15 +281,22 @@ def extract_images_from_archive(archive_path: str, output_dir: Optional[str] = N
     if output_dir is None:
         output_dir = get_temp_extract_dir(archive_path)
     
-    # 如果目录已存在且有文件，直接返回缓存的结果
+    expected_meta = _build_extract_meta(archive_path)
+
+    # 如果目录已存在且缓存元数据一致，直接返回缓存结果
     if os.path.exists(output_dir):
         existing_images = []
         for f in os.listdir(output_dir):
             ext = os.path.splitext(f)[1].lower()
             if ext in IMAGE_EXTENSIONS:
                 existing_images.append(os.path.join(output_dir, f))
-        if existing_images:
+        cached_meta = _read_extract_meta(output_dir)
+        if existing_images and cached_meta == expected_meta:
             return sorted(existing_images), output_dir
+        # 目录存在但缓存不可用（来源/版本不匹配或残留脏数据），清空后重解压
+        _clear_extract_output_dir(output_dir)
+    else:
+        os.makedirs(output_dir, exist_ok=True)
     
     ext = os.path.splitext(archive_path)[1].lower()
     
@@ -209,7 +310,8 @@ def extract_images_from_archive(archive_path: str, output_dir: Optional[str] = N
         images = extract_images_from_cbr(archive_path, output_dir)
     else:
         raise ValueError(f"不支持的文件格式: {ext}")
-    
+
+    _write_extract_meta(output_dir, archive_path)
     return images, output_dir
 
 

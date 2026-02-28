@@ -61,4 +61,6 @@ async def dispatch(ocr_key: Ocr, image: np.ndarray, regions: List[Quadrilateral]
     return await ocr.recognize(image, regions, config, verbose)
 
 async def unload(ocr_key: Ocr):
-    ocr_cache.pop(ocr_key, None)
+    ocr = ocr_cache.pop(ocr_key, None)
+    if isinstance(ocr, OfflineOCR):
+        await ocr.unload()

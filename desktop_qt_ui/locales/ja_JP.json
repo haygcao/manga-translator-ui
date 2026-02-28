@@ -152,6 +152,7 @@
   "label_max_requests_per_minute": "1分あたりの最大リクエスト数",
   "label_ignore_errors": "エラーを無視",
   "label_use_gpu": "GPUを使用",
+  "label_disable_onnx_gpu": "ONNX GPUアクセラレーションを無効化",
   "label_context_size": "コンテキストページ数",
   "label_format": "出力形式",
   "label_overwrite": "既存ファイルを上書き",

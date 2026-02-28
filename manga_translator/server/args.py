@@ -48,4 +48,10 @@ def parse_arguments():
     parser.add_argument('--post-dict', default=None, type=file_path, help='Path to the post-translation dictionary file')    
     g = parser.add_mutually_exclusive_group()
     g.add_argument('--use-gpu', action='store_true', help='Turn on/off gpu (auto switch between mps and cuda)')
+    parser.add_argument(
+        '--disable-onnx-gpu',
+        action='store_true',
+        default=os.getenv('MT_DISABLE_ONNX_GPU', '').strip().lower() in ('true', '1', 'yes', 'on'),
+        help='Disable ONNX Runtime GPU acceleration and force CPUExecutionProvider'
+    )
     return parser.parse_args()

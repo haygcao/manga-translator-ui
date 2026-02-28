@@ -30,6 +30,7 @@ from .utils import (
     imwrite_unicode
 )
 from .utils.text_filter import match_filter, ensure_filter_list_exists
+from .utils.onnx_runtime import set_onnx_gpu_disabled
 import matplotlib
 matplotlib.use('Agg')  # 使用非GUI后端
 from matplotlib import cm
@@ -56,6 +57,41 @@ from .rendering import dispatch as dispatch_rendering, dispatch_eng_render, disp
 
 # Will be overwritten by __main__.py if module is being run directly (with python -m)
 logger = logging.getLogger('manga_translator')
+
+ARCHIVE_EXTRACT_IMAGE_DIRNAME = 'original_images'
+ARCHIVE_EXTRACT_META_FILENAME = '.extract_meta.json'
+
+
+def _resolve_archive_output_dir_from_extracted_image(image_path: str, output_folder: str) -> Optional[str]:
+    """
+    如果 image_path 指向输出目录中的压缩包解压图片，返回对应压缩包输出目录。
+    例如: <output>/A/B/1/original_images/page.png -> <output>/A/B/1
+    """
+    if not image_path or not output_folder:
+        return None
+
+    image_parent = os.path.normpath(os.path.dirname(image_path))
+    if os.path.basename(image_parent) != ARCHIVE_EXTRACT_IMAGE_DIRNAME:
+        return None
+
+    meta_path = os.path.join(image_parent, ARCHIVE_EXTRACT_META_FILENAME)
+    if not os.path.isfile(meta_path):
+        return None
+
+    archive_output_dir = os.path.normpath(os.path.dirname(image_parent))
+    output_root_abs = os.path.normcase(os.path.abspath(output_folder))
+    archive_output_abs = os.path.normcase(os.path.abspath(archive_output_dir))
+
+    try:
+        common = os.path.commonpath([output_root_abs, archive_output_abs])
+    except ValueError:
+        return None
+
+    if common != output_root_abs:
+        return None
+
+    return archive_output_dir
+
 
 def set_main_logger(l):
     global logger
@@ -157,6 +193,7 @@ class MangaTranslator:
         self.verbose = False
         self.models_ttl = 0
         self.batch_size = 1  # 默认不批量处理
+        self.disable_onnx_gpu = False
 
         self._progress_hooks = []
         self._add_logger_hook()
@@ -212,6 +249,13 @@ class MangaTranslator:
         self.font_path = params.get('font_path', None)
         self.models_ttl = params.get('models_ttl', 0)
         self.batch_size = params.get('batch_size', 3)  # 批量大小（翻译批次）
+        disable_onnx_gpu = params.get('disable_onnx_gpu', False)
+        if isinstance(disable_onnx_gpu, str):
+            disable_onnx_gpu = disable_onnx_gpu.strip().lower() in ('1', 'true', 'yes', 'on')
+        self.disable_onnx_gpu = bool(disable_onnx_gpu)
+        set_onnx_gpu_disabled(self.disable_onnx_gpu)
+        if self.disable_onnx_gpu:
+            logger.info("ONNX GPU acceleration disabled; ONNX Runtime will use CPUExecutionProvider.")
         
         # batch_concurrent 四并发流水线处理（可选功能）
         # 开启后：检测、OCR、修复、翻译四并发，提升处理速度
@@ -358,19 +402,24 @@ class MangaTranslator:
         else:
             # 原有逻辑：使用配置的输出目录
             final_output_dir = output_folder
-            
-            # 计算相对路径以保持文件夹结构
-            for folder in input_folders:
-                if parent_dir.startswith(folder):
-                    relative_path = os.path.relpath(parent_dir, folder)
-                    # Normalize path and avoid adding '.' as a directory component
-                    if relative_path == '.':
-                        final_output_dir = os.path.join(output_folder, os.path.basename(folder))
-                    else:
-                        final_output_dir = os.path.join(output_folder, os.path.basename(folder), relative_path)
-                    # Normalize to use consistent separators
-                    final_output_dir = os.path.normpath(final_output_dir)
-                    break
+
+            # 优先处理压缩包解压目录：<...>/original_images/<image>
+            archive_output_dir = _resolve_archive_output_dir_from_extracted_image(file_path, output_folder)
+            if archive_output_dir:
+                final_output_dir = archive_output_dir
+            else:
+                # 计算相对路径以保持文件夹结构
+                for folder in input_folders:
+                    if parent_dir.startswith(folder):
+                        relative_path = os.path.relpath(parent_dir, folder)
+                        # Normalize path and avoid adding '.' as a directory component
+                        if relative_path == '.':
+                            final_output_dir = os.path.join(output_folder, os.path.basename(folder))
+                        else:
+                            final_output_dir = os.path.join(output_folder, os.path.basename(folder), relative_path)
+                        # Normalize to use consistent separators
+                        final_output_dir = os.path.normpath(final_output_dir)
+                        break
         
         os.makedirs(final_output_dir, exist_ok=True)
         
@@ -1342,14 +1391,26 @@ class MangaTranslator:
         
         logger.info(f"模型 {tool}/{model} 已卸载，内存已清理")
 
-    def _cleanup_gpu_memory(self):
-        """清理GPU显存的辅助方法"""
+    def _cleanup_gpu_memory(self, aggressive: bool = False):
+        """清理 GPU 显存的辅助方法。
+
+        Args:
+            aggressive: 是否执行激进清理（empty_cache/ipc_collect）。
+                        批次边界与模型卸载后建议 True。
+        """
         import gc
         gc.collect()
-        if hasattr(self, 'device') and (self.device == 'cuda' or self.device == 'mps'):
+
+        # 仅在 CUDA 设备下执行显存清理；MPS 目前无等价 empty_cache。
+        device_str = str(getattr(self, 'device', ''))
+        if device_str.startswith('cuda'):
             try:
                 import torch
                 if torch.cuda.is_available():
+                    if aggressive:
+                        torch.cuda.empty_cache()
+                        if hasattr(torch.cuda, 'ipc_collect'):
+                            torch.cuda.ipc_collect()
                     torch.cuda.synchronize()
             except Exception:
                 pass
@@ -1494,7 +1555,8 @@ class MangaTranslator:
             translated_contexts.clear()
         
         # 4. 强制垃圾回收和GPU显存清理
-        self._cleanup_gpu_memory()
+        # 批次边界执行激进显存回收，避免长批处理中显存持续增长。
+        self._cleanup_gpu_memory(aggressive=True)
         
         # 5. Windows 特定：强制释放物理内存
         try:
@@ -2391,12 +2453,16 @@ class MangaTranslator:
             kernel_size=self.kernel_size,
             use_model_bubble_repair_intersection=bool(getattr(config.ocr, 'use_model_bubble_repair_intersection', False)),
             limit_mask_dilation_to_bubble_mask=bool(getattr(config.ocr, 'limit_mask_dilation_to_bubble_mask', False)),
+            debug_path_fn=self._result_path if self.verbose else None,
         )
 
     async def _run_inpainting(self, config: Config, ctx: Context):
         # ✅ 检查停止标志
         await asyncio.sleep(0)
         self._check_cancelled()
+
+        # 修复前先执行一次激进显存清理，降低并发/长批次下的显存碎片与OOM概率。
+        self._cleanup_gpu_memory(aggressive=True)
         
         current_time = time.time()
         self._model_usage_timestamps[("inpainting", config.inpainter.inpainter)] = current_time
@@ -3909,8 +3975,7 @@ class MangaTranslator:
                 merged_ctx.text_regions = None
                 merged_ctx = None
             batch = None
-            import gc
-            gc.collect()
+            self._cleanup_gpu_memory(aggressive=True)
 
         return results
 
