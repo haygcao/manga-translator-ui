@@ -87,15 +87,20 @@ async def upload_prompt(
     if not admin_settings.get('permissions', {}).get('can_upload_prompts', True):
         raise HTTPException(403, detail="Prompt upload is disabled")
     
-    if not file.filename.lower().endswith('.json'):
-        raise HTTPException(400, detail="Invalid prompt file format (must be .json)")
+    if not file.filename.lower().endswith(('.json', '.yaml', '.yml')):
+        raise HTTPException(400, detail="Invalid prompt file format (must be .json, .yaml, or .yml)")
     
     # 防止路径遍历攻击
     if '..' in file.filename or '/' in file.filename or '\\' in file.filename:
         raise HTTPException(400, detail="Invalid filename")
     
     # Prohibit uploading system prompt filenames
-    if file.filename in ['system_prompt_hq.json', 'system_prompt_line_break.json', 'glossary_extraction_prompt.json']:
+    SYSTEM_PROMPT_FILES = {
+        'system_prompt_hq.json', 'system_prompt_hq.yaml', 'system_prompt_hq.yml',
+        'system_prompt_line_break.json', 'system_prompt_line_break.yaml', 'system_prompt_line_break.yml',
+        'glossary_extraction_prompt.json', 'glossary_extraction_prompt.yaml', 'glossary_extraction_prompt.yml',
+    }
+    if file.filename in SYSTEM_PROMPT_FILES:
         raise HTTPException(403, detail="Cannot overwrite system prompt files")
     
     dict_dir = os.path.join(BASE_PATH, 'dict')
@@ -123,15 +128,19 @@ async def list_prompts():
         if os.path.exists(dict_dir):
             files = os.listdir(dict_dir)
             print(f"[DEBUG] Found {len(files)} files in dict_dir")
+            SYSTEM_PROMPT_BASES = {
+                'system_prompt_hq', 'system_prompt_line_break', 'glossary_extraction_prompt',
+            }
+            PROMPT_EXTENSIONS = ('.json', '.yaml', '.yml')
             for f in files:
-                # Filter out system prompt files
-                if f.lower().endswith('.json') and f not in [
-                    'system_prompt_hq.json',
-                    'system_prompt_line_break.json',
-                    'glossary_extraction_prompt.json'
-                ]:
-                    prompts.append(f)
-                    print(f"[DEBUG] Added prompt: {f}")
+                if not f.lower().endswith(PROMPT_EXTENSIONS):
+                    continue
+                # 排除系统提示词文件
+                name_without_ext = os.path.splitext(f)[0]
+                if name_without_ext in SYSTEM_PROMPT_BASES:
+                    continue
+                prompts.append(f)
+                print(f"[DEBUG] Added prompt: {f}")
         
         print(f"[DEBUG] Returning {len(prompts)} prompts")
         return sorted(prompts)
@@ -176,7 +185,11 @@ async def delete_prompt(
     dict_dir = os.path.join(BASE_PATH, 'dict')
     
     # Prohibit deleting system prompts
-    if filename in ['system_prompt_hq.json', 'system_prompt_line_break.json', 'glossary_extraction_prompt.json']:
+    SYSTEM_PROMPT_BASES = {
+        'system_prompt_hq', 'system_prompt_line_break', 'glossary_extraction_prompt',
+    }
+    name_without_ext = os.path.splitext(filename)[0]
+    if name_without_ext in SYSTEM_PROMPT_BASES:
         raise HTTPException(403, detail="Cannot delete system prompt files")
     
     # Find in dict directory

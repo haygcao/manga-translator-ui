@@ -2064,7 +2064,9 @@ class MangaTranslator:
         
     async def _load_and_prepare_prompts(self, config: Config, ctx: Context):
         """Loads custom HQ and line break prompts into the context object."""
-        # Load custom high-quality prompt from JSON file if specified
+        from .translators.prompt_loader import load_custom_prompt, load_line_break_prompt
+        
+        # Load custom high-quality prompt from file if specified (supports .yaml/.json)
         ctx.custom_prompt_json = None
         if config.translator.high_quality_prompt_path:
             try:
@@ -2072,27 +2074,25 @@ class MangaTranslator:
                 if not os.path.isabs(prompt_path):
                     prompt_path = os.path.join(BASE_PATH, prompt_path)
                 
-                if os.path.exists(prompt_path):
-                    with open(prompt_path, 'r', encoding='utf-8') as f:
-                        ctx.custom_prompt_json = json.load(f)
+                ctx.custom_prompt_json = load_custom_prompt(prompt_path)
+                if ctx.custom_prompt_json:
                     logger.info(f"Successfully loaded custom HQ prompt from: {prompt_path}")
                     # Log the parsed content for user verification
-                    from .translators.gemini_hq import _flatten_prompt_data
+                    from .translators.common import _flatten_prompt_data
                     _parsed_content = _flatten_prompt_data(ctx.custom_prompt_json)
                     # logger.info(f"--- Parsed Custom Prompt Content ---\n{parsed_content}\n------------------------------------")
                 else:
-                    logger.warning(f"Custom HQ prompt file not found at: {prompt_path}")
+                    logger.warning(f"Custom HQ prompt file not found or invalid: {prompt_path}")
             except Exception as e:
                 logger.error(f"Error loading custom HQ prompt: {e}")
 
-        # Load AI line break prompt if enabled
+        # Load AI line break prompt if enabled (supports .yaml/.json)
         ctx.line_break_prompt_json = None
         if config.render.disable_auto_wrap: # This is the "AI断句" switch
             try:
-                line_break_prompt_path = os.path.join(BASE_PATH, 'dict', 'system_prompt_line_break.json')
-                if os.path.exists(line_break_prompt_path):
-                    with open(line_break_prompt_path, 'r', encoding='utf-8') as f:
-                        ctx.line_break_prompt_json = json.load(f)
+                dict_dir = os.path.join(BASE_PATH, 'dict')
+                ctx.line_break_prompt_json = load_line_break_prompt(dict_dir)
+                if ctx.line_break_prompt_json:
                     logger.info("AI line breaking is enabled. Loaded line break prompt.")
                 else:
                     logger.warning("AI line breaking is enabled, but line break prompt file not found.")

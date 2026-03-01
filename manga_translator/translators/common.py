@@ -2,11 +2,7 @@ import re
 import time
 import asyncio
 import json
-import contextlib
-import inspect
-import textwrap
 import sys
-import shutil
 from typing import Callable, Awaitable, Optional
 from typing import List, Tuple, Dict, Any
 from abc import abstractmethod
@@ -81,8 +77,7 @@ ISO_639_1_TO_VALID_LANGUAGES = {
 class InvalidServerResponse(Exception):
     pass
 
-class MissingAPIKeyException(Exception):
-    pass
+
 
 class LanguageUnsupportedException(Exception):
     def __init__(self, language_code: str, translator: str = None, supported_languages: List[str] = None):
@@ -101,14 +96,7 @@ class BRMarkersValidationException(Exception):
             f"AI断句检查失败：{missing_count}/{total_count} 条翻译缺失[BR]标记（容忍度：{tolerance}）"
         )
 
-class MultimodalUnsupportedException(Exception):
-    """模型不支持多模态输入异常"""
-    def __init__(self, model_name: str, translator: str):
-        self.model_name = model_name
-        self.translator = translator
-        super().__init__(
-            f"模型 {model_name} 不支持多模态输入（图片+文本）"
-        )
+
 
 
 # ============================================================================
@@ -1032,6 +1020,33 @@ class MTPEAdapter():
         print()
         return new_translations
 
+
+def _flatten_prompt_data(data, indent: int = 0) -> str:
+    """Recursively flattens a dictionary or list into a formatted string.
+    
+    Used to convert custom prompt JSON/YAML data into a readable text block
+    for inclusion in system prompts.
+    """
+    prompt_parts = []
+    prefix = "  " * indent
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                prompt_parts.append(f"{prefix}- {key}:")
+                prompt_parts.append(_flatten_prompt_data(value, indent + 1))
+            else:
+                prompt_parts.append(f"{prefix}- {key}: {value}")
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, (dict, list)):
+                prompt_parts.append(_flatten_prompt_data(item, indent + 1))
+            else:
+                prompt_parts.append(f"{prefix}- {item}")
+    
+    return "\n".join(prompt_parts)
+
+
 class CommonTranslator(InfererModule):
     # Translator has to support all languages listed in here. The language codes will be resolved into
     # _LANGUAGE_CODE_MAP[lang_code] automatically if _LANGUAGE_CODE_MAP is a dict.
@@ -1384,63 +1399,100 @@ class CommonTranslator(InfererModule):
             return f"{base_hint} Reason: {reason}\n\n"
         else:
             return f"{base_hint}\n\n"
-    
-    def _build_user_prompt_for_texts(self, texts: List[str], ctx=None, prev_context: str = "", retry_attempt: int = 0, retry_reason: str = "") -> str:
+
+    # HQ 翻译器用的详细 fallback 提示词（当 system_prompt_hq.yaml/json 不存在时）
+    _HQ_FALLBACK_PROMPT = """You are an expert manga translator. Your task is to accurately translate manga text from the source language into **{{{target_lang}}}**. You will be given the full manga page for context.
+
+**CRITICAL INSTRUCTIONS (FOLLOW STRICTLY):**
+
+1.  **DIRECT TRANSLATION ONLY**: Your output MUST contain ONLY the raw, translated text. Nothing else.
+    -   DO NOT include the original text.
+    -   DO NOT include any explanations, greetings, apologies, or any conversational text.
+    -   DO NOT use Markdown formatting (like ```json or ```).
+    -   The output is fed directly to an automated script. Any extra text will cause it to fail.
+
+2.  **MATCH LINE COUNT**: The number of lines in your output MUST EXACTLY match the number of text regions you are asked to translate. Each line in your output corresponds to one numbered text region in the input.
+
+3.  **TRANSLATE EVERYTHING**: Translate all text provided, including sound effects and single characters. Do not leave any line untranslated.
+
+4.  **ACCURACY AND TONE**:
+    -   Preserve the original tone, emotion, and character's voice.
+    -   Ensure consistent translation of names, places, and special terms.
+    -   For onomatopoeia (sound effects), provide the equivalent sound in {{{target_lang}}} or a brief description (e.g., '(rumble)', '(thud)').
+
+---
+
+**FINAL INSTRUCTION:** Now, perform the translation task. Remember, your response must be clean, containing only the translated text."""
+
+    def _build_system_prompt(
+        self,
+        source_lang: str,
+        target_lang: str,
+        custom_prompt_json: dict = None,
+        line_break_prompt_json: dict = None,
+        retry_attempt: int = 0,
+        retry_reason: str = "",
+        extract_glossary: bool = False,
+    ) -> str:
         """
-        统一的用户提示词构建方法（纯文本翻译）
-        适用于 openai.py 和 gemini.py
+        构建完整的系统提示词（统一实现，所有翻译器共享）。
 
-        Args:
-            texts: 要翻译的文本列表
-            ctx: 上下文对象（可选）
-            prev_context: 历史上下文（可选）
-            retry_attempt: 重试次数（可选，用于避免缓存）
-            retry_reason: 重试原因（可选）
-
-        Returns:
-            构建好的用户提示词字符串
+        组装顺序：[重试提示] → [断句提示] → [自定义提示] → [基础系统提示] → [术语提取提示]
         """
-        # 检查是否开启AI断句
-        enable_ai_break = False
-        if ctx and hasattr(ctx, 'config') and ctx.config and hasattr(ctx.config, 'render'):
-            enable_ai_break = getattr(ctx.config.render, 'disable_auto_wrap', False)
+        target_lang_full = VALID_LANGUAGES.get(target_lang, target_lang)
 
-        prompt = ""
+        # --- 处理自定义提示词 ---
+        custom_prompt_str = ""
+        if custom_prompt_json:
+            custom_prompt_str = _flatten_prompt_data(custom_prompt_json)
 
-        # 添加重试提示到最前面（如果是重试）
+        # --- 处理断句提示词 ---
+        line_break_prompt_str = ""
+        if line_break_prompt_json and line_break_prompt_json.get('line_break_prompt'):
+            line_break_prompt_str = line_break_prompt_json['line_break_prompt']
+
+        # --- 加载 HQ System Prompt（优先 YAML，兼容 JSON） ---
+        from ..utils import BASE_PATH
+        from .prompt_loader import load_system_prompt_hq
+        import os
+        dict_dir = os.path.join(BASE_PATH, 'dict')
+        base_prompt = load_system_prompt_hq(dict_dir)
+
+        # Fallback
+        if not base_prompt:
+            base_prompt = self._HQ_FALLBACK_PROMPT
+
+        # --- 替换占位符 ---
+        base_prompt = base_prompt.replace("{{{target_lang}}}", target_lang_full)
+        if custom_prompt_str:
+            custom_prompt_str = custom_prompt_str.replace("{{{target_lang}}}", target_lang_full)
+
+        # --- 组装最终提示词 ---
+        final_prompt = ""
+
+        # 重试提示
         if retry_attempt > 0:
-            prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
+            final_prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
 
-        # 添加多页上下文（如果有）
-        if prev_context:
-            prompt += f"{prev_context}\n\n---\n\n"
-            self.logger.info(f"[历史上下文] 长度: {len(prev_context)} 字符")
-            self.logger.info(f"[历史上下文内容]\n{prev_context[:500]}...")
-        else:
-            self.logger.info("[历史上下文] 无历史上下文（可能是第一张图片或context_size=0）")
+        # 断句提示
+        if line_break_prompt_str:
+            final_prompt += f"{line_break_prompt_str}\n\n---\n\n"
 
-        prompt += "Please translate the following manga text regions. The input is provided as a JSON array:\n\n"
+        # 自定义提示
+        if custom_prompt_str:
+            final_prompt += f"{custom_prompt_str}\n\n---\n\n"
 
-        input_data = []
-        for i, text in enumerate(texts):
-            text_to_translate = text.replace('\n', ' ').replace('\ufffd', '')
-            item = {
-                "id": i + 1,
-                "text": text_to_translate
-            }
-            # 只有开启AI断句时才添加区域信息
-            if enable_ai_break and ctx and hasattr(ctx, 'text_regions') and ctx.text_regions and i < len(ctx.text_regions):
-                region = ctx.text_regions[i]
-                region_count = len(region.lines) if hasattr(region, 'lines') else 1
-                item["original_region_count"] = region_count
-            
-            input_data.append(item)
+        # 基础系统提示
+        final_prompt += base_prompt
 
-        prompt += json.dumps(input_data, ensure_ascii=False, indent=2)
+        # 术语提取提示
+        if extract_glossary:
+            extraction_prompt = get_glossary_extraction_prompt(target_lang_full)
+            if extraction_prompt:
+                final_prompt += f"\n\n---\n\n{extraction_prompt}"
+                self.logger.info("已启用自动术语提取，提示词已追加。")
 
-        prompt += "\n\nCRITICAL: Provide translations in the exact same order as the input array. Your output must be a JSON array of strings corresponding to the IDs."
-
-        return prompt
+        return final_prompt
 
     def _build_unified_user_prompt(self, batch_data: List[Dict], ctx=None, prev_context: str = "", retry_attempt: int = 0, retry_reason: str = "", is_image_mode: bool = True) -> str:
         """
@@ -2181,10 +2233,7 @@ class OfflineTranslator(CommonTranslator, ModelWrapper):
 
     async def reload(self, from_lang: str, to_lang: str, device: str):
         return await super().reload(device, from_lang, to_lang)
-    
-    @abstractmethod
-    async def _load(self, from_lang: str, to_lang: str, device: str):
-        pass
+
 
     async def unload(self, device: str):
         return await super().unload()
@@ -2254,37 +2303,7 @@ def sanitize_text_encoding(text: str) -> str:
             return text.replace('\ufffd', '').replace('\x00', '')
         return str(text)
 
-def strip_known_llm_injected_noise(text: str) -> Tuple[str, int]:
-    """
-    清理代理/网关注入的广告或脏尾巴行，返回(清理后文本, 移除行数)。
-    """
-    if not text:
-        return text, 0
 
-    noise_substrings = (
-        'upgrade your plan',
-        'proxies cheaper than the market',
-        'proxy cheaper than the market',
-        'remove this mesage',
-        'remove this message',
-        'api.airforce',
-        'discord.g/airforce',
-        'discord.gg/airforce',
-        'op.wtf',
-        'htps:/',
-        'https:/',
-    )
-
-    filtered_lines = []
-    removed = 0
-    for line in str(text).splitlines():
-        lowered = line.strip().lower()
-        if lowered and any(token in lowered for token in noise_substrings):
-            removed += 1
-            continue
-        filtered_lines.append(line)
-
-    return '\n'.join(filtered_lines).strip(), removed
 
 def extract_json_payload_from_mixed_text(text: str) -> Tuple[str, bool]:
     """
@@ -2622,36 +2641,8 @@ def parse_json_or_text_response(result_text: str) -> List[str]:
     return translations
 
 
-def get_custom_prompt_content(file_path: str) -> str:
-    """
-    读取自定义提示词文件内容
-    Read custom prompt file content
-    """
-    import os
-    try:
-        if not os.path.exists(file_path):
-            return ""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        print(f"Error reading prompt file {file_path}: {e}")
-        return ""
 
-def save_custom_prompt_content(file_path: str, content: str) -> bool:
-    """
-    保存自定义提示词文件内容
-    Save custom prompt file content
-    """
-    import os
-    try:
-        # 确保存储目录存在
-        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        return True
-    except Exception as e:
-        print(f"Error saving prompt file {file_path}: {e}")
-        return False
+
 
 def merge_glossary_to_file(file_path: str, new_terms: List[Dict[str, str]]) -> bool:
     """
@@ -2761,24 +2752,8 @@ def get_glossary_extraction_prompt(target_lang: str) -> str:
     Get the additional prompt for glossary extraction
     """
     from ..utils import BASE_PATH
+    from .prompt_loader import load_glossary_extraction_prompt as _load_glossary
     import os
-    import json
     
-    try:
-        prompt_path = os.path.join(BASE_PATH, 'dict', 'glossary_extraction_prompt.json')
-        if not os.path.exists(prompt_path):
-            return ""
-            
-        with open(prompt_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            
-        prompt = data.get('glossary_extraction_prompt', '')
-        if prompt:
-            # Replace placeholder with target language
-            # We assume the caller passes the full language name if possible, or we map it here if needed
-            # For simplicity, we just use what's passed
-            prompt = prompt.replace("{{{target_lang}}}", target_lang)
-            return prompt
-    except Exception as e:
-        print(f"Error loading glossary extraction prompt: {e}")
-        return ""
+    dict_dir = os.path.join(BASE_PATH, 'dict')
+    return _load_glossary(dict_dir, target_lang)

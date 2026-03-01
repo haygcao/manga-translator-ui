@@ -9,7 +9,7 @@ class TranslatorSettings(BaseModel):
     target_lang: str = "CHS"
     no_text_lang_skip: bool = False
     # 相对路径，后端会用BASE_PATH拼接（打包后=_internal，开发时=项目根目录）
-    high_quality_prompt_path: Optional[str] = "dict/prompt_example.json"
+    high_quality_prompt_path: Optional[str] = "dict/prompt_example.yaml"
     extract_glossary: bool = False
     max_requests_per_minute: int = 0
     attempts: int = -1  # 翻译重试次数，-1 表示无限重试

@@ -429,13 +429,17 @@ class MainAppLogic(QObject):
             dict_dir = os.path.join(self.config_service.root_dir, 'dict')
             if not os.path.isdir(dict_dir):
                 return []
+            # 系统提示词文件的 stem（不含扩展名），排除这些文件
+            system_prompt_stems = {
+                'system_prompt_hq',
+                'system_prompt_line_break',
+                'glossary_extraction_prompt'
+            }
+            prompt_extensions = ('.yaml', '.yml', '.json')
             prompt_files = sorted([
                 f for f in os.listdir(dict_dir)
-                if f.lower().endswith('.json') and f not in [
-                    'system_prompt_hq.json',
-                    'system_prompt_line_break.json',
-                    'glossary_extraction_prompt.json'
-                ]
+                if f.lower().endswith(prompt_extensions)
+                and os.path.splitext(f)[0] not in system_prompt_stems
             ])
             return prompt_files
         except Exception as e:

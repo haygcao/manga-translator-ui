@@ -287,13 +287,13 @@
 #### 常用路径
 
 **提示词路径**（`dict` 目录）：
-- **系统提示词**（程序内置，自动调用）：
-  - `dict/system_prompt_hq.json` - 高质量翻译的系统提示词
-  - `dict/system_prompt_line_break.json` - AI断句的系统提示词
-  - `dict/glossary_extraction_prompt.json` - 术语提取的系统提示词
+- **系统提示词**（程序内置，自动调用，支持 `.yaml`/`.yml`/`.json`，优先 YAML）：
+  - `dict/system_prompt_hq.yaml` - 高质量翻译的系统提示词
+  - `dict/system_prompt_line_break.yaml` - AI断句的系统提示词
+  - `dict/glossary_extraction_prompt.yaml` - 术语提取的系统提示词
 - **用户自定义提示词**（在界面中选择）：
-  - `dict/prompt_example.json` - 提示词示例
-  - 可以在此目录添加自己的 `.json` 提示词文件
+  - `dict/prompt_example.yaml` - 提示词示例
+  - 可以在此目录添加自己的 `.yaml` 或 `.json` 提示词文件
 - 用于高质量翻译器（OpenAI HQ/Gemini HQ）
 - 可以自定义翻译风格、术语表、上下文说明等
 
