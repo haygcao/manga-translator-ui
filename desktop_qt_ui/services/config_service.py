@@ -287,7 +287,7 @@ class ConfigService(QObject):
                     
                     if 'translator' not in config_dict:
                         config_dict['translator'] = {}
-                    config_dict['translator']['high_quality_prompt_path'] = 'dict/prompt_example.json'
+                    config_dict['translator']['high_quality_prompt_path'] = 'dict/prompt_example.yaml'
                     
                     # 混合OCR在模板配置中始终为关闭状态
                     if 'ocr' not in config_dict:

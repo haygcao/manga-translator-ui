@@ -19,26 +19,6 @@ BROWSER_HEADERS = {
 }
 
 
-def _flatten_prompt_data(data: Any, indent: int = 0) -> str:
-    """Recursively flattens a dictionary or list into a formatted string."""
-    prompt_parts = []
-    prefix = "  " * indent
-
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if isinstance(value, (dict, list)):
-                prompt_parts.append(f"{prefix}- {key}:")
-                prompt_parts.append(_flatten_prompt_data(value, indent + 1))
-            else:
-                prompt_parts.append(f"{prefix}- {key}: {value}")
-    elif isinstance(data, list):
-        for item in data:
-            if isinstance(item, (dict, list)):
-                prompt_parts.append(_flatten_prompt_data(item, indent + 1))
-            else:
-                prompt_parts.append(f"{prefix}- {item}")
-    
-    return "\n".join(prompt_parts)
 
 class GeminiTranslator(CommonTranslator):
     """
@@ -193,78 +173,7 @@ class GeminiTranslator(CommonTranslator):
         finally:
             self.client = None
     
-    def _build_system_prompt(self, source_lang: str, target_lang: str, custom_prompt_json: Dict[str, Any] = None, line_break_prompt_json: Dict[str, Any] = None, retry_attempt: int = 0, retry_reason: str = "", extract_glossary: bool = False) -> str:
-        """构建系统提示词"""
-        # Map language codes to full names for clarity in the prompt
-        lang_map = {
-            "CHS": "Simplified Chinese",
-            "CHT": "Traditional Chinese",
-            "JPN": "Japanese",
-            "ENG": "English",
-            "KOR": "Korean",
-            "VIN": "Vietnamese",
-            "FRA": "French",
-            "DEU": "German",
-            "ITA": "Italian",
-        }
-        target_lang_full = lang_map.get(target_lang, target_lang)
 
-        custom_prompt_str = ""
-        if custom_prompt_json:
-            custom_prompt_str = _flatten_prompt_data(custom_prompt_json)
-
-        line_break_prompt_str = ""
-        if line_break_prompt_json and line_break_prompt_json.get('line_break_prompt'):
-            line_break_prompt_str = line_break_prompt_json['line_break_prompt']
-
-        # 尝试加载 HQ System Prompt，如果失败或不需要（比如既没custom也没glossary），是否回退到简单prompt？
-        # 为了统一体验，只要能加载到 system_prompt_hq.json 就用它。
-        base_prompt = ""
-        try:
-            from ..utils import BASE_PATH
-            import os
-            import json
-            prompt_path = os.path.join(BASE_PATH, 'dict', 'system_prompt_hq.json')
-            if os.path.exists(prompt_path):
-                with open(prompt_path, 'r', encoding='utf-8') as f:
-                    base_prompt_data = json.load(f)
-                base_prompt = base_prompt_data['system_prompt']
-        except Exception as e:
-            self.logger.warning(f"Failed to load system prompt from file: {e}")
-
-        # 如果没加载到 HQ Prompt，使用简单的 fallback
-        if not base_prompt:
-             base_prompt = f"""You are an expert manga translator. Translate from {source_lang} to {target_lang}. Output only the translation."""
-
-        # Replace placeholder with the full language name
-        base_prompt = base_prompt.replace("{{{target_lang}}}", target_lang_full)
-        
-        # Also replace target_lang placeholder in custom prompt
-        if custom_prompt_str:
-            custom_prompt_str = custom_prompt_str.replace("{{{target_lang}}}", target_lang_full)
-
-        # Combine prompts
-        final_prompt = ""
-        
-        # 添加重试提示到最前面（如果是重试）
-        if retry_attempt > 0:
-            final_prompt += self._get_retry_hint(retry_attempt, retry_reason) + "\n"
-        
-        if line_break_prompt_str:
-            final_prompt += f"{line_break_prompt_str}\n\n---\n\n"
-        if custom_prompt_str:
-            final_prompt += f"{custom_prompt_str}\n\n---\n\n"
-        
-        final_prompt += base_prompt
-        
-        # 追加术语提取提示词
-        if extract_glossary:
-            extraction_prompt = get_glossary_extraction_prompt(target_lang_full)
-            if extraction_prompt:
-                final_prompt += f"\n\n---\n\n{extraction_prompt}"
-                self.logger.info("已启用自动术语提取，提示词已追加。")
-        
-        return final_prompt
 
     def _build_user_prompt(self, texts: List[str], ctx: Any, retry_attempt: int = 0, retry_reason: str = "") -> str:
         """构建用户提示词（纯文本版）- 使用 JSON 格式以配合 HQ Prompt"""

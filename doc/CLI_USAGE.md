@@ -132,7 +132,7 @@ python -m manga_translator -i manga.jpg --config my_config.json
     "translator": "openai_hq",
     "target_lang": "CHS",
     "no_text_lang_skip": false,
-    "high_quality_prompt_path": "dict/prompt_example.json",
+    "high_quality_prompt_path": "dict/prompt_example.yaml",
     "max_requests_per_minute": 0
   },
   "detector": {

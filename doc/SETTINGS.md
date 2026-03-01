@@ -25,9 +25,9 @@
 
 - **自定义提示词 (high_quality_prompt_path)**：自定义提示词文件路径
   - 适用于：OpenAI、Gemini、高质量翻译 OpenAI、高质量翻译 Gemini 四个翻译器
-  - 默认：`dict/prompt_example.json`
-  - 可以在 `dict` 目录下创建新的 `.json` 文件
-  - JSON 格式只需符合标准 JSON 规范即可加载
+  - 默认：`dict/prompt_example.yaml`
+  - 可以在 `dict` 目录下创建新的 `.yaml` 或 `.json` 文件
+  - YAML/JSON 格式只需符合标准规范即可加载，优先加载 YAML
   - 程序会在每次打开下拉菜单时自动扫描 `dict` 目录
   - 添加新提示词文件后，直接点击下拉菜单即可看到新文件，无需重启
 
@@ -419,13 +419,13 @@ twitter
 ### 常用路径
 
 **自定义提示词路径**（`dict` 目录）：
-- **系统提示词**（程序内置，自动调用）：
-  - `dict/system_prompt_hq.json` - 高质量翻译的系统提示词
-  - `dict/system_prompt_line_break.json` - AI断句的系统提示词
-  - `dict/glossary_extraction_prompt.json` - 术语提取的系统提示词
+- **系统提示词**（程序内置，自动调用，支持 `.yaml`/`.yml`/`.json`，优先 YAML）：
+  - `dict/system_prompt_hq.yaml` - 高质量翻译的系统提示词
+  - `dict/system_prompt_line_break.yaml` - AI断句的系统提示词
+  - `dict/glossary_extraction_prompt.yaml` - 术语提取的系统提示词
 - **用户自定义提示词**（在界面中选择）：
-  - `dict/prompt_example.json` - 提示词示例
-  - 可以在此目录添加自己的 `.json` 提示词文件
+  - `dict/prompt_example.yaml` - 提示词示例
+  - 可以在此目录添加自己的 `.yaml` 或 `.json` 提示词文件
 - 适用于：OpenAI、Gemini、高质量翻译 OpenAI、高质量翻译 Gemini 四个翻译器
 - 可以自定义翻译风格、术语表、上下文说明等
 
@@ -433,33 +433,37 @@ twitter
 
 > 💡 **说明**：此提示词适用于以下 4 个翻译器：**OpenAI**、**Gemini**、**高质量翻译 OpenAI**、**高质量翻译 Gemini**。
 
-> ⚠️ **重要**：使用脚本版安装的用户，**不要直接修改** `prompt_example.json`，更新时会被覆盖！请新建文件。
+> ⚠️ **重要**：使用脚本版安装的用户，**不要直接修改** `prompt_example.yaml`，更新时会被覆盖！请新建文件。
 
 1. 点击"自定义提示词"旁边的"打开目录"按钮，打开 `dict` 目录
-2. 在该目录下新建一个 `.json` 文件（如 `my_prompt.json`）
-3. 打开 `prompt_example.json`，复制里面的内容到新文件中
+2. 在该目录下新建一个 `.yaml` 或 `.json` 文件（如 `my_prompt.yaml`）
+3. 打开 `prompt_example.yaml`，复制里面的内容到新文件中
 4. 编辑新文件，填入你的作品角色名、术语表等信息
 5. 回到界面，在"自定义提示词"下拉菜单选择新创建的提示词文件
 
-**提示词示例**（JSON 无固定格式，只要是合法的 JSON 即可，以下只是一种写法）：
+**提示词示例**（YAML 格式，也支持 JSON）：
 
-```json
-{
-  "system_prompt": "你是一名精通多国语言的专业漫画翻译家。你的任务是将漫画中的文本翻译成自然、流畅的目标语言。\n\n规则：\n1. 保持原文的语气、风格和情感。\n2. 严格参考以下术语表进行翻译。\n3. 如果没有特定译法，请采用最通用的翻译。",
-  "glossary": {
-    "Person": [
-      {
-        "original": "ましろ",
-        "translation": "真白"
-      }
-    ],
-    "Location": [],
-    "Org": [],
-    "Item": [],
-    "Skill": [],
-    "Creature": []
-  }
-}
+```yaml
+# 自定义系统提示词（留空则仅使用内置的基础提示词，此处内容会叠加在基础提示词之前）
+# 可以使用 {{{target_lang}}} 占位符，会被替换为目标语言名称
+system_prompt: |
+  你是一名精通多国语言的专业漫画翻译家。你的任务是将漫画中的文本翻译成自然、流畅的目标语言。
+
+  规则：
+  1. 保持原文的语气、风格和情感。
+  2. 严格参考以下术语表进行翻译。
+  3. 如果没有特定译法，请采用最通用的翻译。
+
+# 术语表（确保角色名、地名等翻译一致）
+glossary:
+  Person:
+    - original: "ましろ"
+      translation: "真白"
+  Location: []
+  Org: []
+  Item: []
+  Skill: []
+  Creature: []
 ```
 
 **字段说明**：
@@ -473,10 +477,10 @@ twitter
   - `Creature`：生物名
 - 每个术语包含 `original`（原文）和 `translation`（译文）两个字段
 
-> 💡 **懒人方法**：如果觉得手写 JSON 麻烦，可以把以下内容发给 AI 帮你生成：
+> 💡 **懒人方法**：如果觉得手写麻烦，可以把以下内容发给 AI 帮你生成：
 > - 作品原名和翻译后的名字
 > - 角色的原文名和翻译后的名字
-> - `prompt_example.json` 的内容作为参考格式
+> - `prompt_example.yaml` 的内容作为参考格式
 
 **导出原文模版路径**：
 - 默认：`examples/translation_template.json`
