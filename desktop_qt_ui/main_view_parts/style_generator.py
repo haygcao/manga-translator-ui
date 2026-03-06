@@ -213,12 +213,24 @@ def generate_main_view_style(theme: str = "dark") -> str:
             width: 24px;
             border: none;
         }}
+        #main_view_root QComboBoxPrivateContainer {{
+            background: {c["bg_dropdown"]};
+            background-color: {c["bg_dropdown"]};
+            border: 1px solid {c["border_input"]};
+        }}
         #main_view_root QComboBox QAbstractItemView {{
             background: {c["bg_dropdown"]};
+            background-color: {c["bg_dropdown"]};
+            alternate-background-color: {c["bg_dropdown"]};
             color: {c["text_accent"]};
             border: 1px solid {c["border_input"]};
             selection-background-color: {c["dropdown_selection"]};
             selection-color: {c["list_item_selected_text"]};
+        }}
+        #main_view_root QComboBox QAbstractItemView::item:selected {{
+            background: {c["dropdown_selection"]};
+            background-color: {c["dropdown_selection"]};
+            color: {c["list_item_selected_text"]};
         }}
 
         #main_view_root QPushButton {{
@@ -464,6 +476,7 @@ def generate_main_view_style(theme: str = "dark") -> str:
         }}
         #main_view_root QMenu {{
             background: {c["bg_surface_raised"]};
+            background-color: {c["bg_surface_raised"]};
             color: {c["text_accent"]};
             border: 1px solid {c["border_card"]};
             border-radius: 10px;
@@ -478,6 +491,7 @@ def generate_main_view_style(theme: str = "dark") -> str:
         }}
         #main_view_root QMenu::item:selected {{
             background: {c["tab_hover"]};
+            background-color: {c["tab_hover"]};
             color: {c["text_bright"]};
         }}
     """
@@ -570,12 +584,24 @@ def generate_editor_style(theme: str = "dark") -> str:
             border-color: {c["border_input_focus"]};
             background: {c["bg_input_focus"]};
         }}
+        #editor_toolbar QComboBoxPrivateContainer {{
+            background: {c["bg_dropdown"]};
+            background-color: {c["bg_dropdown"]};
+            border: 1px solid {c["border_input"]};
+        }}
         #editor_toolbar QComboBox QAbstractItemView {{
             background: {c["bg_dropdown"]};
+            background-color: {c["bg_dropdown"]};
+            alternate-background-color: {c["bg_dropdown"]};
             color: {c["text_accent"]};
             border: 1px solid {c["border_input"]};
             selection-background-color: {c["dropdown_selection"]};
             selection-color: {c["list_item_selected_text"]};
+        }}
+        #editor_toolbar QComboBox QAbstractItemView::item:selected {{
+            background: {c["dropdown_selection"]};
+            background-color: {c["dropdown_selection"]};
+            color: {c["list_item_selected_text"]};
         }}
         #editor_toolbar QSlider::groove:horizontal {{
             background: {c["slider_groove"]};
@@ -989,6 +1015,7 @@ def generate_editor_style(theme: str = "dark") -> str:
         }}
         #editor_view_root QMenu {{
             background: {c["bg_surface_raised"]};
+            background-color: {c["bg_surface_raised"]};
             color: {c["text_accent"]};
             border: 1px solid {c["border_card"]};
             border-radius: 10px;
@@ -1003,6 +1030,7 @@ def generate_editor_style(theme: str = "dark") -> str:
         }}
         #editor_view_root QMenu::item:selected {{
             background: {c["tab_hover"]};
+            background-color: {c["tab_hover"]};
             color: {c["text_bright"]};
         }}
     """

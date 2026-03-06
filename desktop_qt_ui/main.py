@@ -46,6 +46,7 @@ if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
 from PyQt6.QtWidgets import QApplication
 from main_window import MainWindow
 from services import init_services
+from widgets.themed_message_box import install_themed_message_boxes
 
 # 全局异常处理器，捕获未处理的异常并记录到日志
 def global_exception_handler(exc_type, exc_value, exc_traceback):
@@ -171,7 +172,7 @@ def main():
     
     logging.info(f"UI日志文件: {log_file_path}")
     
-    # --- 确保过滤列表文件存在 ---
+    # --- 确保过滤列表 JSON 文件存在 ---
     try:
         from manga_translator.utils.text_filter import ensure_filter_list_exists
         ensure_filter_list_exists()
@@ -201,6 +202,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Manga Translator")
     app.setOrganizationName("Manga Translator")
+    install_themed_message_boxes()
     
     # 设置 Qt 异常处理钩子（捕获信号槽中的异常）
     def qt_message_handler(mode, context, message):

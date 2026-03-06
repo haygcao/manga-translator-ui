@@ -86,10 +86,16 @@ def get_env_default_placeholder(self, key: str) -> str:
     """返回环境变量输入框应显示的默认占位符。"""
     key_placeholder = self._t("placeholder_paste_key")
     token_placeholder = self._t("placeholder_paste_token")
+    normalized_key = key.upper()
+    for prefix in ("OCR_", "COLOR_", "RENDER_"):
+        if normalized_key.startswith(prefix):
+            normalized_key = normalized_key[len(prefix):]
+            break
+
     default_placeholders = {
         "OPENAI_API_BASE": "https://api.openai.com/v1",
         "CUSTOM_OPENAI_API_BASE": "https://api.openai.com/v1",
-        "GEMINI_API_BASE": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "GEMINI_API_BASE": "https://generativelanguage.googleapis.com",
         "SAKURA_API_BASE": "http://127.0.0.1:8080/v1",
         "OPENAI_MODEL": "gpt-4o",
         "CUSTOM_OPENAI_MODEL": "qwen2.5:7b",
@@ -104,7 +110,7 @@ def get_env_default_placeholder(self, key: str) -> str:
         "DEEPL_AUTH_KEY": key_placeholder,
         "CAIYUN_TOKEN": token_placeholder,
     }
-    return default_placeholders.get(key.upper(), "")
+    return default_placeholders.get(normalized_key, "")
 
 
 def debounced_save_env_var(self, key: str, text: str):
@@ -118,9 +124,83 @@ def debounced_save_env_var(self, key: str, text: str):
     self._env_debounce_timer.start()
 
 
+def _detect_current_api_type(env_key: str, translator_key: str) -> str:
+    _, provider, _ = _split_env_key(env_key)
+    if provider == "GEMINI":
+        return "gemini"
+    if provider:
+        return "openai"
+
+    normalized_translator_key = (translator_key or "").lower()
+    if "gemini" in normalized_translator_key:
+        return "gemini"
+    return "openai"
+
+
+def _get_api_address_example(api_type: str) -> str:
+    if api_type == "gemini":
+        return "https://generativelanguage.googleapis.com"
+    return "https://api.openai.com/v1"
+
+
+def _split_env_key(env_key: str) -> tuple[str, str, str]:
+    normalized_key = (env_key or "").upper()
+    scope = ""
+    for prefix in ("OCR_", "COLOR_", "RENDER_"):
+        if normalized_key.startswith(prefix):
+            scope = prefix
+            normalized_key = normalized_key[len(prefix):]
+            break
+
+    for provider in ("CUSTOM_OPENAI", "OPENAI", "GEMINI", "DEEPSEEK", "GROQ", "SAKURA"):
+        provider_prefix = f"{provider}_"
+        if normalized_key.startswith(provider_prefix):
+            field = normalized_key[len(provider_prefix):]
+            return scope, provider, field
+
+    return scope, "", normalized_key
+
+
+def _build_related_env_key(scope: str, provider: str, field: str) -> str | None:
+    if not provider:
+        return None
+    return f"{scope}{provider}_{field}"
+
+
+def _read_env_widget_value(self, env_key: str | None) -> str | None:
+    if not env_key:
+        return None
+    pair = self.env_widgets.get(env_key)
+    if not pair:
+        return None
+    return pair[1].text().strip() or None
+
+
+def _resolve_api_context(self, env_key: str, translator_key: str) -> tuple[str, str | None, str | None, str | None]:
+    api_type = _detect_current_api_type(env_key, translator_key)
+    scope, provider, field = _split_env_key(env_key)
+
+    api_key = None
+    if field in ("API_KEY", "AUTH_KEY", "TOKEN"):
+        api_key = _read_env_widget_value(self, env_key)
+    else:
+        for candidate_field in ("API_KEY", "AUTH_KEY", "TOKEN"):
+            api_key = _read_env_widget_value(self, _build_related_env_key(scope, provider, candidate_field))
+            if api_key:
+                break
+
+    api_base = None
+    for candidate_field in ("API_BASE", "BASE"):
+        api_base = _read_env_widget_value(self, _build_related_env_key(scope, provider, candidate_field))
+        if api_base:
+            break
+
+    model = _read_env_widget_value(self, _build_related_env_key(scope, provider, "MODEL"))
+    return api_type, api_key, api_base, model
+
+
 def on_open_custom_api_params_file(self):
-    """打开自定义API参数配置文件。"""
-    import subprocess
+    """打开自定义 API 参数编辑器。"""
     import sys
 
     if getattr(sys, "frozen", False):
@@ -136,9 +216,7 @@ def on_open_custom_api_params_file(self):
         try:
             os.makedirs(os.path.dirname(config_path), exist_ok=True)
             with open(config_path, "w", encoding="utf-8") as f:
-                import json
-
-                json.dump({}, f, indent=2, ensure_ascii=False)
+                f.write("{}\n")
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
 
@@ -146,24 +224,24 @@ def on_open_custom_api_params_file(self):
             return
 
     try:
-        if sys.platform == "win32":
-            os.startfile(config_path)
-        elif sys.platform == "darwin":
-            subprocess.run(["open", config_path])
-        else:
-            subprocess.run(["xdg-open", config_path])
+        from widgets.custom_api_params_editor import CustomApiParamsEditorDialog
+
+        dialog = CustomApiParamsEditorDialog(config_path, t_func=self._t, parent=self)
+        dialog.exec()
     except Exception as e:
         from PyQt6.QtWidgets import QMessageBox
 
-        QMessageBox.warning(self, self._t("Error"), f"打开文件失败: {e}")
+        QMessageBox.warning(self, self._t("Error"), f"打开编辑器失败: {e}")
 
 
 def on_test_api_clicked(self, key: str):
     """测试API连接。"""
     import asyncio
 
-    from PyQt6.QtCore import QThread, Qt
-    from PyQt6.QtWidgets import QMessageBox, QProgressDialog
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtWidgets import QMessageBox
+
+    from widgets.themed_progress_dialog import create_progress_dialog
 
     if key not in self.env_widgets:
         return
@@ -178,32 +256,20 @@ def on_test_api_clicked(self, key: str):
     translator_display = translator_combo.currentText()
     reverse_map = {v: k for k, v in self.controller.get_display_mapping("translator").items()}
     translator_key = reverse_map.get(translator_display, translator_display.lower())
+    api_type, api_key, api_base, model = _resolve_api_context(self, key, translator_key)
 
-    api_base = None
-    for env_key in self.env_widgets.keys():
-        if "API_BASE" in env_key or "BASE" in env_key:
-            _, base_widget = self.env_widgets[env_key]
-            api_base = base_widget.text().strip() or None
-            break
-
-    model = None
-    for env_key in self.env_widgets.keys():
-        if "MODEL" in env_key:
-            _, model_widget = self.env_widgets[env_key]
-            model = model_widget.text().strip() or None
-            break
-
-    progress = QProgressDialog(self._t("Testing API connection, please wait..."), None, 0, 0, self)
-    progress.setWindowTitle(self._t("Testing"))
-    progress.setWindowModality(Qt.WindowModality.WindowModal)
-    progress.setCancelButton(None)
+    progress = create_progress_dialog(
+        self,
+        self._t("Testing"),
+        self._t("Testing API connection, please wait..."),
+    )
     progress.show()
 
     def run_test():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         result = loop.run_until_complete(
-            self.controller.test_api_connection_async(translator_key, api_key, api_base, model)
+            self.controller.test_api_connection_async(api_type, api_key, api_base, model)
         )
         loop.close()
         return result
@@ -224,7 +290,7 @@ def on_test_api_clicked(self, key: str):
             QMessageBox.information(self, self._t("Success"), self._t("API connection test successful!"))
         else:
             friendly_message = self._t("Please check your API key and address.")
-            friendly_message += f"\n\n{self._t('Address format example')}: https://api.openai.com/v1"
+            friendly_message += f"\n\n{self._t('Address format example')}: {_get_api_address_example(api_type)}"
             if message and str(message).strip():
                 friendly_message += f"\n\n{str(message).strip()}"
             QMessageBox.critical(
@@ -243,10 +309,11 @@ def on_get_models_clicked(self, key: str):
     """获取可用模型列表。"""
     import asyncio
 
-    from PyQt6.QtCore import QThread, Qt
-    from PyQt6.QtWidgets import QMessageBox, QProgressDialog
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtWidgets import QMessageBox
 
     from desktop_qt_ui.widgets.model_selector_dialog import ModelSelectorDialog
+    from widgets.themed_progress_dialog import create_progress_dialog
 
     translator_combo = self.findChild(QComboBox, "translator.translator")
     if not translator_combo:
@@ -255,32 +322,20 @@ def on_get_models_clicked(self, key: str):
     translator_display = translator_combo.currentText()
     reverse_map = {v: k for k, v in self.controller.get_display_mapping("translator").items()}
     translator_key = reverse_map.get(translator_display, translator_display.lower())
+    model_api_type, api_key, api_base, _ = _resolve_api_context(self, key, translator_key)
 
-    api_key = None
-    for env_key in self.env_widgets.keys():
-        if "API_KEY" in env_key or "AUTH_KEY" in env_key:
-            _, api_widget = self.env_widgets[env_key]
-            api_key = api_widget.text().strip()
-            break
-
-    api_base = None
-    for env_key in self.env_widgets.keys():
-        if "API_BASE" in env_key or "BASE" in env_key:
-            _, base_widget = self.env_widgets[env_key]
-            api_base = base_widget.text().strip() or None
-            break
-
-    progress = QProgressDialog(self._t("Fetching models, please wait..."), None, 0, 0, self)
-    progress.setWindowTitle(self._t("Get Models"))
-    progress.setWindowModality(Qt.WindowModality.WindowModal)
-    progress.setCancelButton(None)
+    progress = create_progress_dialog(
+        self,
+        self._t("Get Models"),
+        self._t("Fetching models, please wait..."),
+    )
     progress.show()
 
     def run_get_models():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         result = loop.run_until_complete(
-            self.controller.get_available_models_async(translator_key, api_key, api_base)
+            self.controller.get_available_models_async(model_api_type, api_key, api_base)
         )
         loop.close()
         return result
@@ -303,7 +358,8 @@ def on_get_models_clicked(self, key: str):
                     models,
                     self._t("Select Model"),
                     self._t("Available models:"),
-                    self,
+                    parent=self,
+                    t_func=self._t,
                 )
                 if ok and selected_model and key in self.env_widgets:
                     _, widget = self.env_widgets[key]

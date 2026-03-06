@@ -9,6 +9,7 @@ from editor.editor_model import EditorModel
 from editor_view import EditorView
 from main_view import MainView
 from services import ServiceManager, get_config_service, get_logger, get_state_manager, get_i18n_manager
+from widgets.themed_message_box import apply_message_box_style
 
 
 class MainWindow(QMainWindow):
@@ -512,7 +513,7 @@ class MainWindow(QMainWindow):
             
             # 不设置图标，避免加载过多资源
             msg_box.setIcon(QMessageBox.Icon.Question)
-            
+            apply_message_box_style(msg_box)
             reply = msg_box.exec()
 
             if reply == QMessageBox.StandardButton.Yes:
@@ -531,6 +532,7 @@ class MainWindow(QMainWindow):
             msg_box.setIcon(QMessageBox.Icon.Critical)
             msg_box.setText(error_message)
             msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            apply_message_box_style(msg_box)
             msg_box.exec()
         except Exception as e:
             self.logger.error(f"_show_error_dialog error: {e}", exc_info=True)

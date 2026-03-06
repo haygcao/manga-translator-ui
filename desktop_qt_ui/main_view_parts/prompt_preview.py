@@ -315,18 +315,22 @@ def _menu_style() -> str:
     return f"""
         QMenu {{
             background: {t["bg_dropdown"]};
+            background-color: {t["bg_dropdown"]};
             border: 1px solid {t["border_input"]};
             border-radius: 8px;
             padding: 6px 4px;
             color: {t["fg"]};
         }}
         QMenu::item {{
+            background: transparent;
+            background-color: transparent;
             padding: 8px 20px;
             border-radius: 5px;
             font-size: 13px;
         }}
         QMenu::item:selected {{
             background: {t["menu_hover_bg"]};
+            background-color: {t["menu_hover_bg"]};
             color: {t["fg_bright"]};
         }}
     """

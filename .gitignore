@@ -95,6 +95,7 @@ logs/
 examples/config.json
 
 # Ignore filter list (用户自定义过滤列表)
+examples/filter_list.json
 examples/filter_list.txt
 
 # Ignore custom API params (用户自定义API参数配置)

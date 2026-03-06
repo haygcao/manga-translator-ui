@@ -664,7 +664,9 @@ class MainAppLogic(QObject):
     async def get_available_models_async(self, translator_key: str, api_key: str, api_base: str = None) -> tuple[bool, List[str], str]:
         """异步获取可用模型列表"""
         try:
-            if "openai" in translator_key.lower():
+            normalized_key = (translator_key or "").lower()
+
+            if "openai" in normalized_key:
                 # 尝试使用 curl_cffi 客户端绕过 TLS 指纹检测
                 try:
                     from manga_translator.translators.common import AsyncOpenAICurlCffi
@@ -693,7 +695,7 @@ class MainAppLogic(QObject):
                 finally:
                     await client.close()
             
-            elif "gemini" in translator_key.lower():
+            elif "gemini" in normalized_key:
                 # Gemini API - 使用 curl_cffi 绕过 TLS 指纹检测，使用 Google Gemini 认证格式
                 try:
                     from manga_translator.translators.common import AsyncGeminiCurlCffi
@@ -746,7 +748,7 @@ class MainAppLogic(QObject):
 
                     return await loop.run_in_executor(None, sync_get_models)
             
-            elif "sakura" in translator_key.lower():
+            elif "sakura" in normalized_key:
                 # Sakura使用OpenAI兼容API
                 from openai import AsyncOpenAI
                 if not api_base:

@@ -24,6 +24,7 @@ from services import (
     get_resource_manager,
     get_translation_service,
 )
+from widgets.themed_message_box import apply_message_box_style
 
 from .editor_model import EditorModel
 from .desktop_ui_geometry import get_polygon_center
@@ -524,6 +525,7 @@ class EditorController(QObject):
             no_btn = msg_box.addButton("不保存", QMessageBox.ButtonRole.NoRole)
             
             msg_box.setDefaultButton(cancel_btn)
+            apply_message_box_style(msg_box)
             msg_box.exec()
             
             clicked_button = msg_box.clickedButton()

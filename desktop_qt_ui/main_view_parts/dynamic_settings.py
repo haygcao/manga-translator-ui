@@ -33,20 +33,14 @@ def _get_setting_description(view, full_key: str) -> str:
 
 
 def _open_filter_list(self):
-    """打开过滤列表文件"""
+    """打开过滤列表编辑器"""
     from manga_translator.utils.text_filter import ensure_filter_list_exists
-    import subprocess
-    import sys
-    
+
     filter_path = ensure_filter_list_exists()
-    
-    # 根据操作系统打开文件
-    if sys.platform == 'win32':
-        subprocess.Popen(['notepad.exe', filter_path])
-    elif sys.platform == 'darwin':
-        subprocess.Popen(['open', filter_path])
-    else:
-        subprocess.Popen(['xdg-open', filter_path])
+    from widgets.filter_list_editor import FilterListEditorDialog
+
+    dialog = FilterListEditorDialog(filter_path, t_func=self._t, parent=self)
+    dialog.exec()
 
 @pyqtSlot(dict)
 def set_parameters(self, config: dict):
@@ -615,7 +609,7 @@ def _create_param_widgets(self, data, parent_layout, prefix=""):
             self._populate_language_combo()
 
         elif full_key == "filter_text_enabled":
-            # 特殊处理：过滤列表开关 + 打开过滤列表按钮
+            # 特殊处理：过滤列表开关 + 编辑过滤列表按钮
             container = QWidget()
             hbox = QHBoxLayout(container)
             hbox.setContentsMargins(0, 0, 0, 0)
@@ -724,7 +718,7 @@ def _create_param_widgets(self, data, parent_layout, prefix=""):
                 checkbox = ToggleSwitch(checked=value)
                 checkbox.stateChanged.connect(lambda state, k=full_key: self._on_setting_changed(bool(state), k, None))
                 
-                open_file_button = QPushButton(self._t("Open File"))
+                open_file_button = QPushButton(self._t("Edit"))
                 open_file_button.setFixedWidth(100)
                 open_file_button.clicked.connect(self._on_open_custom_api_params_file)
                 

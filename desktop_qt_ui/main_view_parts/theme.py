@@ -140,18 +140,22 @@ def generate_application_stylesheet(theme: str) -> str:
 
         QMenu {{
             background: {c["bg_dropdown"]};
+            background-color: {c["bg_dropdown"]};
             color: {c["text_accent"]};
             border: 1px solid {c["border_card"]};
             border-radius: 10px;
             padding: 6px 4px;
         }}
         QMenu::item {{
+            background: transparent;
+            background-color: transparent;
             padding: 7px 16px;
             margin: 1px 4px;
             border-radius: 6px;
         }}
         QMenu::item:selected {{
             background: {c["tab_hover"]};
+            background-color: {c["tab_hover"]};
             color: {c["text_bright"]};
         }}
         QMenu::separator {{
@@ -176,6 +180,49 @@ def generate_application_stylesheet(theme: str) -> str:
             padding: 0 8px;
             background: transparent;
             color: {c["text_card_title"]};
+        }}
+
+        QProgressDialog {{
+            background: {c["bg_panel"]};
+            border: 1px solid {c["border_card"]};
+            border-radius: 14px;
+        }}
+        QProgressDialog QLabel {{
+            background: transparent;
+            color: {c["text_page_title"]};
+            font-size: 13px;
+            font-weight: 700;
+            min-width: 280px;
+        }}
+        QProgressDialog QProgressBar {{
+            background: {c["bg_surface_soft"]};
+            border: 1px solid {c["border_input"]};
+            border-radius: 8px;
+            min-height: 12px;
+            text-align: center;
+            color: {c["text_secondary"]};
+        }}
+        QProgressDialog QProgressBar::chunk {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                        stop:0 {c["btn_primary_bg"]}, stop:1 {c["btn_primary_hover"]});
+            border-radius: 7px;
+        }}
+        QProgressDialog QPushButton {{
+            background: {c["btn_soft_bg"]};
+            border: 1px solid {c["btn_soft_border"]};
+            border-radius: 10px;
+            color: {c["btn_soft_text"]};
+            padding: 6px 12px;
+            font-weight: 700;
+            min-width: 88px;
+            min-height: 32px;
+        }}
+        QProgressDialog QPushButton:hover {{
+            background: {c["btn_soft_hover"]};
+            border-color: {c["border_input_hover"]};
+        }}
+        QProgressDialog QPushButton:pressed {{
+            background: {c["btn_soft_pressed"]};
         }}
 
         QLineEdit,
@@ -217,13 +264,25 @@ def generate_application_stylesheet(theme: str) -> str:
             border: none;
             width: 24px;
         }}
+        QComboBoxPrivateContainer {{
+            background: {c["bg_dropdown"]};
+            background-color: {c["bg_dropdown"]};
+            border: 1px solid {c["border_input"]};
+        }}
         QComboBox QAbstractItemView {{
             background: {c["bg_dropdown"]};
+            background-color: {c["bg_dropdown"]};
+            alternate-background-color: {c["bg_dropdown"]};
             color: {c["text_accent"]};
             border: 1px solid {c["border_input"]};
             selection-background-color: {c["dropdown_selection"]};
             selection-color: {c["list_item_selected_text"]};
             outline: none;
+        }}
+        QComboBox QAbstractItemView::item:selected {{
+            background: {c["dropdown_selection"]};
+            background-color: {c["dropdown_selection"]};
+            color: {c["list_item_selected_text"]};
         }}
 
         QPushButton,

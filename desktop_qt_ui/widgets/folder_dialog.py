@@ -1121,17 +1121,21 @@ class FolderDialog(QDialog):
                 margin: 0px;
                 padding: 4px;
                 background: {palette.color(QPalette.ColorRole.Base).name()};
+                background-color: {palette.color(QPalette.ColorRole.Base).name()};
                 color: {palette.color(QPalette.ColorRole.Text).name()};
                 border: 1px solid {palette.color(QPalette.ColorRole.Mid).name()};
                 border-radius: 8px;
             }
             QMenu::item {
+                background: transparent;
+                background-color: transparent;
                 padding: 6px 8px;
                 margin: 0px;
                 border-radius: 5px;
             }
             QMenu::item:selected {
                 background: {self._soft_hover_color};
+                background-color: {self._soft_hover_color};
             }
         """)
 
