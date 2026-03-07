@@ -17,7 +17,58 @@ from PyQt6.QtWidgets import (
     QMessageBox, QAbstractItemView, QScrollArea, QToolButton, QStyle, QStyledItemDelegate, QHeaderView, QMenu
 )
 
+from main_view_parts.theme import apply_widget_stylesheet, get_current_theme_colors
 from services import get_i18n_manager
+
+
+def _folder_dialog_tokens() -> dict[str, str]:
+    colors = get_current_theme_colors()
+    return {
+        **colors,
+        "dialog_bg": colors["bg_panel"],
+        "card_bg": colors["bg_surface_raised"],
+        "card_soft_bg": colors["bg_surface_soft"],
+        "toolbar_bg": colors["bg_toolbar"],
+        "toolbar_border": colors["bg_toolbar_border"],
+        "input_bg": colors["bg_input"],
+        "input_focus_bg": colors["bg_input_focus"],
+        "menu_bg": colors["bg_dropdown"],
+        "text": colors["text_primary"],
+        "text_title": colors["text_page_title"],
+        "text_muted": colors["text_muted"],
+        "text_selected": colors["list_item_selected_text"],
+        "border": colors["border_input"],
+        "border_hover": colors["border_input_hover"],
+        "border_focus": colors["border_input_focus"],
+        "panel_border": colors["border_card"],
+        "list_border": colors["border_list"],
+        "soft_bg": colors["btn_soft_bg"],
+        "soft_hover": colors["btn_soft_hover"],
+        "soft_pressed": colors["btn_soft_pressed"],
+        "soft_border": colors["btn_soft_border"],
+        "soft_text": colors["btn_soft_text"],
+        "primary_bg": colors["btn_primary_bg"],
+        "primary_hover": colors["btn_primary_hover"],
+        "primary_pressed": colors["btn_primary_pressed"],
+        "primary_border": colors["btn_primary_border"],
+        "primary_text": colors["btn_primary_text"],
+        "chip_bg": colors["btn_chip_bg"],
+        "chip_border": colors["btn_chip_border"],
+        "chip_hover": colors["btn_chip_hover"],
+        "hover_bg": colors["list_item_hover"],
+        "selection_bg": colors["dropdown_selection"],
+        "selection_text": colors["list_item_selected_text"],
+        "splitter": colors["splitter_handle"],
+        "splitter_hover": colors["splitter_handle_hover"],
+        "scroll_bg": colors["bg_scroll"],
+        "scroll_handle": colors["scroll_handle"],
+        "scroll_handle_hover": colors["scroll_handle_hover"],
+        "disabled_bg": colors["btn_disabled_bg"],
+        "disabled_border": colors["btn_disabled_border"],
+        "disabled_text": colors["text_disabled"],
+        "warning": colors["warning_color"],
+        "accent": colors["cta_gradient_start"],
+    }
 
 
 class CaseInsensitiveSortProxyModel(QSortFilterProxyModel):
@@ -98,15 +149,21 @@ class FavoriteDelegate(QStyledItemDelegate):
         # 绘制星星
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        dialog = self.parent()
+        favorite_color = QColor("#ffc107")
+        outline_color = QColor("#c7cdd6")
+        if isinstance(dialog, FolderDialog):
+            favorite_color = QColor(dialog._favorite_star_color)
+            outline_color = QColor(dialog._border_hover_color if is_selected else dialog._border_color)
         
         if is_favorited:
             # 实心星星（已收藏）
-            painter.setPen(QPen(QColor("#ffc107"), 1))
-            painter.setBrush(QColor("#ffc107"))
+            painter.setPen(QPen(favorite_color, 1))
+            painter.setBrush(favorite_color)
         else:
             # 空心星星（未收藏）
-            star_outline = QColor("#e2e8f0") if is_selected else QColor("#c7cdd6")
-            painter.setPen(QPen(star_outline, 1))
+            painter.setPen(QPen(outline_color, 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
         
         # 绘制五角星
@@ -209,13 +266,19 @@ class ShortcutFavoriteDelegate(QStyledItemDelegate):
         
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        dialog = self.parent()
+        favorite_color = QColor("#ffc107")
+        outline_color = QColor("#c7cdd6")
+        if isinstance(dialog, FolderDialog):
+            favorite_color = QColor(dialog._favorite_star_color)
+            outline_color = QColor(dialog._border_hover_color if is_selected else dialog._border_color)
         
         if is_favorited:
-            painter.setPen(QPen(QColor("#ffc107"), 1))
-            painter.setBrush(QColor("#ffc107"))
+            painter.setPen(QPen(favorite_color, 1))
+            painter.setBrush(favorite_color)
         else:
-            star_outline = QColor("#e2e8f0") if is_selected else QColor("#c7cdd6")
-            painter.setPen(QPen(star_outline, 1))
+            painter.setPen(QPen(outline_color, 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
         
         self.draw_star(painter, star_rect)
@@ -286,6 +349,8 @@ class FolderDialog(QDialog):
 
     def __init__(self, parent=None, start_dir: str = "", multi_select: bool = True, config_service=None):
         super().__init__(parent)
+        self.setObjectName("folderDialog")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.multi_select = multi_select
         self.selected_folders: List[str] = []
         self.history: List[str] = []  # 导航历史
@@ -293,6 +358,7 @@ class FolderDialog(QDialog):
         self.favorite_folders: List[str] = []  # 收藏的文件夹
         self.config_service = config_service
         self.i18n = get_i18n_manager()
+        self._setup_theme_tokens()
 
         self.setWindowTitle(self._t("Select Folder") + (self._t(" (Multi-select)") if multi_select else ""))
         self.setWindowIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
@@ -343,41 +409,188 @@ class FolderDialog(QDialog):
         b = int(foreground.blue() * ratio + background.blue() * (1 - ratio))
         return f"rgb({r}, {g}, {b})"
 
+    def _setup_theme_tokens(self):
+        """初始化对话框的语义化样式 token。"""
+        tokens = _folder_dialog_tokens()
+        self._dialog_bg_color = tokens["dialog_bg"]
+        self._card_bg_color = tokens["card_bg"]
+        self._card_soft_bg_color = tokens["card_soft_bg"]
+        self._toolbar_bg_color = tokens["toolbar_bg"]
+        self._toolbar_border_color = tokens["toolbar_border"]
+        self._input_bg_color = tokens["input_bg"]
+        self._input_focus_bg_color = tokens["input_focus_bg"]
+        self._menu_bg_color = tokens["menu_bg"]
+        self._text_color = tokens["text"]
+        self._title_text_color = tokens["text_title"]
+        self._muted_text_color = tokens["text_muted"]
+        self._selection_text_color = tokens["text_selected"]
+        self._border_color = tokens["border"]
+        self._border_hover_color = tokens["border_hover"]
+        self._border_focus_color = tokens["border_focus"]
+        self._panel_border_color = tokens["panel_border"]
+        self._list_border_color = tokens["list_border"]
+        self._soft_bg_color = tokens["soft_bg"]
+        self._soft_hover_color = tokens["soft_hover"]
+        self._soft_pressed_color = tokens["soft_pressed"]
+        self._soft_border_color = tokens["soft_border"]
+        self._soft_text_color = tokens["soft_text"]
+        self._primary_bg_color = tokens["primary_bg"]
+        self._primary_hover_color = tokens["primary_hover"]
+        self._primary_pressed_color = tokens["primary_pressed"]
+        self._primary_border_color = tokens["primary_border"]
+        self._primary_text_color = tokens["primary_text"]
+        self._chip_bg_color = tokens["chip_bg"]
+        self._chip_border_color = tokens["chip_border"]
+        self._chip_hover_color = tokens["chip_hover"]
+        self._row_hover_color = tokens["hover_bg"]
+        self._selection_bg_color = tokens["selection_bg"]
+        self._splitter_color = tokens["splitter"]
+        self._splitter_hover_color = tokens["splitter_hover"]
+        self._scroll_bg_color = tokens["scroll_bg"]
+        self._scroll_handle_color = tokens["scroll_handle"]
+        self._scroll_handle_hover_color = tokens["scroll_handle_hover"]
+        self._disabled_bg_color = tokens["disabled_bg"]
+        self._disabled_border_color = tokens["disabled_border"]
+        self._disabled_text_color = tokens["disabled_text"]
+        self._favorite_star_color = tokens["warning"]
+        self._accent_color = tokens["accent"]
+        self._radius_sm = 8
+        self._radius_md = 10
+        self._radius_lg = 12
+
+    def _dialog_shell_stylesheet(self) -> str:
+        """应用到整个对话框的共享样式。"""
+        return f"""
+            QDialog#folderDialog {{
+                background: {self._dialog_bg_color};
+            }}
+            QToolTip {{
+                background: {self._menu_bg_color};
+                color: {self._text_color};
+                border: 1px solid {self._panel_border_color};
+                border-radius: {self._radius_sm}px;
+                padding: 4px 8px;
+            }}
+            QScrollBar:vertical {{
+                background: {self._scroll_bg_color};
+                width: 10px;
+                margin: 4px 2px 4px 0px;
+                border: none;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {self._scroll_handle_color};
+                min-height: 28px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {self._scroll_handle_hover_color};
+            }}
+            QScrollBar:horizontal {{
+                background: {self._scroll_bg_color};
+                height: 10px;
+                margin: 0px 4px 2px 4px;
+                border: none;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {self._scroll_handle_color};
+                min-width: 28px;
+                border-radius: 5px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: {self._scroll_handle_hover_color};
+            }}
+            QScrollBar::add-line,
+            QScrollBar::sub-line,
+            QScrollBar::add-page,
+            QScrollBar::sub-page {{
+                background: transparent;
+                border: none;
+            }}
+        """
+
+    def _menu_stylesheet(self) -> str:
+        """统一菜单样式。"""
+        return f"""
+            QMenu {{
+                margin: 0px;
+                padding: 4px;
+                background: {self._menu_bg_color};
+                background-color: {self._menu_bg_color};
+                color: {self._text_color};
+                border: 1px solid {self._panel_border_color};
+                border-radius: {self._radius_sm}px;
+            }}
+            QMenu::item {{
+                background: transparent;
+                background-color: transparent;
+                padding: 6px 8px;
+                margin: 0px;
+                border-radius: 5px;
+            }}
+            QMenu::item:selected {{
+                background: {self._row_hover_color};
+                background-color: {self._row_hover_color};
+                color: {self._title_text_color};
+            }}
+        """
+
+    def _breadcrumb_button_stylesheet(self, *, muted: bool = False) -> str:
+        """统一面包屑按钮样式。"""
+        text_color = self._muted_text_color if muted else self._title_text_color
+        return f"""
+            QPushButton {{
+                background-color: transparent;
+                border: 1px solid transparent;
+                border-radius: 6px;
+                color: {text_color};
+                text-align: left;
+                padding: 4px 8px;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {self._chip_hover_color};
+                border-color: {self._chip_border_color};
+            }}
+            QPushButton:pressed {{
+                background-color: {self._soft_pressed_color};
+            }}
+        """
+
+    def _ellipsis_button_stylesheet(self) -> str:
+        """统一省略菜单按钮样式。"""
+        return f"""
+            QToolButton {{
+                color: {self._muted_text_color};
+                background-color: transparent;
+                border: 1px solid transparent;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 4px 8px;
+            }}
+            QToolButton:hover {{
+                background-color: {self._chip_hover_color};
+                border-color: {self._chip_border_color};
+            }}
+            QToolButton:pressed {{
+                background-color: {self._soft_pressed_color};
+            }}
+            QToolButton::menu-indicator {{
+                image: none;
+                width: 0px;
+            }}
+        """
+
     def _init_ui(self):
         """初始化UI"""
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        # 获取系统调色板
-        from PyQt6.QtGui import QPalette
-        palette = self.palette()
-        self._accent_color = palette.color(QPalette.ColorRole.Highlight).name()
-        self._accent_hover_color = self._mix_color(
-            palette.color(QPalette.ColorRole.Highlight),
-            palette.color(QPalette.ColorRole.Window),
-            0.8,
-        )
-        self._accent_pressed_color = self._mix_color(
-            palette.color(QPalette.ColorRole.Highlight),
-            palette.color(QPalette.ColorRole.Window),
-            0.95,
-        )
-        self._soft_hover_color = self._mix_color(
-            palette.color(QPalette.ColorRole.Highlight),
-            palette.color(QPalette.ColorRole.Base),
-            0.2,
-        )
-        self._panel_gradient = (
-            "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-            f"stop:0 {self._mix_color(palette.color(QPalette.ColorRole.Base), palette.color(QPalette.ColorRole.Window), 0.92)}, "
-            f"stop:1 {self._mix_color(palette.color(QPalette.ColorRole.Window), palette.color(QPalette.ColorRole.Base), 0.88)})"
-        )
-        toolbar_border = self._mix_color(
-            palette.color(QPalette.ColorRole.Mid),
-            palette.color(QPalette.ColorRole.Window),
-            0.65,
-        )
+        toolbar_border = self._toolbar_border_color
         
         # 创建工具栏区域（后退/前进/上级目录）
         toolbar_widget = QWidget()
@@ -388,24 +601,25 @@ class FolderDialog(QDialog):
                 border: none;
             }}
             QToolButton {{
-                background-color: {palette.color(QPalette.ColorRole.Base).name()};
-                border: 1px solid {toolbar_border};
-                border-radius: 7px;
+                background-color: {self._soft_bg_color};
+                border: 1px solid {self._soft_border_color};
+                border-radius: {self._radius_sm - 1}px;
                 padding: 4px;
                 margin: 2px;
-                color: {palette.color(QPalette.ColorRole.WindowText).name()};
+                color: {self._soft_text_color};
                 font-size: 16px;
                 font-weight: 700;
             }}
             QToolButton:hover {{
                 background-color: {self._soft_hover_color};
-                border: 1px solid {self._accent_color};
+                border: 1px solid {self._border_hover_color};
             }}
             QToolButton:pressed {{
-                background-color: {self._mix_color(palette.color(QPalette.ColorRole.Highlight), palette.color(QPalette.ColorRole.Midlight), 0.22)};
+                background-color: {self._soft_pressed_color};
             }}
             QToolButton:disabled {{
-                color: {palette.color(QPalette.ColorRole.PlaceholderText).name()};
+                color: {self._disabled_text_color};
+                border-color: {self._disabled_border_color};
             }}
         """)
         toolbar_layout = QHBoxLayout(toolbar_widget)
@@ -447,9 +661,9 @@ class FolderDialog(QDialog):
         top_bar_widget.setObjectName("topBar")
         top_bar_widget.setStyleSheet(f"""
             QWidget#topBar {{
-                background: {palette.color(QPalette.ColorRole.Window).name()};
+                background: {self._toolbar_bg_color};
                 border: 1px solid {toolbar_border};
-                border-radius: 10px;
+                border-radius: {self._radius_lg}px;
             }}
         """)
         top_bar_layout = QHBoxLayout(top_bar_widget)
@@ -461,9 +675,9 @@ class FolderDialog(QDialog):
         address_widget.setObjectName("addressCard")
         address_widget.setStyleSheet(f"""
             QWidget#addressCard {{
-                background: {palette.color(QPalette.ColorRole.Base).name()};
-                border: 1px solid {toolbar_border};
-                border-radius: 8px;
+                background: {self._input_bg_color};
+                border: 1px solid {self._border_color};
+                border-radius: {self._radius_md}px;
             }}
         """)
         address_layout = QHBoxLayout(address_widget)
@@ -479,19 +693,19 @@ class FolderDialog(QDialog):
         self.breadcrumb_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.breadcrumb_scroll.setMaximumHeight(35)
         self.breadcrumb_scroll.setStyleSheet(f"""
-            QScrollArea {
+            QScrollArea {{
                 border: none;
-                background-color: {palette.color(QPalette.ColorRole.Base).name()};
-            }
-            QScrollArea > QWidget > QWidget {
-                background-color: {palette.color(QPalette.ColorRole.Base).name()};
-            }
+                background-color: {self._input_bg_color};
+            }}
+            QScrollArea > QWidget > QWidget {{
+                background-color: {self._input_bg_color};
+            }}
         """)
 
         # 面包屑容器
         self.breadcrumb_widget = QWidget()
         self.breadcrumb_widget.setStyleSheet(
-            f"background-color: {palette.color(QPalette.ColorRole.Base).name()};"
+            f"background-color: {self._input_bg_color};"
         )
         self.breadcrumb_layout = QHBoxLayout(self.breadcrumb_widget)
         self.breadcrumb_layout.setContentsMargins(0, 0, 0, 0)
@@ -507,16 +721,20 @@ class FolderDialog(QDialog):
         self.edit_path_button.setToolTip(self._t("Edit Path"))
         self.edit_path_button.setStyleSheet(f"""
             QToolButton {{
-                background-color: transparent;
-                border: 1px solid transparent;
+                background-color: {self._chip_bg_color};
+                border: 1px solid {self._chip_border_color};
                 border-radius: 6px;
                 padding: 4px 8px;
                 font-size: 13px;
                 font-weight: 700;
+                color: {self._title_text_color};
             }}
             QToolButton:hover {{
-                background-color: {self._soft_hover_color};
-                border: 1px solid {self._accent_color};
+                background-color: {self._chip_hover_color};
+                border: 1px solid {self._border_hover_color};
+            }}
+            QToolButton:pressed {{
+                background-color: {self._soft_pressed_color};
             }}
         """)
         address_layout.addWidget(self.edit_path_button)
@@ -527,14 +745,18 @@ class FolderDialog(QDialog):
         self.path_edit.setStyleSheet(f"""
             QLineEdit {{
                 padding: 8px 10px;
-                border: 1px solid {self._accent_color};
-                border-radius: 10px;
+                border: 1px solid {self._border_color};
+                border-radius: {self._radius_md}px;
                 font-size: 13px;
-                background-color: {palette.color(QPalette.ColorRole.Base).name()};
-                color: {palette.color(QPalette.ColorRole.Text).name()};
+                background-color: {self._input_bg_color};
+                color: {self._text_color};
+            }}
+            QLineEdit:hover {{
+                border: 1px solid {self._border_hover_color};
             }}
             QLineEdit:focus {{
-                border: 1px solid {self._accent_pressed_color};
+                border: 1px solid {self._border_focus_color};
+                background-color: {self._input_focus_bg_color};
             }}
         """)
 
@@ -569,8 +791,12 @@ class FolderDialog(QDialog):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setStyleSheet(f"""
             QSplitter::handle {{
-                background-color: {palette.color(QPalette.ColorRole.Mid).name()};
+                background-color: {self._splitter_color};
                 width: 6px;
+                border-radius: 3px;
+            }}
+            QSplitter::handle:hover {{
+                background-color: {self._splitter_hover_color};
             }}
         """)
 
@@ -585,57 +811,57 @@ class FolderDialog(QDialog):
         self.folder_tree.setModel(self.proxy_model)
         self.folder_tree.setStyleSheet(f"""
             QTreeView {{
-                border: 1px solid {self._mix_color(palette.color(QPalette.ColorRole.Highlight), palette.color(QPalette.ColorRole.Mid), 0.28)};
-                border-radius: 12px;
-                background-color: {palette.color(QPalette.ColorRole.Base).name()};
-                selection-background-color: {self._accent_color};
-                selection-color: {palette.color(QPalette.ColorRole.HighlightedText).name()};
+                border: 1px solid {self._list_border_color};
+                border-radius: {self._radius_lg}px;
+                background-color: {self._card_bg_color};
+                selection-background-color: {self._selection_bg_color};
+                selection-color: {self._selection_text_color};
                 font-size: 13px;
-                color: {palette.color(QPalette.ColorRole.Text).name()};
+                color: {self._text_color};
                 padding: 0px;
             }}
             QTreeView::item {{
                 padding: 7px 8px;
                 border: none;
-                border-radius: 8px;
+                border-radius: {self._radius_sm}px;
                 margin: 0px;
             }}
             QTreeView::item:hover {{
-                background-color: {self._soft_hover_color};
-                color: {palette.color(QPalette.ColorRole.Text).name()};
-                border-radius: 8px;
+                background-color: {self._row_hover_color};
+                color: {self._text_color};
+                border-radius: {self._radius_sm}px;
                 margin: 0px;
             }}
             QTreeView::item:selected {{
-                background-color: {self._accent_color};
-                color: {palette.color(QPalette.ColorRole.HighlightedText).name()};
-                border-radius: 8px;
+                background-color: {self._selection_bg_color};
+                color: {self._selection_text_color};
+                border-radius: {self._radius_sm}px;
                 margin: 0px;
             }}
             QTreeView::item:selected:active {{
-                border-radius: 8px;
+                border-radius: {self._radius_sm}px;
             }}
             QTreeView::item:selected:!active {{
-                border-radius: 8px;
+                border-radius: {self._radius_sm}px;
             }}
             QHeaderView::section {{
-                background-color: {palette.color(QPalette.ColorRole.Base).name()};
-                color: {palette.color(QPalette.ColorRole.WindowText).name()};
+                background-color: {self._card_soft_bg_color};
+                color: {self._title_text_color};
                 border: none;
-                border-right: 1px solid {palette.color(QPalette.ColorRole.Mid).name()};
-                border-bottom: 1px solid {palette.color(QPalette.ColorRole.Mid).name()};
+                border-right: 1px solid {self._panel_border_color};
+                border-bottom: 1px solid {self._panel_border_color};
                 padding: 6px 10px;
                 font-size: 12px;
                 font-weight: 600;
             }}
             QHeaderView::section:hover {{
-                background-color: {self._mix_color(palette.color(QPalette.ColorRole.Highlight), palette.color(QPalette.ColorRole.Base), 0.08)};
+                background-color: {self._chip_hover_color};
             }}
             QHeaderView::section:first {{
-                border-top-left-radius: 10px;
+                border-top-left-radius: {self._radius_md}px;
             }}
             QHeaderView::section:last {{
-                border-top-right-radius: 10px;
+                border-top-right-radius: {self._radius_md}px;
                 border-right: none;
             }}
         """)
@@ -681,9 +907,9 @@ class FolderDialog(QDialog):
         info_widget.setObjectName("infoBar")
         info_widget.setStyleSheet(f"""
             QWidget#infoBar {{
-                background: {self._mix_color(palette.color(QPalette.ColorRole.Base), palette.color(QPalette.ColorRole.Window), 0.92)};
-                border: 1px solid {palette.color(QPalette.ColorRole.Mid).name()};
-                border-radius: 10px;
+                background: {self._card_soft_bg_color};
+                border: 1px solid {self._panel_border_color};
+                border-radius: {self._radius_md}px;
             }}
         """)
         info_layout = QHBoxLayout(info_widget)
@@ -691,13 +917,13 @@ class FolderDialog(QDialog):
 
         if self.multi_select:
             tip_label = QLabel(self._t("Tip: Hold Ctrl or Shift to select multiple folders, right-click to favorite"))
-            tip_label.setStyleSheet(f"color: {palette.color(QPalette.ColorRole.PlaceholderText).name()}; font-size: 12px;")
+            tip_label.setStyleSheet(f"color: {self._muted_text_color}; font-size: 12px;")
             info_layout.addWidget(tip_label)
 
         info_layout.addStretch()
 
         self.selection_label = QLabel(self._t("Not Selected"))
-        self.selection_label.setStyleSheet(f"color: {self._accent_color}; font-weight: 600; font-size: 12px;")
+        self.selection_label.setStyleSheet(f"color: {self._title_text_color}; font-weight: 600; font-size: 12px;")
         info_layout.addWidget(self.selection_label)
 
         layout.addWidget(info_widget)
@@ -713,23 +939,24 @@ class FolderDialog(QDialog):
         self.ok_button.setEnabled(False)
         self.ok_button.setStyleSheet(f"""
             QPushButton {{
-                background-color: {self._accent_color};
-                color: white;
-                border: none;
-                border-radius: 10px;
+                background-color: {self._primary_bg_color};
+                color: {self._primary_text_color};
+                border: 1px solid {self._primary_border_color};
+                border-radius: {self._radius_md}px;
                 padding: 7px 22px;
                 font-size: 13px;
                 font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: {self._accent_hover_color};
+                background-color: {self._primary_hover_color};
             }}
             QPushButton:pressed {{
-                background-color: {self._accent_pressed_color};
+                background-color: {self._primary_pressed_color};
             }}
             QPushButton:disabled {{
-                background-color: #cccccc;
-                color: #888888;
+                background-color: {self._disabled_bg_color};
+                color: {self._disabled_text_color};
+                border: 1px solid {self._disabled_border_color};
             }}
         """)
         button_layout.addWidget(self.ok_button)
@@ -739,43 +966,38 @@ class FolderDialog(QDialog):
         self.cancel_button.setMinimumHeight(32)
         self.cancel_button.setStyleSheet(f"""
             QPushButton {{
-                background-color: {palette.color(QPalette.ColorRole.Button).name()};
-                color: {palette.color(QPalette.ColorRole.ButtonText).name()};
-                border: 1px solid {palette.color(QPalette.ColorRole.Mid).name()};
-                border-radius: 10px;
+                background-color: {self._soft_bg_color};
+                color: {self._soft_text_color};
+                border: 1px solid {self._soft_border_color};
+                border-radius: {self._radius_md}px;
                 padding: 7px 22px;
                 font-size: 13px;
+                font-weight: 600;
             }}
             QPushButton:hover {{
-                background-color: {palette.color(QPalette.ColorRole.Light).name()};
-                border-color: {palette.color(QPalette.ColorRole.Dark).name()};
+                background-color: {self._soft_hover_color};
+                border-color: {self._border_hover_color};
             }}
             QPushButton:pressed {{
-                background-color: {palette.color(QPalette.ColorRole.Midlight).name()};
+                background-color: {self._soft_pressed_color};
             }}
         """)
         button_layout.addWidget(self.cancel_button)
 
         layout.addLayout(button_layout)
+        apply_widget_stylesheet(self, self._dialog_shell_stylesheet())
 
     def _create_shortcuts_panel(self) -> QWidget:
         """创建左侧快捷栏 - 树形结构"""
-        from PyQt6.QtGui import QPalette
-        palette = self.palette()
-        hover_bg_final = self._mix_color(
-            palette.color(QPalette.ColorRole.Highlight),
-            palette.color(QPalette.ColorRole.Window),
-            0.25,
-        )
-        
         widget = QWidget()
+        widget.setObjectName("shortcutsPanel")
         widget.setMinimumWidth(180)
         widget.setMaximumWidth(280)
         widget.setStyleSheet(f"""
-            QWidget {{
-                background-color: {palette.color(QPalette.ColorRole.Base).name()};
-                border: 1px solid {palette.color(QPalette.ColorRole.Mid).name()};
-                border-radius: 8px;
+            QWidget#shortcutsPanel {{
+                background-color: {self._card_bg_color};
+                border: 1px solid {self._panel_border_color};
+                border-radius: {self._radius_md}px;
             }}
         """)
         layout = QVBoxLayout(widget)
@@ -794,24 +1016,24 @@ class FolderDialog(QDialog):
             QTreeView {{
                 border: none;
                 background-color: transparent;
-                selection-background-color: {self._accent_color};
-                selection-color: {palette.color(QPalette.ColorRole.HighlightedText).name()};
+                selection-background-color: {self._selection_bg_color};
+                selection-color: {self._selection_text_color};
                 font-size: 13px;
                 outline: none;
-                color: {palette.color(QPalette.ColorRole.Text).name()};
+                color: {self._text_color};
             }}
             QTreeView::item {{
                 padding: 6px 8px;
                 border: none;
-                border-radius: 4px;
+                border-radius: 6px;
             }}
             QTreeView::item:hover {{
-                background-color: {hover_bg_final};
-                color: {palette.color(QPalette.ColorRole.Text).name()};
+                background-color: {self._row_hover_color};
+                color: {self._text_color};
             }}
             QTreeView::item:selected {{
-                background-color: {self._accent_color};
-                color: {palette.color(QPalette.ColorRole.HighlightedText).name()};
+                background-color: {self._selection_bg_color};
+                color: {self._selection_text_color};
             }}
             QTreeView::branch {{
                 background-color: transparent;
@@ -1059,6 +1281,7 @@ class FolderDialog(QDialog):
             return
 
         menu = QMenu(self)
+        menu.setStyleSheet(self._menu_stylesheet())
         if folder_path in self.favorite_folders:
             action = menu.addAction(self._t("Remove from Favorites"))
             action.triggered.connect(lambda: self._remove_favorite_by_path(folder_path))
@@ -1082,6 +1305,7 @@ class FolderDialog(QDialog):
             return
 
         menu = QMenu(self)
+        menu.setStyleSheet(self._menu_stylesheet())
         if folder_path in self.favorite_folders:
             action = menu.addAction(self._t("Remove from Favorites"))
             action.triggered.connect(lambda: self._remove_favorite_by_path(folder_path))
@@ -1114,30 +1338,8 @@ class FolderDialog(QDialog):
     def _popup_menu_left_aligned(self, anchor_button: QToolButton, menu: QMenu):
         """在按钮下方弹出菜单，并与 '...' 按钮水平居中"""
         # 宽度硬设定
-        palette = self.palette()
         menu.setFixedWidth(140)
-        menu.setStyleSheet(f"""
-            QMenu {
-                margin: 0px;
-                padding: 4px;
-                background: {palette.color(QPalette.ColorRole.Base).name()};
-                background-color: {palette.color(QPalette.ColorRole.Base).name()};
-                color: {palette.color(QPalette.ColorRole.Text).name()};
-                border: 1px solid {palette.color(QPalette.ColorRole.Mid).name()};
-                border-radius: 8px;
-            }
-            QMenu::item {
-                background: transparent;
-                background-color: transparent;
-                padding: 6px 8px;
-                margin: 0px;
-                border-radius: 5px;
-            }
-            QMenu::item:selected {
-                background: {self._soft_hover_color};
-                background-color: {self._soft_hover_color};
-            }
-        """)
+        menu.setStyleSheet(self._menu_stylesheet())
 
         x = (anchor_button.width() - menu.width()) // 2
         pos = anchor_button.mapToGlobal(QPoint(x, anchor_button.height()))
@@ -1214,31 +1416,12 @@ class FolderDialog(QDialog):
                 omitted_parts = parts[:-keep_tail]
                 parts = [("...", "...")] + parts[-keep_tail:]
 
-        from PyQt6.QtGui import QPalette
-        palette = self.palette()
-
         # 创建面包屑按钮
         for i, (full_path, name) in enumerate(parts):
             if name == "..." and full_path == "...":
                 ellipsis_btn = QToolButton()
                 ellipsis_btn.setText("...")
-                ellipsis_btn.setStyleSheet(f"""
-                    QToolButton {{
-                        color: {palette.color(QPalette.ColorRole.PlaceholderText).name()};
-                        background-color: transparent;
-                        border: none;
-                        font-size: 13px;
-                        padding: 4px 8px;
-                    }}
-                    QToolButton:hover {{
-                        background-color: {self._soft_hover_color};
-                        border-radius: 4px;
-                    }}
-                    QToolButton::menu-indicator {{
-                        image: none;
-                        width: 0px;
-                    }}
-                """)
+                ellipsis_btn.setStyleSheet(self._ellipsis_button_stylesheet())
 
                 ellipsis_menu = QMenu(self)
                 for omitted_path, omitted_name in omitted_parts:
@@ -1253,39 +1436,21 @@ class FolderDialog(QDialog):
                 self.breadcrumb_layout.insertWidget(self.breadcrumb_layout.count() - 1, ellipsis_btn)
                 if i < len(parts) - 1:
                     separator = QLabel(" > ")
-                    separator.setStyleSheet(f"color: {palette.color(QPalette.ColorRole.PlaceholderText).name()}; font-size: 12px;")
+                    separator.setStyleSheet(f"color: {self._muted_text_color}; font-size: 12px;")
                     self.breadcrumb_layout.insertWidget(self.breadcrumb_layout.count() - 1, separator)
                 continue
 
             # 路径按钮
             btn = QPushButton(name if name else full_path)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: transparent;
-                    border: none;
-                    color: {self._accent_color};
-                    text-align: left;
-                    padding: 4px 8px;
-                    font-size: 13px;
-                }}
-                QPushButton:hover {{
-                    background-color: {self._soft_hover_color};
-                    border-radius: 3px;
-                }}
-                QPushButton:pressed {{
-                    background-color: {palette.color(QPalette.ColorRole.Midlight).name()};
-                }}
-            """)
+            btn.setStyleSheet(self._breadcrumb_button_stylesheet())
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked, p=full_path: self.navigate_to(p, add_to_history=True))
             self.breadcrumb_layout.insertWidget(self.breadcrumb_layout.count() - 1, btn)
 
             # 分隔符（最后一个不加）
             if i < len(parts) - 1:
-                from PyQt6.QtGui import QPalette
-                palette = self.palette()
                 separator = QLabel(" > ")
-                separator.setStyleSheet(f"color: {palette.color(QPalette.ColorRole.PlaceholderText).name()}; font-size: 12px;")
+                separator.setStyleSheet(f"color: {self._muted_text_color}; font-size: 12px;")
                 self.breadcrumb_layout.insertWidget(self.breadcrumb_layout.count() - 1, separator)
 
     def _update_navigation_buttons(self):

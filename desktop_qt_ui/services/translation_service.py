@@ -225,3 +225,7 @@ class TranslationService:
 
     def set_target_language(self, lang_code: str):
         self.current_target_lang = lang_code
+
+    def cleanup(self):
+        """释放翻译服务持有的运行期状态。"""
+        self.logger.info("TranslationService cleanup complete")

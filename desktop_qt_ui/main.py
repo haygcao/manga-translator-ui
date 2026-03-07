@@ -267,29 +267,135 @@ def main():
         main_window.setWindowIcon(app_icon)
     
     main_window.show()
-    
-    # Windows特殊处理：强制窗口显示在最前面
+
+    # 避免在 Windows 初始 show 流程内同步处理事件。
+    # 这会触发 Qt/Windows 的重入消息处理，可能导致 RPC_E_CANTCALLOUT_ININPUTSYNCCALL。
+    from PyQt6.QtCore import QTimer
+
+    def finalize_window_activation():
+        try:
+            if main_window.isMinimized():
+                main_window.showNormal()
+
+            main_window.raise_()
+            main_window.activateWindow()
+
+            if sys.platform == 'win32':
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+
+                    user32 = ctypes.windll.user32
+                    kernel32 = ctypes.windll.kernel32
+
+                    user32.GetForegroundWindow.restype = wintypes.HWND
+                    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+                    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+                    user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+                    user32.AttachThreadInput.restype = wintypes.BOOL
+                    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+                    user32.ShowWindow.restype = wintypes.BOOL
+                    user32.SetWindowPos.argtypes = [
+                        wintypes.HWND,
+                        wintypes.HWND,
+                        ctypes.c_int,
+                        ctypes.c_int,
+                        ctypes.c_int,
+                        ctypes.c_int,
+                        ctypes.c_uint,
+                    ]
+                    user32.SetWindowPos.restype = wintypes.BOOL
+                    user32.BringWindowToTop.argtypes = [wintypes.HWND]
+                    user32.BringWindowToTop.restype = wintypes.BOOL
+                    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+                    user32.SetForegroundWindow.restype = wintypes.BOOL
+                    user32.SetActiveWindow.argtypes = [wintypes.HWND]
+                    user32.SetActiveWindow.restype = wintypes.HWND
+                    user32.SetFocus.argtypes = [wintypes.HWND]
+                    user32.SetFocus.restype = wintypes.HWND
+                    kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+                    hwnd = int(main_window.winId())
+                    if hwnd:
+                        SW_RESTORE = 9
+                        SW_SHOW = 5
+                        SWP_NOMOVE = 0x0002
+                        SWP_NOSIZE = 0x0001
+                        SWP_SHOWWINDOW = 0x0040
+                        HWND_TOPMOST = -1
+                        HWND_NOTOPMOST = -2
+
+                        foreground_hwnd = user32.GetForegroundWindow()
+                        current_thread_id = kernel32.GetCurrentThreadId()
+                        foreground_thread_id = 0
+                        if foreground_hwnd:
+                            foreground_thread_id = user32.GetWindowThreadProcessId(
+                                wintypes.HWND(foreground_hwnd),
+                                None,
+                            )
+
+                        attached = False
+                        if foreground_thread_id and foreground_thread_id != current_thread_id:
+                            attached = bool(
+                                user32.AttachThreadInput(
+                                    wintypes.DWORD(foreground_thread_id),
+                                    wintypes.DWORD(current_thread_id),
+                                    True,
+                                )
+                            )
+
+                        try:
+                            user32.ShowWindow(wintypes.HWND(hwnd), SW_RESTORE)
+                            user32.ShowWindow(wintypes.HWND(hwnd), SW_SHOW)
+                            user32.SetWindowPos(
+                                wintypes.HWND(hwnd),
+                                wintypes.HWND(HWND_TOPMOST),
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                            )
+                            user32.SetWindowPos(
+                                wintypes.HWND(hwnd),
+                                wintypes.HWND(HWND_NOTOPMOST),
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                            )
+                            user32.BringWindowToTop(wintypes.HWND(hwnd))
+                            user32.SetForegroundWindow(wintypes.HWND(hwnd))
+                            user32.SetActiveWindow(wintypes.HWND(hwnd))
+                            user32.SetFocus(wintypes.HWND(hwnd))
+                        finally:
+                            if attached:
+                                user32.AttachThreadInput(
+                                    wintypes.DWORD(foreground_thread_id),
+                                    wintypes.DWORD(current_thread_id),
+                                    False,
+                                )
+                except Exception as exc:
+                    logging.debug(f"Windows 前台激活失败: {exc}")
+        except Exception as exc:
+            logging.debug(f"激活主窗口失败: {exc}")
+
     if sys.platform == 'win32':
-        # 设置窗口标志，使其显示在最前面
-        from PyQt6.QtCore import Qt
-        main_window.setWindowFlags(main_window.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        main_window.show()  # 重新显示以应用标志
-        # 立即取消置顶，避免一直在最前面
-        main_window.setWindowFlags(main_window.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
-        main_window.show()  # 再次显示以应用标志
-        
-        # 设置图标并刷新
-        if app_icon and not app_icon.isNull():
-            main_window.setWindowIcon(app_icon)
-            app.processEvents()  # 强制处理事件，刷新任务栏图标
-    
-    main_window.raise_()  # 将窗口提升到最前面
-    main_window.activateWindow()  # 激活窗口
-    app.processEvents()  # 处理所有待处理事件
+        QTimer.singleShot(0, finalize_window_activation)
+        QTimer.singleShot(250, finalize_window_activation)
+    else:
+        QTimer.singleShot(0, finalize_window_activation)
 
     # 4. 启动事件循环
     ret = app.exec()
     logging.info("Exiting application...")
+
+    try:
+        from services import shutdown_services
+        shutdown_services()
+    except Exception as e:
+        logging.error(f"关闭服务时出错: {e}", exc_info=True)
     
     # 确保所有日志都写入文件
     try:

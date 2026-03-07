@@ -130,24 +130,37 @@ class ServiceContainer:
         """注册新服务"""
         self.services[name] = service_instance
         self.logger.info(f"注册服务: {name}")
+
+    def _call_service_hook(self, service_name: str, *hook_names: str):
+        """按顺序调用服务支持的关闭钩子。"""
+        service = self.get_service(service_name)
+        if not service:
+            return
+
+        for hook_name in hook_names:
+            hook = getattr(service, hook_name, None)
+            if callable(hook):
+                hook()
+                return
+
+        self.logger.debug(f"服务 {service_name} 没有可用的关闭钩子: {hook_names}")
     
     def shutdown_services(self):
         """关闭所有服务"""
         self.logger.info("开始关闭服务...")
         
-        try:
-            # 翻译服务清理
-            translation_service = self.get_service('translation')
-            if translation_service:
-                translation_service.cleanup()
-            
-            # 日志服务关闭
-            log_service = self.get_service('log')
-            if log_service:
-                log_service.shutdown()
-            
-        except Exception as e:
-            print(f"关闭服务时出错: {e}")
+        shutdown_steps = [
+            ("async", ("shutdown",)),
+            ("resource_manager", ("cleanup_all", "shutdown", "cleanup")),
+            ("translation", ("cleanup", "shutdown", "close")),
+            ("log", ("shutdown", "cleanup", "close")),
+        ]
+
+        for service_name, hook_names in shutdown_steps:
+            try:
+                self._call_service_hook(service_name, *hook_names)
+            except Exception as e:
+                self.logger.error(f"关闭服务 {service_name} 时出错: {e}", exc_info=True)
         
         self.services.clear()
         self.initialized = False

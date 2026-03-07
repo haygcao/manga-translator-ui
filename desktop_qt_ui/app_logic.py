@@ -109,6 +109,7 @@ class MainAppLogic(QObject):
         # ✅ 使用普通线程替代线程池
         self.current_thread = None  # 当前运行的线程
         self.current_worker = None  # 当前运行的worker
+        self._shutdown_started = False
         self.current_task_id = 0  # 任务ID，用于区分不同的翻译任务
         self.saved_files_count = 0
         self.saved_files_list = []  # 收集所有保存的文件路径
@@ -1937,6 +1938,11 @@ class MainAppLogic(QObject):
     
     def shutdown(self):
         """应用关闭时的清理"""
+        if self._shutdown_started:
+            return
+
+        self._shutdown_started = True
+
         try:
             if self.state_manager.is_translating() and self.current_worker:
                 self._ui_log("应用关闭中，停止任务...")

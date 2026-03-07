@@ -30,6 +30,7 @@ class AsyncJobManager:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._stopping = False
         
         # 启动事件循环
         self._start_event_loop()
@@ -53,15 +54,39 @@ class AsyncJobManager:
                     ws2_32.WSAStartup(0x0202, wsa_data)
                 except:
                     pass
-                
-                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-            
-            self._loop = asyncio.new_event_loop()
+
+                self._loop = asyncio.WindowsProactorEventLoopPolicy().new_event_loop()
+            else:
+                self._loop = asyncio.new_event_loop()
+
             asyncio.set_event_loop(self._loop)
+
+            def handle_loop_exception(loop, context):
+                exc = context.get("exception")
+                if (
+                    self._stopping
+                    and isinstance(exc, ConnectionAbortedError)
+                    and getattr(exc, "winerror", None) == 1236
+                ):
+                    self.logger.debug("Ignored expected Proactor self-pipe abort during shutdown")
+                    return
+                loop.default_exception_handler(context)
+
+            self._loop.set_exception_handler(handle_loop_exception)
             self._running = True
             self.logger.info("AsyncJobManager event loop started")
-            self._loop.run_forever()
-            self.logger.info("AsyncJobManager event loop stopped")
+            try:
+                self._loop.run_forever()
+            finally:
+                try:
+                    if self._loop and not self._loop.is_closed():
+                        self._loop.close()
+                except Exception as e:
+                    self.logger.warning(f"Error closing event loop: {e}")
+                finally:
+                    asyncio.set_event_loop(None)
+                    self._running = False
+                    self.logger.info("AsyncJobManager event loop stopped")
         
         self._thread = threading.Thread(target=run_loop, daemon=True)
         self._thread.start()
@@ -292,6 +317,32 @@ class AsyncJobManager:
                 self.logger.debug(f"Cleaned up {count} finished jobs")
             
             return count
+
+    async def _drain_loop(self) -> None:
+        """取消并回收事件循环中的待处理任务。"""
+        current_task = asyncio.current_task()
+        pending = [
+            task for task in asyncio.all_tasks()
+            if task is not current_task and not task.done()
+        ]
+
+        for task in pending:
+            task.cancel()
+
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        try:
+            await asyncio.get_running_loop().shutdown_asyncgens()
+        except Exception as e:
+            self.logger.debug(f"Error shutting down async generators: {e}")
+
+        shutdown_executor = getattr(asyncio.get_running_loop(), "shutdown_default_executor", None)
+        if shutdown_executor is not None:
+            try:
+                await shutdown_executor()
+            except Exception as e:
+                self.logger.debug(f"Error shutting down default executor: {e}")
     
     def shutdown(self, wait: bool = True) -> None:
         """关闭任务管理器
@@ -303,12 +354,19 @@ class AsyncJobManager:
             return
         
         self.logger.info("Shutting down AsyncJobManager")
+        self._stopping = True
         
         if not wait:
             self.cancel_all()
         
         # 停止事件循环
         if self._loop and not self._loop.is_closed():
+            try:
+                drain_future = asyncio.run_coroutine_threadsafe(self._drain_loop(), self._loop)
+                drain_future.result(timeout=5.0)
+            except Exception as e:
+                self.logger.warning(f"Error draining event loop: {e}")
+
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except RuntimeError:
@@ -318,21 +376,12 @@ class AsyncJobManager:
         # 等待线程结束
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5.0)
-        
+
+        self._loop = None
+        self._thread = None
         self._running = False
-        
-        # 关闭事件循环
-        if self._loop and not self._loop.is_closed():
-            try:
-                # 取消所有待处理的任务
-                pending = asyncio.all_tasks(self._loop)
-                for task in pending:
-                    task.cancel()
-                # 关闭事件循环
-                self._loop.close()
-            except Exception as e:
-                self.logger.warning(f"Error closing event loop: {e}")
-        
+        self._stopping = False
+
         self.logger.info("AsyncJobManager shutdown complete")
     
     def __del__(self):
