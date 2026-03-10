@@ -12,8 +12,9 @@ from typing import Dict, List, Optional
 class PresetService:
     """预设管理服务"""
     
-    def __init__(self, presets_dir: str = None):
+    def __init__(self, presets_dir: str = None, config_service=None):
         self.logger = logging.getLogger(__name__)
+        self.config_service = config_service
         
         # 预设存储目录
         if presets_dir is None:
@@ -37,21 +38,73 @@ class PresetService:
         self._create_default_preset()
         
         self.logger.info(f"预设目录: {self.presets_dir}")
+
+    def _get_known_preset_env_keys(self) -> List[str]:
+        """获取预设应覆盖的全部 env 键。"""
+        if self.config_service and hasattr(self.config_service, "get_all_preset_env_vars"):
+            try:
+                return self.config_service.get_all_preset_env_vars()
+            except Exception as e:
+                self.logger.warning(f"获取预设 env 键失败，使用回退列表: {e}")
+
+        return [
+            "OPENAI_API_KEY",
+            "OPENAI_API_BASE",
+            "OPENAI_MODEL",
+            "GEMINI_API_KEY",
+            "GEMINI_API_BASE",
+            "GEMINI_MODEL",
+            "SAKURA_API_BASE",
+            "SAKURA_DICT_PATH",
+            "OCR_OPENAI_API_KEY",
+            "OCR_OPENAI_MODEL",
+            "OCR_OPENAI_API_BASE",
+            "OCR_GEMINI_API_KEY",
+            "OCR_GEMINI_MODEL",
+            "OCR_GEMINI_API_BASE",
+            "COLOR_OPENAI_API_KEY",
+            "COLOR_OPENAI_MODEL",
+            "COLOR_OPENAI_API_BASE",
+            "COLOR_GEMINI_API_KEY",
+            "COLOR_GEMINI_MODEL",
+            "COLOR_GEMINI_API_BASE",
+            "RENDER_OPENAI_API_KEY",
+            "RENDER_OPENAI_MODEL",
+            "RENDER_OPENAI_API_BASE",
+            "RENDER_GEMINI_API_KEY",
+            "RENDER_GEMINI_MODEL",
+            "RENDER_GEMINI_API_BASE",
+        ]
+
+    def _normalize_preset_env_vars(self, env_vars: Optional[Dict[str, str]]) -> Dict[str, str]:
+        """补齐所有已知 API env 键，并保留额外自定义 env 键。"""
+        source = env_vars or {}
+        normalized: Dict[str, str] = {}
+
+        for key in self._get_known_preset_env_keys():
+            value = source.get(key, "")
+            normalized[key] = "" if value is None else str(value)
+
+        for key, value in source.items():
+            if key not in normalized:
+                normalized[key] = "" if value is None else str(value)
+
+        return normalized
+
+    def _build_default_preset_env(self) -> Dict[str, str]:
+        """构建默认预设内容。"""
+        default_env = self._normalize_preset_env_vars({})
+        default_env["OPENAI_API_BASE"] = "https://api.openai.com/v1"
+        default_env["OPENAI_MODEL"] = "gpt-4o"
+        return default_env
     
     def _create_default_preset(self):
         """创建默认预设"""
         default_preset_path = os.path.join(self.presets_dir, "默认.json")
         if not os.path.exists(default_preset_path):
-            default_env = {
-                "OPENAI_API_KEY": "",
-                "OPENAI_API_BASE": "https://api.openai.com/v1",
-                "OPENAI_MODEL": "gpt-4o",
-                "GEMINI_API_KEY": "",
-                "DEEPL_AUTH_KEY": ""
-            }
+            default_env = self._build_default_preset_env()
             try:
                 with open(default_preset_path, 'w', encoding='utf-8') as f:
-                    import json
                     json.dump(default_env, f, indent=2, ensure_ascii=False)
                 self.logger.info("已创建默认预设")
             except Exception as e:
@@ -85,9 +138,10 @@ class PresetService:
             preset_name = self._sanitize_filename(preset_name.strip())
             
             preset_path = os.path.join(self.presets_dir, f"{preset_name}.json")
+            normalized_env_vars = self._normalize_preset_env_vars(env_vars)
             
             with open(preset_path, 'w', encoding='utf-8') as f:
-                json.dump(env_vars, f, indent=2, ensure_ascii=False)
+                json.dump(normalized_env_vars, f, indent=2, ensure_ascii=False)
             
             # 不输出日志，避免刷屏
             return True
@@ -107,7 +161,7 @@ class PresetService:
             with open(preset_path, 'r', encoding='utf-8') as f:
                 env_vars = json.load(f)
             
-            return env_vars
+            return self._normalize_preset_env_vars(env_vars)
         except Exception as e:
             self.logger.error(f"加载预设失败: {e}")
             return None

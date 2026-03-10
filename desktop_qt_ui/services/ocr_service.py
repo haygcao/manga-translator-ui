@@ -83,26 +83,19 @@ class OcrService:
         
         try:
             config = self.config_service.get_config()
-            # Use attribute access for Pydantic models
             ocr_config_dict = config.ocr.model_dump() if hasattr(config, 'ocr') else {}
             cli_config_dict = config.cli.model_dump() if hasattr(config, 'cli') else {}
-            
-            # 从配置构建OcrConfig
-            ocr_config = OcrConfig()
-            
-            # OCR模型设置
-            if 'ocr' in ocr_config_dict:
-                try:
-                    # The value from the config might be the enum member name (e.g., 'ocr48px')
-                    ocr_config.ocr = Ocr(ocr_config_dict['ocr'])
-                except (ValueError, KeyError):
-                    self.logger.warning(f"未知OCR模型: {ocr_config_dict.get('ocr')}，使用默认模型")
-                    ocr_config.ocr = Ocr.ocr48px
-            
-            # 其他OCR参数
-            ocr_config.min_text_length = ocr_config_dict.get('min_text_length', 0)
-            ocr_config.ignore_bubble = ocr_config_dict.get('ignore_bubble', 0)
-            ocr_config.prob = ocr_config_dict.get('prob', 0.3)
+
+            try:
+                ocr_config = OcrConfig(**ocr_config_dict)
+            except Exception as parse_error:
+                self.logger.warning(f"解析OCR配置失败，使用默认配置: {parse_error}")
+                ocr_config = OcrConfig(
+                    ocr=Ocr.ocr48px,
+                    min_text_length=0,
+                    ignore_bubble=0,
+                    prob=0.3,
+                )
             
             # GPU设置从CLI配置获取
             if cli_config_dict.get('use_gpu', False) and self._check_gpu_available():
@@ -136,7 +129,7 @@ class OcrService:
         if self.model_prepared:
             return
             
-        ocr_to_use = ocr_type or self.default_config.ocr
+        ocr_to_use = ocr_type or self._get_current_config().ocr
         
         try:
             await prepare_ocr(ocr_to_use, self.device)
@@ -308,6 +301,8 @@ class OcrService:
         if not OCR_AVAILABLE:
             raise RuntimeError("OCR后端模块不可用")
 
+        config = config or self._get_current_config()
+
         # --- FIX: Sanitize region data by ensuring all coordinates are rounded integers ---
         import copy
         region_clean = copy.deepcopy(region)
@@ -318,14 +313,12 @@ class OcrService:
         # --- END FIX ---
             
         if not self.model_prepared:
-            await self.prepare_model()
+            await self.prepare_model(config.ocr)
         
         # Convert PIL Image to numpy array if necessary
         if isinstance(image, Image.Image):
             image = np.array(image.convert('RGB'))
 
-        config = config or self._get_current_config()
-        
         try:
             start_time = asyncio.get_event_loop().time()
             
@@ -411,11 +404,11 @@ class OcrService:
         """批量识别多个文本框区域"""
         if not OCR_AVAILABLE:
             raise RuntimeError("OCR后端模块不可用")
-            
+
+        config = config or self._get_current_config()
+             
         if not self.model_prepared:
-            await self.prepare_model()
-        
-        config = config or self.default_config
+            await self.prepare_model(config.ocr)
         
         try:
             start_time = asyncio.get_event_loop().time()

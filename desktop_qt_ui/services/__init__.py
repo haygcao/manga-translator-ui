@@ -76,7 +76,7 @@ class ServiceContainer:
         self.services['i18n'] = I18nManager(locale_dir=locale_dir, fallback_locale="zh_CN", config_language=ui_language)
         
         # 初始化预设服务
-        self.services['preset'] = PresetService()
+        self.services['preset'] = PresetService(config_service=self.services['config'])
         
         # 根据配置设置日志级别
         try:

@@ -4,26 +4,27 @@
     "last_output_path": "",
     "favorite_folders": null,
     "theme": "light",
+    "theme_user_preference": "light",
     "ui_language": "auto",
     "current_preset": "默认",
     "unload_models_after_translation": false,
-    "saved_colors": null
+    "saved_colors": null,
+    "saved_style_presets": null
   },
   "filter_text_enabled": false,
   "kernel_size": 3,
-  "mask_dilation_offset": 50,
+  "mask_dilation_offset": 20,
   "translator": {
     "translator": "openai",
     "target_lang": "CHS",
     "no_text_lang_skip": false,
-    "high_quality_prompt_path": "dict/prompt_example.json",
+    "high_quality_prompt_path": "dict/prompt_example.yaml",
     "extract_glossary": false,
     "max_requests_per_minute": 0,
     "attempts": -1,
     "use_custom_api_params": false
   },
   "ocr": {
-    "use_mocr_merge": false,
     "ocr": "48px",
     "use_hybrid_ocr": false,
     "secondary_ocr": "mocr",
@@ -32,14 +33,16 @@
     "use_model_bubble_filter": false,
     "model_bubble_overlap_threshold": 0.1,
     "use_model_bubble_repair_intersection": false,
-    "limit_mask_dilation_to_bubble_mask": true,
+    "limit_mask_dilation_to_bubble_mask": false,
     "prob": 0.1,
     "merge_gamma": 0.8,
     "merge_sigma": 2.5,
     "merge_edge_ratio_threshold": 0.0,
     "merge_special_require_full_wrap": false,
     "ocr_vl_language_hint": "auto",
-    "ocr_vl_custom_prompt": null
+    "ocr_vl_custom_prompt": null,
+    "ai_ocr_concurrency": 10,
+    "ai_ocr_custom_prompt": null
   },
   "detector": {
     "detector": "default",
@@ -71,7 +74,8 @@
     "font_path": "fonts/Arial-Unicode-Regular.ttf",
     "no_hyphenation": false,
     "font_color": null,
-    "line_spacing": null,
+    "line_spacing": 1.0,
+    "letter_spacing": 1.0,
     "font_size": null,
     "auto_rotate_symbols": false,
     "rtl": true,
@@ -84,7 +88,8 @@
     "strict_smart_scaling": false,
     "stroke_width": 0.07,
     "enable_template_alignment": false,
-    "paste_mask_dilation_pixels": 10
+    "paste_mask_dilation_pixels": 10,
+    "ai_renderer_concurrency": 1
   },
   "upscale": {
     "upscaler": "mangajanai",
@@ -96,11 +101,12 @@
   "colorizer": {
     "colorization_size": 2048,
     "denoise_sigma": 30,
-    "colorizer": "none"
+    "colorizer": "none",
+    "ai_colorizer_concurrency": 1
   },
   "cli": {
     "verbose": false,
-    "attempts": 10,
+    "attempts": 3,
     "ignore_errors": false,
     "use_gpu": true,
     "disable_onnx_gpu": false,

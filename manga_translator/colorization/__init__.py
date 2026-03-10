@@ -2,10 +2,13 @@ from PIL import Image
 
 from .common import CommonColorizer, OfflineColorizer
 from .manga_colorization_v2 import MangaColorizationV2
+from .model_api_colorizer import GeminiColorizer, OpenAIColorizer
 from ..config import Colorizer
 
 COLORIZERS = {
     Colorizer.mc2: MangaColorizationV2,
+    Colorizer.openai_colorizer: OpenAIColorizer,
+    Colorizer.gemini_colorizer: GeminiColorizer,
 }
 colorizer_cache = {}
 

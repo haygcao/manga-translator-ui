@@ -17,6 +17,49 @@ from manga_translator.server.core.middleware import get_services
 
 router = APIRouter(tags=["config"])
 
+SERVER_HIDDEN_OCR_OPTIONS = {"openai_ocr", "gemini_ocr"}
+SERVER_HIDDEN_RENDERER_OPTIONS = {"openai_renderer", "gemini_renderer"}
+SERVER_HIDDEN_COLORIZER_OPTIONS = {"openai_colorizer", "gemini_colorizer"}
+SERVER_HIDDEN_CONFIG_KEYS = {
+    "ocr.ai_ocr_concurrency",
+    "render.ai_renderer_concurrency",
+    "colorizer.ai_colorizer_concurrency",
+}
+
+
+def _get_server_ocr_options():
+    from manga_translator.ocr import Ocr
+
+    return [member.value for member in Ocr if member.value not in SERVER_HIDDEN_OCR_OPTIONS]
+
+
+def _get_server_renderer_options():
+    from manga_translator.config import Renderer
+
+    return [member.value for member in Renderer if member.value not in SERVER_HIDDEN_RENDERER_OPTIONS]
+
+
+def _get_server_colorizer_options():
+    from manga_translator.colorization import Colorizer
+
+    return [member.value for member in Colorizer if member.value not in SERVER_HIDDEN_COLORIZER_OPTIONS]
+
+
+def _filter_server_hidden_config(config_dict: dict) -> dict:
+    filtered = {}
+    for section, content in config_dict.items():
+        if isinstance(content, dict):
+            visible_content = {
+                key: value
+                for key, value in content.items()
+                if f"{section}.{key}" not in SERVER_HIDDEN_CONFIG_KEYS
+            }
+            if visible_content:
+                filtered[section] = visible_content
+        elif section not in SERVER_HIDDEN_CONFIG_KEYS:
+            filtered[section] = content
+    return filtered
+
 
 # ============================================================================
 # Configuration Endpoints
@@ -26,6 +69,7 @@ router = APIRouter(tags=["config"])
 async def get_config_defaults():
     """Get server default configuration (template for permission editor)"""
     config = load_default_config_dict()
+    config = _filter_server_hidden_config(config)
     
     # 过滤掉Qt UI专属配置（app部分）
     config = {k: v for k, v in config.items() if k not in WEB_EXCLUDED_SECTIONS}
@@ -76,6 +120,7 @@ async def get_config(
         Filtered configuration based on mode and user permissions
     """
     config_dict = load_default_config_dict()
+    config_dict = _filter_server_hidden_config(config_dict)
     
     # 过滤掉Qt UI专属配置（app部分）
     config_dict = {k: v for k, v in config_dict.items() if k not in WEB_EXCLUDED_SECTIONS}
@@ -267,6 +312,7 @@ async def get_config_structure(token: str = Header(alias="X-Admin-Token", defaul
     from manga_translator.ocr import Ocr
     
     config_dict = load_default_config_dict()
+    config_dict = _filter_server_hidden_config(config_dict)
     
     # Get font list
     fonts = []
@@ -282,17 +328,17 @@ async def get_config_structure(token: str = Header(alias="X-Admin-Token", defaul
     
     # Define parameter options (enum types)
     param_options = {
-        'renderer': [member.value for member in Renderer],
+        'renderer': _get_server_renderer_options(),
         'alignment': [member.value for member in Alignment],
         'direction': [member.value for member in Direction],
         'upscaler': [member.value for member in Upscaler],
         'translator': [member.value for member in Translator],
         'detector': [member.value for member in Detector],
-        'colorizer': [member.value for member in Colorizer],
+        'colorizer': _get_server_colorizer_options(),
         'inpainter': [member.value for member in Inpainter],
         'inpainting_precision': [member.value for member in InpaintPrecision],
-        'ocr': [member.value for member in Ocr],
-        'secondary_ocr': [member.value for member in Ocr],
+        'ocr': _get_server_ocr_options(),
+        'secondary_ocr': _get_server_ocr_options(),
         'upscale_ratio': ['不使用', '2', '3', '4'],
         'realcugan_model': [
             '2x-conservative', '2x-conservative-pro', '2x-no-denoise',
@@ -397,16 +443,16 @@ async def get_config_options(
     all_prompt_paths = server_prompt_paths + user_prompt_paths
     
     return {
-        'renderer': [member.value for member in Renderer],
+        'renderer': _get_server_renderer_options(),
         'alignment': [member.value for member in Alignment],
         'direction': [member.value for member in Direction],
         'upscaler': [member.value for member in Upscaler],
         'detector': [member.value for member in Detector],
-        'colorizer': [member.value for member in Colorizer],
+        'colorizer': _get_server_colorizer_options(),
         'inpainter': [member.value for member in Inpainter],
         'inpainting_precision': [member.value for member in InpaintPrecision],
-        'ocr': [member.value for member in Ocr],
-        'secondary_ocr': [member.value for member in Ocr],
+        'ocr': _get_server_ocr_options(),
+        'secondary_ocr': _get_server_ocr_options(),
         'translator': [member.value for member in Translator],
         'target_lang': list(VALID_LANGUAGES),
         'upscale_ratio': ['不使用', '2', '3', '4'],

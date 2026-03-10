@@ -1327,6 +1327,54 @@ class EditorController(QObject):
         )
         self.execute_command(command)
 
+    @pyqtSlot(int, float)
+    def update_line_spacing(self, region_index: int, value: float):
+        old_region_data = self._get_region_by_index(region_index)
+        if not old_region_data:
+            return
+
+        current_value = old_region_data.get('line_spacing')
+        if current_value is None:
+            current_value = self.config_service.get_config().render.line_spacing or 1.0
+        if current_value == value:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['line_spacing'] = value
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Line Spacing Region {region_index}",
+            merge_key=f"region:{region_index}:line_spacing",
+        )
+        self.execute_command(command)
+
+    @pyqtSlot(int, float)
+    def update_letter_spacing(self, region_index: int, value: float):
+        old_region_data = self._get_region_by_index(region_index)
+        if not old_region_data:
+            return
+
+        current_value = old_region_data.get('letter_spacing')
+        if current_value is None:
+            current_value = self.config_service.get_config().render.letter_spacing or 1.0
+        if current_value == value:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['letter_spacing'] = value
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Letter Spacing Region {region_index}",
+            merge_key=f"region:{region_index}:letter_spacing",
+        )
+        self.execute_command(command)
+
     @pyqtSlot(int, str)
     def update_font_family(self, region_index: int, font_filename: str):
         """Update the font family for a specific region.
@@ -1387,8 +1435,25 @@ class EditorController(QObject):
     @pyqtSlot(int, str)
     def update_alignment(self, region_index: int, alignment_text: str):
         """槽：响应UI中的对齐方式修改"""
-        alignment_map = {"自动": "auto", "左对齐": "left", "居中": "center", "右对齐": "right"}
-        alignment_value = alignment_map.get(alignment_text, "auto")
+        raw_text = str(alignment_text or "").strip()
+        lower_text = raw_text.lower()
+        if lower_text in ("auto", "left", "center", "right"):
+            alignment_value = lower_text
+        else:
+            i18n = get_i18n_manager()
+            alignment_value = None
+            if i18n:
+                localized_map = {
+                    i18n.translate("alignment_auto"): "auto",
+                    i18n.translate("alignment_left"): "left",
+                    i18n.translate("alignment_center"): "center",
+                    i18n.translate("alignment_right"): "right",
+                }
+                alignment_value = localized_map.get(raw_text)
+
+            if alignment_value is None:
+                fallback_map = {"自动": "auto", "左对齐": "left", "居中": "center", "右对齐": "right"}
+                alignment_value = fallback_map.get(raw_text, "auto")
 
         old_region_data = self._get_region_by_index(region_index)
         if not old_region_data or old_region_data.get('alignment') == alignment_value:
@@ -2310,20 +2375,15 @@ class EditorController(QObject):
                 try:
                     # 将字符串转换为Ocr枚举
                     ocr_enum = Ocr(selected_ocr) if selected_ocr else current_ocr_config.ocr
-                    ocr_config = OcrConfig(
-                        ocr=ocr_enum,
-                        use_hybrid_ocr=current_ocr_config.use_hybrid_ocr,
-                        secondary_ocr=current_ocr_config.secondary_ocr,
-                        min_text_length=current_ocr_config.min_text_length,
-                        ignore_bubble=current_ocr_config.ignore_bubble,
-                        prob=current_ocr_config.prob,
-                        merge_gamma=current_ocr_config.merge_gamma,
-                        merge_sigma=current_ocr_config.merge_sigma,
-                        merge_edge_ratio_threshold=current_ocr_config.merge_edge_ratio_threshold,
-                        merge_special_require_full_wrap=current_ocr_config.merge_special_require_full_wrap
+                    ocr_payload = (
+                        current_ocr_config.model_dump()
+                        if hasattr(current_ocr_config, "model_dump")
+                        else {}
                     )
+                    ocr_payload["ocr"] = ocr_enum
+                    ocr_config = OcrConfig(**ocr_payload)
                     self.logger.info(f"Using OCR model from property panel: {selected_ocr}")
-                except (ValueError, AttributeError) as e:
+                except Exception as e:
                     self.logger.warning(f"Invalid OCR selection '{selected_ocr}', using default: {e}")
                     ocr_config = None
 

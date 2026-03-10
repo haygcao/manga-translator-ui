@@ -186,7 +186,136 @@ Google Gemini 是 Google 最新的多模态 AI 模型，性能强劲。
    - **Base URL**：无需填写（自动使用默认地址）
    - **模型**：
      - `gemini-2.5-pro`：断句稳定，质量最高 ⭐ 推荐
-     - `gemini-2.5-flash`：速度快，价格便宜
+      - `gemini-2.5-flash`：速度快，价格便宜
+
+---
+
+## API OCR 配置（OpenAI OCR / Gemini OCR）
+
+这两个 OCR 仅用于 **Qt 桌面端** 的 OCR 模型选择，不在服务端网页配置页中显示。
+
+### OpenAI OCR
+
+- OCR 模型选择：`openai_ocr`
+- 优先读取的环境变量：
+  - `OCR_OPENAI_API_KEY`
+  - `OCR_OPENAI_MODEL`
+  - `OCR_OPENAI_API_BASE`
+- 如果 OCR 专用变量未填写，会自动回退到：
+  - `OPENAI_API_KEY`
+  - `OPENAI_MODEL`
+  - `OPENAI_API_BASE`
+
+### Gemini OCR
+
+- OCR 模型选择：`gemini_ocr`
+- 优先读取的环境变量：
+  - `OCR_GEMINI_API_KEY`
+  - `OCR_GEMINI_MODEL`
+  - `OCR_GEMINI_API_BASE`
+- 如果 OCR 专用变量未填写，会自动回退到：
+  - `GEMINI_API_KEY`
+  - `GEMINI_MODEL`
+  - `GEMINI_API_BASE`
+
+### AI OCR 提示词
+
+- 固定文件：`dict/ai_ocr_prompt.yaml`
+- Qt 设置页中点击"AI OCR 提示词"旁边的"编辑"即可修改
+- 文件格式为 YAML，主键使用 `ai_ocr_prompt`
+- 如果本地仍有旧版 `dict/ai_ocr_prompt.json`，程序首次使用时会自动迁移内容到 YAML
+
+### 说明
+
+- OpenAI OCR / Gemini OCR 是逐个文本框调用 API
+- 文本识别完成后，文字颜色仍由本地 `48px` 模型提取
+
+---
+
+## API 上色配置（OpenAI Colorizer / Gemini Colorizer）
+
+这两个上色器仅用于 **Qt 桌面端** 的上色模型选择，不在服务端网页配置页中显示。
+
+### OpenAI Colorizer
+
+- 上色模型选择：`openai_colorizer`
+- 优先读取的环境变量：
+  - `COLOR_OPENAI_API_KEY`
+  - `COLOR_OPENAI_MODEL`
+  - `COLOR_OPENAI_API_BASE`
+- 如果上色专用变量未填写，会自动回退到：
+  - `OPENAI_API_KEY`
+  - `OPENAI_MODEL`
+  - `OPENAI_API_BASE`
+
+### Gemini Colorizer
+
+- 上色模型选择：`gemini_colorizer`
+- 优先读取的环境变量：
+  - `COLOR_GEMINI_API_KEY`
+  - `COLOR_GEMINI_MODEL`
+  - `COLOR_GEMINI_API_BASE`
+- 如果上色专用变量未填写，会自动回退到：
+  - `GEMINI_API_KEY`
+  - `GEMINI_MODEL`
+  - `GEMINI_API_BASE`
+
+### AI 上色提示词
+
+- 固定文件：`dict/ai_colorizer_prompt.yaml`
+- Qt 设置页中点击"AI 上色提示词"旁边的"编辑"即可修改
+- 文件格式为 YAML，主键使用 `ai_colorizer_prompt`
+
+### 说明
+
+- OpenAI Colorizer / Gemini Colorizer 是整页调用 API
+- 并发由 `ai_colorizer_concurrency` 控制，仅 Qt 桌面端显示
+
+---
+
+## API 渲染配置（OpenAI Renderer / Gemini Renderer）
+
+这两个渲染器仅用于 **Qt 桌面端** 的渲染模型选择，不在服务端网页配置页中显示。
+
+### OpenAI Renderer
+
+- 渲染模型选择：`openai_renderer`
+- 优先读取的环境变量：
+  - `RENDER_OPENAI_API_KEY`
+  - `RENDER_OPENAI_MODEL`
+  - `RENDER_OPENAI_API_BASE`
+- 如果渲染专用变量未填写，会自动回退到：
+  - `OPENAI_API_KEY`
+  - `OPENAI_MODEL`
+  - `OPENAI_API_BASE`
+
+### Gemini Renderer
+
+- 渲染模型选择：`gemini_renderer`
+- 优先读取的环境变量：
+  - `RENDER_GEMINI_API_KEY`
+  - `RENDER_GEMINI_MODEL`
+  - `RENDER_GEMINI_API_BASE`
+- 如果渲染专用变量未填写，会自动回退到：
+  - `GEMINI_API_KEY`
+  - `GEMINI_MODEL`
+  - `GEMINI_API_BASE`
+
+### AI 渲染提示词
+
+- 固定文件：`dict/ai_renderer_prompt.yaml`
+- Qt 设置页中点击"AI 渲染提示词"旁边的"编辑"即可修改
+- 文件格式为 YAML，主键使用 `ai_renderer_prompt`
+
+### 说明
+
+- OpenAI Renderer / Gemini Renderer 是整页调用 API
+- 实际请求会自动组合：
+  - 清理后的页面图
+  - 仿高质量翻译器的编号框标注图
+  - 对应编号的翻译文本列表
+- 拟声词 / 音效也会按翻译结果一起发送给渲染模型
+- 并发由 `ai_renderer_concurrency` 控制，仅 Qt 桌面端显示
 
 ---
 

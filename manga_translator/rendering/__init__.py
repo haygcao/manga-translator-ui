@@ -27,7 +27,7 @@ from ..utils import (
     get_logger,
     rotate_polygons,
 )
-from ..config import Config
+from ..config import Config, Renderer
 
 logger = get_logger('render')
 
@@ -1870,6 +1870,11 @@ async def dispatch(
     if config is None:
         from ..config import Config
         config = Config()
+
+    if config.render.renderer in (Renderer.openai_renderer, Renderer.gemini_renderer):
+        from .model_api_renderer import dispatch_api_rendering
+
+        return await dispatch_api_rendering(img=img, text_regions=text_regions, config=config)
 
     # 渲染阶段只依赖 region.font_path；这里仅设置一个稳定的初始字体兜底
     text_render.set_font(text_render.DEFAULT_FONT)

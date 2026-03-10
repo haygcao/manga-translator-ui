@@ -833,7 +833,8 @@ class MangaTranslator:
                 save_kwargs['quality'] = self.save_quality
 
             image_to_save.save(target_path, **save_kwargs)
-            logger.info(f"{label} saved to: {target_path}")
+            if self.verbose:
+                logger.debug(f"{label} saved to: {target_path}")
             return target_path
         except Exception as e:
             logger.error(f"Failed to save {label.lower()}: {e}")
@@ -1150,6 +1151,7 @@ class MangaTranslator:
             denoise_sigma=config.colorizer.denoise_sigma,
             device=self.device,
             image=ctx.input,
+            config=config,
             **ctx
         )
 
@@ -1519,6 +1521,8 @@ class MangaTranslator:
 
     def _log_cuda_memory_snapshot(self, stage: str, include_peak: bool = True):
         """打印 CUDA 显存占用快照，便于定位阶段性显存增长。"""
+        if not self.verbose:
+            return
         snapshot = self._get_cuda_memory_snapshot()
         if snapshot is None:
             return
@@ -1528,7 +1532,7 @@ class MangaTranslator:
                 f", peak_allocated={snapshot['peak_allocated_mb']:.1f}MB"
                 f", peak_reserved={snapshot['peak_reserved_mb']:.1f}MB"
             )
-        logger.info(
+        logger.debug(
             f"[显存] {stage}: cuda:{snapshot['device']}, "
             f"allocated={snapshot['allocated_mb']:.1f}MB, "
             f"reserved={snapshot['reserved_mb']:.1f}MB"
@@ -2629,6 +2633,9 @@ class MangaTranslator:
         finally:
             self._log_cuda_memory_snapshot("inpainting/after_dispatch")
 
+    def _should_skip_inpainting_for_ai_renderer(self, config: Config) -> bool:
+        return config.render.renderer in (Renderer.openai_renderer, Renderer.gemini_renderer)
+
     async def _run_text_rendering(self, config: Config, ctx: Context, skip_font_scaling: bool = False):
         # ✅ 检查停止标志
         await asyncio.sleep(0)
@@ -2644,18 +2651,20 @@ class MangaTranslator:
                 if not getattr(region, 'font_path', ''):
                     region.font_path = fallback_font_path
 
+        render_base_img = ctx.img_rgb if self._should_skip_inpainting_for_ai_renderer(config) else ctx.img_inpainted
+
         if config.render.renderer == Renderer.none:
-            output = ctx.img_inpainted
+            output = render_base_img
         # manga2eng currently only supports horizontal left to right rendering
         elif (config.render.renderer == Renderer.manga2Eng or config.render.renderer == Renderer.manga2EngPillow) and ctx.text_regions and LANGUAGE_ORIENTATION_PRESETS.get(ctx.text_regions[0].target_lang) == 'h':
             if config.render.renderer == Renderer.manga2EngPillow:
-                output = await dispatch_eng_render_pillow(ctx.img_inpainted, ctx.img_rgb, ctx.text_regions, fallback_font_path, config.render.line_spacing)
+                output = await dispatch_eng_render_pillow(render_base_img, ctx.img_rgb, ctx.text_regions, fallback_font_path, config.render.line_spacing)
             else:
-                output = await dispatch_eng_render(ctx.img_inpainted, ctx.img_rgb, ctx.text_regions, fallback_font_path, config.render.line_spacing)
+                output = await dispatch_eng_render(render_base_img, ctx.img_rgb, ctx.text_regions, fallback_font_path, config.render.line_spacing)
         else:
             # Request debug image for balloon_fill mode when verbose
             need_debug_img = self.verbose and config.render.layout_mode == 'balloon_fill'
-            result = await dispatch_rendering(ctx.img_inpainted, ctx.text_regions, fallback_font_path, config, ctx.img_rgb, return_debug_img=need_debug_img, skip_font_scaling=skip_font_scaling)
+            result = await dispatch_rendering(render_base_img, ctx.text_regions, fallback_font_path, config, ctx.img_rgb, return_debug_img=need_debug_img, skip_font_scaling=skip_font_scaling)
             
             # Handle debug image if returned
             if need_debug_img and isinstance(result, tuple):
@@ -2840,6 +2849,7 @@ class MangaTranslator:
             'detection': 'Running text detection',
             'ocr': 'Running ocr',
             'mask-generation': 'Running mask refinement',
+            'inpainting': 'Running inpainting',
             'translating': 'Running text translation',
             'rendering': 'Running rendering',
             'colorizing': 'Running colorization',
@@ -3244,7 +3254,10 @@ class MangaTranslator:
                                     ctx.mask = await self._run_mask_refinement(config, ctx)
                                 
                                 # Inpainting
-                                if existing_inpainted_path and loaded_mask is not None:
+                                if self._should_skip_inpainting_for_ai_renderer(config):
+                                    logger.info("AI renderer selected: skipping inpainting and using original work image as render base.")
+                                    ctx.img_inpainted = ctx.img_rgb
+                                elif existing_inpainted_path and loaded_mask is not None:
                                     logger.info("Load text mode: Using existing inpainted image, skipping inpainting.")
                                     ctx.img_inpainted = ctx.img_rgb
                                 else:
@@ -3696,7 +3709,10 @@ class MangaTranslator:
                 logger.info(f"Simple dilated mask has {mask_pixels} non-zero pixels")
             
             # Step 5: Inpainting - 使用优化后的mask进行修复
-            if ctx.mask is None or np.count_nonzero(ctx.mask) == 0:
+            if self._should_skip_inpainting_for_ai_renderer(config):
+                logger.info("AI renderer selected: skipping inpainting and using original work image as render base.")
+                ctx.img_inpainted = ctx.img_rgb
+            elif ctx.mask is None or np.count_nonzero(ctx.mask) == 0:
                 logger.warning("Mask is empty! Skipping inpainting.")
                 ctx.img_inpainted = ctx.img_rgb
             else:
@@ -4679,19 +4695,23 @@ class MangaTranslator:
                 logger.debug(f"Exception details: {traceback.format_exc()}")
 
         # -- Inpainting
-        await self._report_progress('inpainting')
-        try:
-            ctx.img_inpainted = await self._run_inpainting(config, ctx)
-            
-            # ✅ Inpainting完成后强制GC和GPU清理
-            self._cleanup_gpu_memory()
+        if self._should_skip_inpainting_for_ai_renderer(config):
+            logger.info("AI renderer selected: skipping inpainting and using original work image as render base.")
+            ctx.img_inpainted = ctx.img_rgb
+        else:
+            await self._report_progress('inpainting')
+            try:
+                ctx.img_inpainted = await self._run_inpainting(config, ctx)
+                
+                # ✅ Inpainting完成后强制GC和GPU清理
+                self._cleanup_gpu_memory()
 
-        except Exception as _e:
-            logger.error(f"Error during inpainting:\n{traceback.format_exc()}")
-            if not self.ignore_errors:
-                raise
-            else:
-                ctx.img_inpainted = ctx.img_rgb
+            except Exception as _e:
+                logger.error(f"Error during inpainting:\n{traceback.format_exc()}")
+                if not self.ignore_errors:
+                    raise
+                else:
+                    ctx.img_inpainted = ctx.img_rgb
 
         if self.verbose:
             try:

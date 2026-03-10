@@ -9,6 +9,14 @@
 - Web 端支持上传/管理 YAML 提示词文件
 - 新增字间距倍率 `letter_spacing`：支持全局设置、区域设置和编辑器区域属性；默认值 `1.0` 与旧行为一致，并统一作用于排版计算、文本框尺寸计算和最终渲染。
 - 新增禁用 ONNX GPU 加速开关 `disable_onnx_gpu`：可在 ONNX Runtime 的 GPU 兼容性不佳时强制切换到 `CPUExecutionProvider`。
+- 新增 API OCR：`openai_ocr` 与 `gemini_ocr`，支持逐框调用多模态接口识别文本，识别完成后继续使用本地 `48px` 模型提取文字颜色。
+- 新增 API 上色器：`openai_colorizer` 与 `gemini_colorizer`，支持整页调用 OpenAI / Gemini 图像接口进行漫画上色。
+- 新增 API 渲染器：`openai_renderer` 与 `gemini_renderer`，支持整页调用 OpenAI / Gemini 图像接口进行漫画渲染；会自动把清图画上编号框，并将对应编号的翻译文本一起组合进提示词，拟声词 / 音效也会一并发送。
+- 新增独立的 AI OCR / AI 上色 / AI 渲染固定提示词文件：
+  - `dict/ai_ocr_prompt.yaml`
+  - `dict/ai_colorizer_prompt.yaml`
+  - `dict/ai_renderer_prompt.yaml`
+- 新增 AI OCR / AI 上色 / AI 渲染并发配置项，支持分别限制 API 请求并发数。
 
 ## 🐛 修复
 
@@ -31,6 +39,9 @@
 - 优化历史上下文附加逻辑：上下文改为以消息形式注入对话，Gemini 使用 `systemInstruction` 承载系统提示，高质量翻译的历史上下文不再携带图片。
 - 优化 Gemini 空响应诊断：日志会输出 `finish_reason`、`block_reason` 和 `safetyRatings`，并结合诊断结果调整重试策略。
 - 清理 `common.py` 死代码，从 2890 行精简至约 2436 行
+- 优化 Qt 设置页提示词编辑入口：AI OCR / AI 上色 / AI 渲染统一改为固定文件的简化编辑器，不再显示路径输入框，也不再提供另存为。
+- 优化 API 预设与 `.env` 管理：预设现在会统一纳入 OCR / 上色 / 渲染三组 API 环境变量，切换预设时可一起保存和加载。
+- 优化服务端配置输出：Web / 服务器端不再暴露 `openai_ocr`、`gemini_ocr`、`openai_colorizer`、`gemini_colorizer`、`openai_renderer`、`gemini_renderer` 以及对应 AI 并发参数。
 
 ## 🗑️ 移除
 

@@ -58,6 +58,8 @@ class Renderer(str, Enum):
     default = "default"  # freetype 渲染器
     manga2Eng = "manga2eng"
     manga2EngPillow = "manga2eng_pillow"
+    openai_renderer = "openai_renderer"
+    gemini_renderer = "gemini_renderer"
     none = "none"
 
 class Alignment(str, Enum):
@@ -98,6 +100,8 @@ class Inpainter(str, Enum):
 class Colorizer(str, Enum):
     none = "none"
     mc2 = "mc2"
+    openai_colorizer = "openai_colorizer"
+    gemini_colorizer = "gemini_colorizer"
 
 class Ocr(str, Enum):
     ocr32px = "32px"
@@ -109,6 +113,8 @@ class Ocr(str, Enum):
     paddleocr_latin = "paddleocr_latin"
     paddleocr_thai = "paddleocr_thai"
     paddleocr_vl = "paddleocr_vl"  # PaddleOCR-VL for Manga (VLM-based OCR)
+    openai_ocr = "openai_ocr"
+    gemini_ocr = "gemini_ocr"
 
 class Translator(str, Enum):
     openai = "openai"
@@ -193,6 +199,8 @@ class RenderConfig(BaseModel):
     """Enable template matching alignment for replace translation mode. Directly extracts text from translated image and pastes to raw image."""
     paste_mask_dilation_pixels: int = 10
     """Mask dilation size in pixels for paste mode. Default is 10. Set to 0 to disable dilation. Actual dilation = pixels // 3 iterations with 3x3 kernel."""
+    ai_renderer_concurrency: int = 1
+    """Maximum concurrent API requests for OpenAI Renderer and Gemini Renderer."""
     _font_color_fg = None
     _font_color_bg = None
     @property
@@ -338,6 +346,8 @@ class ColorizerConfig(BaseModel):
     """Used by colorizer and affects color strength, range from 0 to 255 (default 30). -1 turns it off."""
     colorizer: Colorizer = Colorizer.none
     """Colorization model to use."""
+    ai_colorizer_concurrency: int = 1
+    """Maximum concurrent API requests for OpenAI Colorizer and Gemini Colorizer."""
 
 class CliConfig(BaseModel):
     """CLI-specific configuration options"""
@@ -409,6 +419,10 @@ class OcrConfig(BaseModel):
     """PaddleOCR-VL language hint. Options: auto, multilingual, ja, ko, zh, en, fr, de, es, ru, ar."""
     ocr_vl_custom_prompt: Optional[str] = None
     """Custom PaddleOCR-VL prompt. If set, it overrides built-in prompt mode/language hint."""
+    ai_ocr_concurrency: int = 1
+    """Maximum concurrent API requests for OpenAI OCR and Gemini OCR."""
+    ai_ocr_custom_prompt: Optional[str] = None
+    """Custom prompt for API OCR backends such as OpenAI OCR and Gemini OCR."""
 
 class Config(BaseModel):
     # General

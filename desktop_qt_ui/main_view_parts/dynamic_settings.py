@@ -42,6 +42,137 @@ def _open_filter_list(self):
     dialog = FilterListEditorDialog(filter_path, t_func=self._t, parent=self)
     dialog.exec()
 
+
+def _open_ai_ocr_prompt_editor(self):
+    _open_fixed_prompt_editor(self, "ocr.ai_ocr_prompt_path")
+
+
+def _open_ai_colorizer_prompt_editor(self):
+    _open_fixed_prompt_editor(self, "colorizer.ai_colorizer_prompt_path")
+
+
+def _open_ai_renderer_prompt_editor(self):
+    _open_fixed_prompt_editor(self, "render.ai_renderer_prompt_path")
+
+
+def _get_fixed_prompt_editor_spec(self, full_key: str):
+    if full_key == "ocr.ai_ocr_prompt_path":
+        from manga_translator.ocr.prompt_loader import (
+            DEFAULT_AI_OCR_PROMPT,
+            DEFAULT_AI_OCR_PROMPT_PATH,
+            ensure_ai_ocr_prompt_file,
+            load_ai_ocr_prompt_file,
+            save_ai_ocr_prompt_file,
+        )
+
+        return {
+            "label": self._t("label_ai_ocr_prompt_path"),
+            "description": self._t("desc_ocr_ai_ocr_prompt_path"),
+            "section": self._t("label_ai_ocr_prompt_path"),
+            "hint": DEFAULT_AI_OCR_PROMPT_PATH,
+            "default_prompt": DEFAULT_AI_OCR_PROMPT,
+            "ensure_func": ensure_ai_ocr_prompt_file,
+            "load_func": load_ai_ocr_prompt_file,
+            "save_func": save_ai_ocr_prompt_file,
+        }
+
+    if full_key == "colorizer.ai_colorizer_prompt_path":
+        from manga_translator.colorization.prompt_loader import (
+            DEFAULT_AI_COLORIZER_PROMPT,
+            DEFAULT_AI_COLORIZER_PROMPT_PATH,
+            ensure_ai_colorizer_prompt_file,
+            load_ai_colorizer_prompt_file,
+            save_ai_colorizer_prompt_file,
+        )
+
+        return {
+            "label": self._t("label_ai_colorizer_prompt_path"),
+            "description": self._t("desc_colorizer_ai_colorizer_prompt_path"),
+            "section": self._t("label_ai_colorizer_prompt_path"),
+            "hint": DEFAULT_AI_COLORIZER_PROMPT_PATH,
+            "default_prompt": DEFAULT_AI_COLORIZER_PROMPT,
+            "ensure_func": ensure_ai_colorizer_prompt_file,
+            "load_func": load_ai_colorizer_prompt_file,
+            "save_func": save_ai_colorizer_prompt_file,
+        }
+
+    if full_key == "render.ai_renderer_prompt_path":
+        from manga_translator.rendering.prompt_loader import (
+            DEFAULT_AI_RENDERER_PROMPT,
+            DEFAULT_AI_RENDERER_PROMPT_PATH,
+            ensure_ai_renderer_prompt_file,
+            load_ai_renderer_prompt_file,
+            save_ai_renderer_prompt_file,
+        )
+
+        return {
+            "label": self._t("label_ai_renderer_prompt_path"),
+            "description": self._t("desc_render_ai_renderer_prompt_path"),
+            "section": self._t("label_ai_renderer_prompt_path"),
+            "hint": DEFAULT_AI_RENDERER_PROMPT_PATH,
+            "default_prompt": DEFAULT_AI_RENDERER_PROMPT,
+            "ensure_func": ensure_ai_renderer_prompt_file,
+            "load_func": load_ai_renderer_prompt_file,
+            "save_func": save_ai_renderer_prompt_file,
+        }
+
+    return None
+
+
+def _open_fixed_prompt_editor(self, full_key: str):
+    from widgets.simple_prompt_editor_dialog import SimplePromptEditorDialog
+
+    spec = _get_fixed_prompt_editor_spec(self, full_key)
+    if not spec:
+        return
+
+    abs_path = spec["ensure_func"](spec["hint"])
+    dialog = SimplePromptEditorDialog(
+        abs_path,
+        title_text=spec["label"],
+        description_text=spec["description"],
+        section_text=spec["section"],
+        hint_text=spec["hint"],
+        default_prompt_text=spec["default_prompt"],
+        ensure_prompt_func=spec["ensure_func"],
+        load_prompt_func=spec["load_func"],
+        save_prompt_func=spec["save_func"],
+        t_func=self._t,
+        parent=self,
+    )
+    dialog.exec()
+
+
+def _create_fixed_prompt_editor_row(self, parent_layout, full_key: str):
+    spec = _get_fixed_prompt_editor_spec(self, full_key)
+    if not spec:
+        return False
+
+    label_text = spec["label"]
+    label = QLabel(f"{label_text}:")
+    label.setObjectName("settings_form_label")
+    label.setMinimumWidth(120)
+
+    container = QWidget()
+    hbox = QHBoxLayout(container)
+    hbox.setContentsMargins(0, 0, 0, 0)
+
+    edit_button = QPushButton(self._t("Edit"))
+    edit_button.setFixedWidth(120)
+    if full_key == "ocr.ai_ocr_prompt_path":
+        edit_button.clicked.connect(self._open_ai_ocr_prompt_editor)
+    elif full_key == "colorizer.ai_colorizer_prompt_path":
+        edit_button.clicked.connect(self._open_ai_colorizer_prompt_editor)
+    elif full_key == "render.ai_renderer_prompt_path":
+        edit_button.clicked.connect(self._open_ai_renderer_prompt_editor)
+
+    hbox.addWidget(edit_button)
+    hbox.addStretch(1)
+
+    row = _ClickableRow(self, full_key, label, container)
+    parent_layout.addRow(row)
+    return True
+
 @pyqtSlot(dict)
 def set_parameters(self, config: dict):
     """
@@ -128,6 +259,13 @@ def _add_settings_divider(self, parent_layout, title: str, is_sub: bool = False)
 
 
 def _create_widget_from_full_key(self, config: dict, full_key: str, parent_layout):
+    if full_key in {
+        "ocr.ai_ocr_prompt_path",
+        "colorizer.ai_colorizer_prompt_path",
+        "render.ai_renderer_prompt_path",
+    }:
+        return _create_fixed_prompt_editor_row(self, parent_layout, full_key)
+
     exists, value = _resolve_config_value(config, full_key)
     if not exists:
         return False
@@ -799,7 +937,7 @@ def _create_param_widgets(self, data, parent_layout, prefix=""):
             widget = QLineEdit(str(value))
             widget.editingFinished.connect(lambda k=full_key, w=widget: self._on_numeric_input_changed(w.text(), k, float if isinstance(value, float) else int))
 
-        elif value is None and key in ['tile_size', 'line_spacing', 'letter_spacing', 'font_size', 'psd_font', 'ocr_vl_custom_prompt']:
+        elif value is None and key in ['tile_size', 'line_spacing', 'letter_spacing', 'font_size', 'psd_font', 'ocr_vl_custom_prompt', 'ai_ocr_custom_prompt']:
             # 处理值为 None 的可选参数（数值/字符串）
             widget = QLineEdit("")
             # 根据参数名设置提示文本
@@ -821,6 +959,10 @@ def _create_param_widgets(self, data, parent_layout, prefix=""):
             elif key == 'ocr_vl_custom_prompt':
                 widget.setMinimumWidth(320)
                 widget.setPlaceholderText("OCR: Extract all Arabic text.")
+                widget.editingFinished.connect(lambda k=full_key, w=widget: self._on_setting_changed(w.text(), k, None))
+            elif key == 'ai_ocr_custom_prompt':
+                widget.setMinimumWidth(320)
+                widget.setPlaceholderText("Read the text and return only the recognized text.")
                 widget.editingFinished.connect(lambda k=full_key, w=widget: self._on_setting_changed(w.text(), k, None))
 
         elif (isinstance(value, str) or value is None) and (options or display_map):
@@ -851,9 +993,12 @@ def _create_param_widgets(self, data, parent_layout, prefix=""):
 
         elif isinstance(value, str):
             widget = QLineEdit(value)
-            if full_key == "ocr.ocr_vl_custom_prompt":
+            if full_key in {"ocr.ocr_vl_custom_prompt", "ocr.ai_ocr_custom_prompt"}:
                 widget.setMinimumWidth(320)
-                widget.setPlaceholderText("OCR: Extract all Arabic text.")
+                if full_key == "ocr.ocr_vl_custom_prompt":
+                    widget.setPlaceholderText("OCR: Extract all Arabic text.")
+                else:
+                    widget.setPlaceholderText("Read the text and return only the recognized text.")
             widget.editingFinished.connect(lambda k=full_key, w=widget: self._on_setting_changed(w.text(), k, None))
         
         if widget is not None:

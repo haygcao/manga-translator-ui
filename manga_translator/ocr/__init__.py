@@ -22,6 +22,18 @@ def _get_paddleocr_vl_class():
     return ModelPaddleOCRVL
 
 
+def _get_openai_ocr_class():
+    """延迟导入 ModelOpenAIOCR，只有在真正使用 openai_ocr 时才导入"""
+    from .model_api_ocr import ModelOpenAIOCR
+    return ModelOpenAIOCR
+
+
+def _get_gemini_ocr_class():
+    """延迟导入 ModelGeminiOCR，只有在真正使用 gemini_ocr 时才导入"""
+    from .model_api_ocr import ModelGeminiOCR
+    return ModelGeminiOCR
+
+
 OCRS = {
     Ocr.ocr32px: Model32pxOCR,
     Ocr.ocr48px: Model48pxOCR,
@@ -32,6 +44,8 @@ OCRS = {
     Ocr.paddleocr_latin: ModelPaddleOCRLatin,
     Ocr.paddleocr_thai: ModelPaddleOCRThai,
     Ocr.paddleocr_vl: _get_paddleocr_vl_class,  # 延迟导入 PaddleOCR-VL
+    Ocr.openai_ocr: _get_openai_ocr_class,
+    Ocr.gemini_ocr: _get_gemini_ocr_class,
 }
 ocr_cache = {}
 
@@ -41,8 +55,8 @@ def get_ocr(key: Ocr, *args, **kwargs) -> CommonOCR:
     # Use cache to avoid reloading models in the same translation session
     if key not in ocr_cache:
         ocr_class = OCRS[key]
-        # 处理延迟导入的情况（mocr, paddleocr_vl）
-        if callable(ocr_class) and key in (Ocr.mocr, Ocr.paddleocr_vl):
+        # 处理延迟导入的情况
+        if not isinstance(ocr_class, type):
             ocr_class = ocr_class()  # 调用函数获取真正的类
         ocr_cache[key] = ocr_class(*args, **kwargs)
     return ocr_cache[key]

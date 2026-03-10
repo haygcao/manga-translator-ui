@@ -93,6 +93,8 @@ rich>=14.1.0
 safetensors==0.6.2
 spandrel==0.4.1
 scipy==1.16.1
+# YOLO OBB checkpoint 反序列化需要与模型导出版本对齐的 ultralytics
+ultralytics==8.4.14
 # sentencepiece 已移除，改用 tokenizers 库 (use_fast=True)
 setuptools==80.9.0
 Shapely==2.1.1

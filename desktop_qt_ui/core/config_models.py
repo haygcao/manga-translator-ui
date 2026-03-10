@@ -1,4 +1,4 @@
-from typing import Optional, List, Union
+from typing import Any, Dict, List, Optional, Union
 import os
 
 from pydantic import BaseModel, Field
@@ -32,6 +32,8 @@ class OcrSettings(BaseModel):
     merge_special_require_full_wrap: bool = True
     ocr_vl_language_hint: str = "auto"
     ocr_vl_custom_prompt: Optional[str] = None
+    ai_ocr_concurrency: int = 1
+    ai_ocr_custom_prompt: Optional[str] = None
 
 class DetectorSettings(BaseModel):
     detector: str = "default"
@@ -78,6 +80,7 @@ class RenderSettings(BaseModel):
     stroke_width: float = 0.07
     enable_template_alignment: bool = False  # 启用模板匹配对齐（替换翻译模式）- 直接提取翻译图文字
     paste_mask_dilation_pixels: int = 10  # 粘贴模式蒙版膨胀大小（像素），设为0禁用膨胀
+    ai_renderer_concurrency: int = 1
 
 class UpscaleSettings(BaseModel):
     upscaler: str = "esrgan"
@@ -90,6 +93,7 @@ class ColorizerSettings(BaseModel):
     colorization_size: int = 576
     denoise_sigma: int = 30
     colorizer: str = "none"
+    ai_colorizer_concurrency: int = 1
 
 class CliSettings(BaseModel):
     verbose: bool = False  # 默认关闭详细日志
@@ -127,6 +131,7 @@ class AppSection(BaseModel):
     current_preset: str = "默认"  # 当前使用的预设名称
     unload_models_after_translation: bool = False  # 翻译完成后卸载模型（释放内存更彻底，但下次使用需要重新加载）
     saved_colors: Optional[List[str]] = None  # 保存的常用颜色列表
+    saved_style_presets: Optional[Dict[str, Dict[str, Any]]] = None  # 编辑器保存的样式组合
 
 class AppSettings(BaseModel):
     app: AppSection = Field(default_factory=AppSection)

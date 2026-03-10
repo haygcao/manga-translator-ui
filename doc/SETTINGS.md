@@ -221,6 +221,19 @@
 - **渲染器 (renderer)**：渲染引擎
   - **default**：默认渲染器
   - **manga2eng_pillow**：Manga2Eng Pillow 渲染器
+  - **openai_renderer**：调用 OpenAI 图像接口整页渲染，使用带编号框的清图 + 组合提示词
+  - **gemini_renderer**：调用 Gemini 图像接口整页渲染，使用带编号框的清图 + 组合提示词
+
+- **AI 渲染提示词**：OpenAI Renderer / Gemini Renderer 使用的固定提示词文件
+  - Qt 界面中点击"编辑"即可修改
+  - 固定路径：`dict/ai_renderer_prompt.yaml`
+  - 文件格式：YAML，主键为 `ai_renderer_prompt`
+  - 实际请求会自动组合：带编号框的清图 + 对应编号的翻译文本
+  - 拟声词 / 音效也会按翻译结果一起发给 AI 渲染
+
+- **AI 渲染并发数 (ai_renderer_concurrency)**：OpenAI Renderer / Gemini Renderer 的最大并发请求数
+  - 批量模式下可限制同时发出的整页渲染请求数量
+  - 仅 Qt 桌面端显示，服务端网页配置页不显示
 
 - **排版模式 (layout_mode)**：文本排版模式
   - **smart_scaling**：智能缩放（自动调整字体大小）
@@ -343,11 +356,22 @@
 
 - **上色模型 (colorizer)**：上色器类型
   - **none**：不上色（默认）
+  - **openai_colorizer**：调用 OpenAI 图像接口做整页上色
+  - **gemini_colorizer**：调用 Gemini 图像接口做整页上色
   - 其他上色模型
 
 - **上色大小 (colorization_size)**：上色处理尺寸（越大效果越好但越慢）
 
 - **降噪强度 (denoise_sigma)**：去噪强度（控制降噪程度）
+
+- **AI 上色提示词**：OpenAI Colorizer / Gemini Colorizer 使用的固定提示词文件
+  - Qt 界面中点击"编辑"即可修改
+  - 固定路径：`dict/ai_colorizer_prompt.yaml`
+  - 文件格式：YAML，主键为 `ai_colorizer_prompt`
+
+- **AI 上色并发数 (ai_colorizer_concurrency)**：OpenAI Colorizer / Gemini Colorizer 的最大并发请求数
+  - 批量模式下可限制同时发出的上色请求数量
+  - 仅 Qt 桌面端显示，服务端网页配置页不显示
 
 ---
 
@@ -362,7 +386,31 @@
   - **paddleocr**：PaddleOCR 引擎（支持多语言）
   - **paddleocr_korean**：韩漫推荐
   - **paddleocr_vl**：PaddleOCR-VL-For-Manga 模型（效果最好，最吃配置）
+  - **openai_ocr**：调用 OpenAI 兼容多模态接口逐框 OCR，文字颜色仍由本地 `48px` 模型提取
+  - **gemini_ocr**：调用 Gemini 多模态接口逐框 OCR，文字颜色仍由本地 `48px` 模型提取
   - **推荐**：日漫推荐 `48px` 或 `mocr`，韩漫推荐 `paddleocr_korean`，英肉推荐原始 `paddleocr`
+
+- **AI OCR 提示词**：OpenAI OCR / Gemini OCR 使用的固定提示词文件
+  - Qt 界面中点击"编辑"即可修改
+  - 固定路径：`dict/ai_ocr_prompt.yaml`
+  - 文件格式：YAML，主键为 `ai_ocr_prompt`
+  - 不再通过配置项切换文件，也没有另存为
+  - 如果本地还保留旧版 `dict/ai_ocr_prompt.json`，程序首次使用时会自动迁移到 YAML
+
+- **AI OCR 环境变量**：API OCR 优先读取独立的 OCR 接口配置
+  - OpenAI OCR：`OCR_OPENAI_API_KEY`、`OCR_OPENAI_MODEL`、`OCR_OPENAI_API_BASE`
+  - Gemini OCR：`OCR_GEMINI_API_KEY`、`OCR_GEMINI_MODEL`、`OCR_GEMINI_API_BASE`
+  - 若未填写 OCR 专用变量，会自动回退到普通翻译接口使用的 `OPENAI_*` 或 `GEMINI_*`
+
+- **AI 上色环境变量**：API 上色优先读取独立的上色接口配置
+  - OpenAI Colorizer：`COLOR_OPENAI_API_KEY`、`COLOR_OPENAI_MODEL`、`COLOR_OPENAI_API_BASE`
+  - Gemini Colorizer：`COLOR_GEMINI_API_KEY`、`COLOR_GEMINI_MODEL`、`COLOR_GEMINI_API_BASE`
+  - 若未填写上色专用变量，会自动回退到普通 `OPENAI_*` 或 `GEMINI_*`
+
+- **AI 渲染环境变量**：API 渲染优先读取独立的渲染接口配置
+  - OpenAI Renderer：`RENDER_OPENAI_API_KEY`、`RENDER_OPENAI_MODEL`、`RENDER_OPENAI_API_BASE`
+  - Gemini Renderer：`RENDER_GEMINI_API_KEY`、`RENDER_GEMINI_MODEL`、`RENDER_GEMINI_API_BASE`
+  - 若未填写渲染专用变量，会自动回退到普通 `OPENAI_*` 或 `GEMINI_*`
 
 - **启用混合OCR (use_hybrid_ocr)**：启用混合 OCR（同时使用两个模型，提高准确率）
   - **日漫推荐组合**：`48px + mocr`
@@ -456,6 +504,9 @@
   - `dict/system_prompt_line_break.yaml` - AI断句的系统提示词
   - `dict/glossary_extraction_prompt.yaml` - 术语提取的系统提示词
   - `dict/system_prompt_hq_format.yaml` - 高质量翻译输出格式的系统提示词
+  - `dict/ai_ocr_prompt.yaml` - OpenAI OCR / Gemini OCR 使用的固定 OCR 提示词
+  - `dict/ai_colorizer_prompt.yaml` - OpenAI Colorizer / Gemini Colorizer 使用的固定上色提示词
+  - `dict/ai_renderer_prompt.yaml` - OpenAI Renderer / Gemini Renderer 使用的固定渲染提示词
 - **用户自定义提示词**（在界面中选择）：
   - `dict/prompt_example.yaml` - 提示词示例
   - 可以在此目录添加自己的 `.yaml` 或 `.json` 提示词文件

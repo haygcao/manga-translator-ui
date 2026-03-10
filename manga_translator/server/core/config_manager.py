@@ -75,9 +75,12 @@ DEFAULT_ADMIN_SETTINGS = {
         'translator.translator_chain',
         'translator.selective_translation',
         'translator.skip_lang',
-        'translator.use_custom_api_params',  # 仅用于服务器端，Web UI 用户端不显示
-        'render.gimp_font',
-    ],
+         'translator.use_custom_api_params',  # 仅用于服务器端，Web UI 用户端不显示
+         'ocr.ai_ocr_concurrency',
+         'render.ai_renderer_concurrency',
+         'colorizer.ai_colorizer_concurrency',
+         'render.gimp_font',
+      ],
     'readonly_keys': [],
     'default_values': {},
     'allowed_translators': [],

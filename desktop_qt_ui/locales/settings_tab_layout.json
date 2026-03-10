@@ -40,6 +40,8 @@
         "ocr.ocr",
         "ocr.use_hybrid_ocr",
         "ocr.secondary_ocr",
+        "ocr.ai_ocr_prompt_path",
+        "ocr.ai_ocr_concurrency",
         "ocr.ocr_vl_language_hint",
         "ocr.ocr_vl_custom_prompt",
         "ocr.use_model_bubble_filter",
@@ -115,6 +117,8 @@
       "marked": false,
       "items": [
         "render.renderer",
+        "render.ai_renderer_prompt_path",
+        "render.ai_renderer_concurrency",
         "render.alignment",
         "render.disable_auto_wrap",
         "render.optimize_line_breaks",
@@ -164,6 +168,8 @@
           "title": "Colorization"
         },
         "colorizer.colorizer",
+        "colorizer.ai_colorizer_prompt_path",
+        "colorizer.ai_colorizer_concurrency",
         "colorizer.colorization_size",
         "colorizer.denoise_sigma"
       ]

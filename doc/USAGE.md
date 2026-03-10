@@ -243,7 +243,30 @@
 - **mocr**：Manga OCR 专用模型
 - **paddleocr**：PaddleOCR 引擎，支持多语言，英肉推荐
 - **paddleocr_korean**：韩漫推荐
+- **openai_ocr**：调用 OpenAI 兼容多模态接口做 OCR
+- **gemini_ocr**：调用 Gemini 多模态接口做 OCR
 - **日漫混合 OCR 推荐**：`48px + mocr`
+
+使用 `openai_ocr` 或 `gemini_ocr` 时：
+- 需要先在 `.env` 中配置对应 OCR API 变量，详见 [API 配置教程](API_CONFIG.md)
+- Qt 设置页中的"AI OCR 提示词"只有一个固定编辑入口，实际文件为 `dict/ai_ocr_prompt.yaml`
+- AI OCR 识别完文本后，颜色仍会使用本地 `48px` 模型提取
+
+### AI 上色 / AI 渲染
+
+在"**模式特定**"和"**排版**"标签页中可以选择 API 上色 / API 渲染：
+
+- **openai_colorizer**：调用 OpenAI 图像接口整页上色
+- **gemini_colorizer**：调用 Gemini 图像接口整页上色
+- **openai_renderer**：调用 OpenAI 图像接口整页渲染
+- **gemini_renderer**：调用 Gemini 图像接口整页渲染
+
+使用这些 API 模式时：
+- 上色固定提示词文件是 `dict/ai_colorizer_prompt.yaml`
+- 渲染固定提示词文件是 `dict/ai_renderer_prompt.yaml`
+- AI 渲染会把清理后的页面画上编号框，再把同编号的翻译文本一起组合进提示词
+- 拟声词 / 音效如果已经有翻译，也会按对应编号一起发给 AI 渲染
+- Qt 设置页提供独立的并发数输入框；这些参数不会出现在服务端网页配置页
 
 ### 字体设置
 

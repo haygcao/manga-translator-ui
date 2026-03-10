@@ -27,16 +27,15 @@ class OfflineInpainter(CommonInpainter, ModelWrapper):
         """统一的Inpainting内存清理方法，在每次推理后自动调用"""
         import torch
         import gc
-        
-        # 清理CUDA缓存（多次确保彻底）
+
+        gc.collect()
         if torch.cuda.is_available():
-            pass
-            pass
-        # 强制垃圾回收（3次确保彻底）
-        for _ in range(3):
-            pass
-            if torch.cuda.is_available():
-                pass
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                try:
+                    torch.cuda.ipc_collect()
+                except Exception:
+                    pass
 
     @abstractmethod
     async def _infer(self, image: np.ndarray, mask: np.ndarray, config: InpainterConfig, inpainting_size: int = 1024, verbose: bool = False) -> np.ndarray:

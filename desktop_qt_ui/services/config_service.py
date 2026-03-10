@@ -15,6 +15,28 @@ from dotenv import dotenv_values, load_dotenv
 from core.config_models import AppSettings
 
 
+PRESET_SPECIAL_ENV_VARS = [
+    "OCR_OPENAI_API_KEY",
+    "OCR_OPENAI_MODEL",
+    "OCR_OPENAI_API_BASE",
+    "OCR_GEMINI_API_KEY",
+    "OCR_GEMINI_MODEL",
+    "OCR_GEMINI_API_BASE",
+    "COLOR_OPENAI_API_KEY",
+    "COLOR_OPENAI_MODEL",
+    "COLOR_OPENAI_API_BASE",
+    "COLOR_GEMINI_API_KEY",
+    "COLOR_GEMINI_MODEL",
+    "COLOR_GEMINI_API_BASE",
+    "RENDER_OPENAI_API_KEY",
+    "RENDER_OPENAI_MODEL",
+    "RENDER_OPENAI_API_BASE",
+    "RENDER_GEMINI_API_KEY",
+    "RENDER_GEMINI_MODEL",
+    "RENDER_GEMINI_API_BASE",
+]
+
+
 @dataclass
 class TranslatorConfig:
     """翻译器配置信息"""
@@ -118,6 +140,24 @@ class ConfigService(QObject):
         if not config:
             return []
         return config.required_env_vars + config.optional_env_vars
+
+    def get_all_preset_env_vars(self) -> List[str]:
+        """获取预设应包含的全部 API 环境变量。"""
+        env_keys: List[str] = []
+        seen = set()
+
+        for translator_config in self.translator_configs.values():
+            for key in translator_config.required_env_vars + translator_config.optional_env_vars:
+                if key and key not in seen:
+                    seen.add(key)
+                    env_keys.append(key)
+
+        for key in PRESET_SPECIAL_ENV_VARS:
+            if key not in seen:
+                seen.add(key)
+                env_keys.append(key)
+
+        return env_keys
     
     def validate_api_key(self, key: str, var_name: str, translator_name: str) -> bool:
         """验证API密钥格式"""
@@ -268,6 +308,7 @@ class ConfigService(QObject):
                     config_dict['app']['ui_language'] = 'auto'  # 模板配置始终为 auto
                     config_dict['app']['current_preset'] = '默认'  # 模板配置始终为默认预设
                     config_dict['app']['saved_colors'] = None  # 模板配置中保存的颜色始终为空
+                    config_dict['app']['saved_style_presets'] = None  # 模板配置中不保留用户自定义样式
                     
                     if 'cli' in config_dict:
                         config_dict['cli']['verbose'] = False

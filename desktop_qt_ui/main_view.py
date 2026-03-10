@@ -90,6 +90,15 @@ class MainView(QWidget):
     def _open_filter_list(self):
         main_view_dynamic._open_filter_list(self)
 
+    def _open_ai_ocr_prompt_editor(self):
+        main_view_dynamic._open_ai_ocr_prompt_editor(self)
+
+    def _open_ai_colorizer_prompt_editor(self):
+        main_view_dynamic._open_ai_colorizer_prompt_editor(self)
+
+    def _open_ai_renderer_prompt_editor(self):
+        main_view_dynamic._open_ai_renderer_prompt_editor(self)
+
     @pyqtSlot(dict)
     def set_parameters(self, config: dict):
         main_view_dynamic.set_parameters(self, config)

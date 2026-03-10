@@ -525,8 +525,7 @@ def on_preset_changed(self, new_preset_name: str):
     if old_preset_name:
         existing_presets = self.controller.get_presets_list()
         if old_preset_name in existing_presets:
-            current_env_values = self.config_service.load_env_vars()
-            self.controller.preset_service.save_preset(old_preset_name, current_env_values)
+            self.controller.save_preset(old_preset_name, copy_current=True)
 
     success = self.controller.load_preset(new_preset_name)
     if success:

@@ -458,9 +458,11 @@ class MainAppLogic(QObject):
             copy_current: 是否复制当前配置。False=创建空白预设，True=复制当前配置
         """
         try:
+            preset_env_keys = self.config_service.get_all_preset_env_vars()
             if copy_current:
-                # 复制当前配置模式：保存.env中所有翻译器的环境变量
-                all_env_vars = self.config_service.load_env_vars()
+                # 复制当前配置模式：保存全部 API 相关的环境变量
+                current_env_vars = self.config_service.load_env_vars()
+                all_env_vars = {key: current_env_vars.get(key, "") for key in preset_env_keys}
                 
                 # 保存所有环境变量，包括空值，以准确反映当前配置状态
                 success = self.preset_service.save_preset(preset_name, all_env_vars)
@@ -468,12 +470,8 @@ class MainAppLogic(QObject):
                     # 不输出日志，避免刷屏
                     pass
             else:
-                # 创建空白预设模式：只保存当前翻译器的空环境变量结构
-                current_translator = self.config_service.get_config().translator.translator
-                translator_env_vars = self.config_service.get_all_env_vars(current_translator)
-                
-                # 创建空白的环境变量字典
-                empty_env_vars = {key: "" for key in translator_env_vars}
+                # 创建空白预设模式：为全部 API 环境变量创建空白结构
+                empty_env_vars = {key: "" for key in preset_env_keys}
                 
                 success = self.preset_service.save_preset(preset_name, empty_env_vars)
                 if success:
@@ -873,6 +871,20 @@ class MainAppLogic(QObject):
                 "realcugan": "Real-CUGAN",
                 "mangajanai": "MangaJaNai"
             },
+            "renderer": {
+                "default": "Default",
+                "manga2eng": "Manga2Eng",
+                "manga2eng_pillow": "Manga2Eng Pillow",
+                "openai_renderer": "OpenAI Renderer",
+                "gemini_renderer": "Gemini Renderer",
+                "none": self._t("translator_none"),
+            },
+            "colorizer": {
+                "none": self._t("translator_none"),
+                "mc2": "Manga Colorization v2",
+                "openai_colorizer": "OpenAI Colorizer",
+                "gemini_colorizer": "Gemini Colorizer",
+            },
             "layout_mode": {
                 'smart_scaling': self._t("layout_mode_smart_scaling"),
                 'strict': self._t("layout_mode_strict"),
@@ -952,6 +964,8 @@ class MainAppLogic(QObject):
                     "merge_sigma": self._t("label_merge_sigma"),
                     "merge_edge_ratio_threshold": self._t("label_merge_edge_ratio_threshold"),
                     "merge_special_require_full_wrap": self._t("label_merge_special_require_full_wrap"),
+                    "ai_ocr_concurrency": self._t("label_ai_ocr_concurrency"),
+                    "ai_ocr_custom_prompt": self._t("label_ai_ocr_custom_prompt"),
                     "ocr_vl_language_hint": self._t("label_ocr_vl_language_hint"),
                     "ocr_vl_custom_prompt": self._t("label_ocr_vl_custom_prompt"),
                     "detector": self._t("label_detector"),
@@ -982,6 +996,7 @@ class MainAppLogic(QObject):
                     "strict_smart_scaling": self._t("label_strict_smart_scaling"),
                     "enable_template_alignment": self._t("label_enable_template_alignment"),
                     "paste_mask_dilation_pixels": self._t("label_paste_mask_dilation_pixels"),
+                    "ai_renderer_concurrency": self._t("label_ai_renderer_concurrency"),
                     "direction": self._t("label_direction"),
                     "uppercase": self._t("label_uppercase"),
                     "lowercase": self._t("label_lowercase"),
@@ -999,6 +1014,7 @@ class MainAppLogic(QObject):
                     "colorization_size": self._t("label_colorization_size"),
                     "denoise_sigma": self._t("label_denoise_sigma"),
                     "colorizer": self._t("label_colorizer"),
+                    "ai_colorizer_concurrency": self._t("label_ai_colorizer_concurrency"),
                     "verbose": self._t("label_verbose"),
                     "attempts": self._t("label_attempts"),
                     "max_requests_per_minute": self._t("label_max_requests_per_minute"),

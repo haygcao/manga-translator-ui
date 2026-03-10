@@ -541,6 +541,8 @@ class LamaLargeInpainter(LamaMPEInpainter):
                 sess_options = create_session_options(
                     ort,
                     log_severity_level=3,
+                    enable_mem_pattern=False,
+                    enable_cpu_mem_arena=False,
                     intra_op_num_threads=4,
                     inter_op_num_threads=1,
                 )
@@ -584,7 +586,111 @@ class LamaLargeInpainter(LamaMPEInpainter):
                 del self.session
             elif self.backend == 'torch':
                 del self.model
-    
+
+    def _prepare_large_image(
+        self,
+        image: np.ndarray,
+        mask: np.ndarray,
+        inpainting_size: int,
+        verbose: bool = False,
+    ) -> dict:
+        mask_binary = np.asarray(mask)
+        if mask_binary.ndim == 3:
+            mask_binary = mask_binary[:, :, 0]
+        mask_binary = np.where(mask_binary > 0, 1, 0).astype(np.uint8)
+        mask_original = mask_binary[:, :, None]
+
+        height, width = image.shape[:2]
+        if max(height, width) > inpainting_size:
+            image_resized = resize_keep_aspect(image, inpainting_size)
+            mask_resized = resize_keep_aspect(mask_original, inpainting_size)
+        else:
+            image_resized = image
+            mask_resized = mask_original
+        mask_resized = np.where(mask_resized > 0, 1, 0).astype(np.uint8)
+        if mask_resized.ndim == 2:
+            mask_resized = mask_resized[:, :, None]
+
+        pad_size = 64
+        h, w = image_resized.shape[:2]
+        new_h = h if h % pad_size == 0 else (pad_size - (h % pad_size)) + h
+        new_w = w if w % pad_size == 0 else (pad_size - (w % pad_size)) + w
+
+        self.logger.info(f'Inpainting resolution: {new_w}x{new_h}')
+
+        image_pad = np.pad(image_resized, ((0, new_h - h), (0, new_w - w), (0, 0)), mode='symmetric')
+        mask_pad = np.pad(mask_resized, ((0, new_h - h), (0, new_w - w), (0, 0)), mode='symmetric')
+
+        return {
+            'img_original': image,
+            'mask_resized': mask_resized,
+            'image_pad': image_pad,
+            'mask_pad': mask_pad,
+            'resized_shape': (h, w),
+            'original_shape': (height, width),
+            'needs_resize_back': max(height, width) > inpainting_size,
+        }
+
+    def _restore_large_output(self, img_inpainted: np.ndarray, prep: dict) -> np.ndarray:
+        h, w = prep['resized_shape']
+        img_inpainted = img_inpainted[:h, :w, :]
+
+        mask_blend = prep['mask_resized']
+        if prep['needs_resize_back']:
+            height, width = prep['original_shape']
+            img_inpainted = cv2.resize(img_inpainted, (width, height), interpolation=cv2.INTER_CUBIC)
+            mask_blend = cv2.resize(mask_blend, (width, height), interpolation=cv2.INTER_NEAREST)
+            if mask_blend.ndim == 2:
+                mask_blend = mask_blend[:, :, None]
+
+        mask_blend = np.where(mask_blend > 0, 1, 0).astype(np.uint8)
+        return img_inpainted * mask_blend + prep['img_original'] * (1 - mask_blend)
+
+    async def _infer_torch_large(
+        self,
+        image: np.ndarray,
+        mask: np.ndarray,
+        config: InpainterConfig,
+        inpainting_size: int = 1024,
+        verbose: bool = False,
+    ) -> np.ndarray:
+        prep = self._prepare_large_image(image, mask, inpainting_size, verbose)
+        image_pad = prep.pop('image_pad')
+        mask_pad = prep.pop('mask_pad')
+
+        if isinstance(self.model, LamaFourier):
+            img_torch = torch.from_numpy(image_pad).permute(2, 0, 1).unsqueeze_(0).float() / 255.0
+        else:
+            img_torch = torch.from_numpy(image_pad).permute(2, 0, 1).unsqueeze_(0).float() / 127.5 - 1.0
+
+        mask_torch = torch.from_numpy(mask_pad[:, :, 0]).unsqueeze_(0).unsqueeze_(0).float()
+        del image_pad, mask_pad
+        if self.device.startswith('cuda') or self.device == 'mps':
+            img_torch = img_torch.to(self.device)
+            mask_torch = mask_torch.to(self.device)
+
+        with torch.no_grad():
+            img_torch *= (1 - mask_torch)
+            if not self.device.startswith('cuda'):
+                img_inpainted_torch = self.model(img_torch, mask_torch)
+            else:
+                precision = TORCH_DTYPE_MAP[str(config.inpainting_precision)]
+                if precision == torch.float16:
+                    precision = torch.bfloat16
+                    self.logger.warning('Switch to bf16 due to Lama only compatible with bf16 and fp32.')
+
+                with torch.autocast(device_type="cuda", dtype=precision):
+                    img_inpainted_torch = self.model(img_torch, mask_torch)
+
+        if isinstance(self.model, LamaFourier):
+            img_inpainted_torch = img_inpainted_torch.to(torch.float32)
+            img_inpainted = (img_inpainted_torch.cpu().squeeze_(0).permute(1, 2, 0).numpy() * 255.0).astype(np.uint8)
+        else:
+            img_inpainted_torch = img_inpainted_torch.to(torch.float32)
+            img_inpainted = ((img_inpainted_torch.cpu().squeeze_(0).permute(1, 2, 0).numpy() + 1.0) * 127.5).astype(np.uint8)
+
+        return self._restore_large_output(img_inpainted, prep)
+
     async def _infer(self, image: np.ndarray, mask: np.ndarray, config: InpainterConfig, inpainting_size: int = 1024, verbose: bool = False) -> np.ndarray:
         # ✅ ONNX推理，失败时自动降级到PyTorch
         if hasattr(self, 'backend') and self.backend == 'onnx':
@@ -604,56 +710,25 @@ class LamaLargeInpainter(LamaMPEInpainter):
                     self.model.eval()
                     if self.device.startswith('cuda') or self.device == 'mps':
                         self.model.to(self.device)
-        
-        # ✅ PyTorch推理（调用父类）
-        return await super()._infer(image, mask, config, inpainting_size, verbose)
+
+        # ✅ PyTorch推理：与 ONNX 保持一致的缩放/补边逻辑
+        return await self._infer_torch_large(image, mask, config, inpainting_size, verbose)
     
     async def _infer_onnx(self, image: np.ndarray, mask: np.ndarray, inpainting_size: int = 1024, verbose: bool = False) -> np.ndarray:
         """ONNX专用推理方法 - 采用Rust策略：padding而非resize"""
         try:
-            img_original = np.copy(image)
-            mask_original = np.copy(mask)
-            mask_original = np.where(mask_original > 0, 1, 0).astype(np.uint8)
-            mask_original = mask_original[:, :, None]
-            
-            height, width, c = image.shape
-            
-            # 步骤1: 保持宽高比缩放（如果需要）
-            if max(image.shape[0:2]) > inpainting_size:
-                image = resize_keep_aspect(image, inpainting_size)
-                mask_resized = resize_keep_aspect(mask_original, inpainting_size)
-            else:
-                mask_resized = mask_original
-            mask_resized = np.where(mask_resized > 0, 1, 0).astype(np.uint8)
-            
-            # 步骤2: Padding到64的倍数（Lama FFT架构需要更大对齐值避免维度不匹配）
-            pad_size = 64
-            h, w, c = image.shape
-            new_h = h if h % pad_size == 0 else (pad_size - (h % pad_size)) + h
-            new_w = w if w % pad_size == 0 else (pad_size - (w % pad_size)) + w
-            
-            self.logger.info(f'Inpainting resolution: {new_w}x{new_h}')
-            
-            # ✅ 使用 padding 而非 resize（保持图像不变形）
-            img_pad = np.pad(image, ((0, new_h - h), (0, new_w - w), (0, 0)), mode='symmetric')
-            
-            # 处理 mask padding
-            if len(mask_resized.shape) == 3:
-                mask_pad = np.pad(mask_resized, ((0, new_h - h), (0, new_w - w), (0, 0)), mode='symmetric')
-            else:
-                mask_pad = np.pad(mask_resized, ((0, new_h - h), (0, new_w - w)), mode='symmetric')
-                mask_pad = mask_pad[:, :, None]
-            
-            # 准备输入（0-1归一化）
-            img = img_pad.astype(np.float32) / 255.0
+            prep = self._prepare_large_image(image, mask, inpainting_size, verbose)
+
+            image_pad = prep.pop('image_pad')
+            mask_pad = prep.pop('mask_pad')
+
+            img = image_pad.astype(np.float32) / 255.0
             img = np.transpose(img, (2, 0, 1))[None, ...]  # [1, 3, H, W]
-            
+
             mask_input = mask_pad.astype(np.float32)[:, :, 0:1]
             mask_input = np.transpose(mask_input, (2, 0, 1))[None, ...]  # [1, 1, H, W]
-            
-            # 释放不再需要的中间变量
-            del img_pad, mask_pad
-            
+            del image_pad, mask_pad
+
             # ONNX推理
             ort_inputs = {
                 'image': img,
@@ -667,20 +742,8 @@ class LamaLargeInpainter(LamaMPEInpainter):
             # 后处理
             img_inpainted = np.transpose(img_inpainted[0], (1, 2, 0))
             img_inpainted = (img_inpainted * 255.).astype(np.uint8)
-            
-            # 移除 padding
-            img_inpainted = img_inpainted[:h, :w, :]
-            
-            # 还原到原始尺寸（使用双三次插值，与Rust一致）
-            if max(height, width) > inpainting_size:
-                img_inpainted = cv2.resize(img_inpainted, (width, height), interpolation=cv2.INTER_CUBIC)
-                mask_resized = cv2.resize(mask_resized, (width, height), interpolation=cv2.INTER_NEAREST)
-                if len(mask_resized.shape) == 2:
-                    mask_resized = mask_resized[:, :, None]
-                mask_resized = np.where(mask_resized > 0, 1, 0).astype(np.uint8)
-            
-            ans = img_inpainted * mask_resized + img_original * (1 - mask_resized)
-            return ans
+
+            return self._restore_large_output(img_inpainted, prep)
             
         except Exception:
             raise

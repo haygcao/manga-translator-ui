@@ -9,12 +9,6 @@ from .inpainting_lama_mpe import LamaMPEInpainter, LamaLargeInpainter
 from .none import NoneInpainter
 from .original import OriginalInpainter
 from ..config import Inpainter, InpainterConfig
-from ..utils import (
-    build_det_rearrange_plan,
-    det_collect_plan_patches,
-    det_rearrange_patch_array,
-    det_unrearrange_patch_maps,
-)
 
 _SD_IMPORT_ERROR = None
 try:
@@ -44,6 +38,7 @@ INPAINTERS = {
     Inpainter.original: OriginalInpainter,
 }
 inpainter_cache = {}
+INPAINT_SPLIT_RATIO = 3.0
 
 def get_inpainter(key: Inpainter, *args, **kwargs) -> CommonInpainter:
     if key not in INPAINTERS:
@@ -107,19 +102,19 @@ async def dispatch(inpainter_key: Inpainter, image: np.ndarray, mask: np.ndarray
         image_rgb = image[:, :, :3]
         original_alpha = image[:, :, 3]
 
-    rearrange_plan = build_det_rearrange_plan(image_rgb, tgt_size=inpainting_size)
-    if rearrange_plan is None:
-        inpainted_rgb = await inpainter.inpaint(image_rgb, mask_binary, config, inpainting_size, verbose)
-    else:
-        inpainted_rgb = await _dispatch_with_det_rearrange(
+    h, w = image_rgb.shape[:2]
+    aspect_ratio = max(w / h, h / w)
+    if aspect_ratio > INPAINT_SPLIT_RATIO:
+        inpainted_rgb = await _dispatch_with_split(
             inpainter,
             image_rgb,
             mask_binary,
             config,
             inpainting_size,
             verbose,
-            rearrange_plan,
         )
+    else:
+        inpainted_rgb = await inpainter.inpaint(image_rgb, mask_binary, config, inpainting_size, verbose)
 
     if original_alpha is not None:
         alpha = _inpaint_handle_alpha_channel(original_alpha, mask_binary)
@@ -132,54 +127,128 @@ async def unload(inpainter_key: Inpainter):
     if isinstance(inpainter, OfflineInpainter):
         await inpainter.unload()
 
-async def _dispatch_with_det_rearrange(
+async def _dispatch_with_split(
     inpainter: CommonInpainter,
     image: np.ndarray,
     mask: np.ndarray,
     config: InpainterConfig,
     inpainting_size: int,
     verbose: bool,
-    rearrange_plan: dict,
 ) -> np.ndarray:
     """
-    使用与检测器统一的切割/回拼逻辑进行修复。
+    对极端长宽比的图片进行切割修复。
     """
+    h, w = image.shape[:2]
+    is_vertical = h > w
+    long_side = h if is_vertical else w
+    short_side = w if is_vertical else h
+
+    num_splits = int(np.ceil(long_side / (short_side * INPAINT_SPLIT_RATIO)))
+    overlap = int(short_side * 0.1)
+    tile_size = (long_side + overlap * (num_splits - 1)) // num_splits
+
     if verbose:
-        h, w = image.shape[:2]
-        print(
-            f"[Inpainting Rearrange] image={w}x{h}, "
-            f"patch_size={rearrange_plan['patch_size']}, "
-            f"ph_num={rearrange_plan['ph_num']}, pw_num={rearrange_plan['pw_num']}, "
-            f"pad_num={rearrange_plan['pad_num']}, transpose={rearrange_plan['transpose']}"
-        )
+        print(f"[Inpainting Split] image={w}x{h}, aspect_ratio={max(w / h, h / w):.2f}")
+        print(f"[Inpainting Split] splitting into {num_splits} tiles along {'height' if is_vertical else 'width'}")
+        print(f"[Inpainting Split] tile_size={tile_size}, overlap={overlap}")
 
-    image_patch_array = det_rearrange_patch_array(rearrange_plan)
-    mask_plan = dict(rearrange_plan)
-    mask_plan['patch_list'] = det_collect_plan_patches(mask, rearrange_plan)
-    mask_patch_array = det_rearrange_patch_array(mask_plan)
+    tiles = []
+    for ii in range(num_splits):
+        start = max(0, ii * tile_size - ii * overlap)
+        end = min(long_side, start + tile_size)
 
-    inpainted_patch_list = []
-    for ii, (image_patch, mask_patch) in enumerate(zip(image_patch_array, mask_patch_array)):
-        mask_patch_binary = _normalize_binary_mask(mask_patch)
-        if image_patch.size == 0:
-            inpainted_patch_list.append(image_patch.astype(np.float32))
-            continue
-        if np.max(mask_patch_binary) == 0:
-            inpainted_patch_list.append(image_patch.astype(np.float32))
-            continue
+        if is_vertical:
+            tile_img = image[start:end, :, :].copy()
+            tile_mask = mask[start:end, :].copy()
+        else:
+            tile_img = image[:, start:end, :].copy()
+            tile_mask = mask[:, start:end].copy()
+
         if verbose:
-            print(f"[Inpainting Rearrange] processing patch {ii + 1}/{len(image_patch_array)}")
-        inpainted_patch = await inpainter.inpaint(
-            image_patch,
-            mask_patch_binary,
-            config,
-            inpainting_size,
-            verbose,
-        )
-        inpainted_patch_list.append(inpainted_patch.astype(np.float32))
+            axis_label = "rows" if is_vertical else "cols"
+            print(f"[Inpainting Split] processing tile {ii + 1}/{num_splits}: {axis_label} {start}-{end}")
 
-    merged = det_unrearrange_patch_maps(inpainted_patch_list, rearrange_plan, data_format='hwc')
-    merged = np.clip(np.rint(merged), 0, 255).astype(np.uint8)
+        tile_inpainted = await inpainter.inpaint(tile_img, tile_mask, config, inpainting_size, verbose)
+        tiles.append({
+            'image': tile_inpainted,
+            'start': start,
+            'end': end,
+        })
+
+    result = image.copy()
+    blend_size = overlap // 2 if overlap > 0 else 0
+
+    for ii, tile_data in enumerate(tiles):
+        tile_img = tile_data['image']
+        start = tile_data['start']
+        end = tile_data['end']
+
+        if num_splits == 1:
+            if is_vertical:
+                result[start:end, :, :] = tile_img
+            else:
+                result[:, start:end, :] = tile_img
+        elif ii == 0:
+            if is_vertical:
+                result[start:end - blend_size, :, :] = tile_img[:-blend_size, :, :]
+                if blend_size > 0:
+                    for jj in range(blend_size):
+                        alpha = 1 - (jj / blend_size)
+                        idx = end - blend_size + jj
+                        tile_idx = tile_img.shape[0] - blend_size + jj
+                        result[idx, :, :] = alpha * tile_img[tile_idx, :, :] + (1 - alpha) * result[idx, :, :]
+            else:
+                result[:, start:end - blend_size, :] = tile_img[:, :-blend_size, :]
+                if blend_size > 0:
+                    for jj in range(blend_size):
+                        alpha = 1 - (jj / blend_size)
+                        idx = end - blend_size + jj
+                        tile_idx = tile_img.shape[1] - blend_size + jj
+                        result[:, idx, :] = alpha * tile_img[:, tile_idx, :] + (1 - alpha) * result[:, idx, :]
+        elif ii == len(tiles) - 1:
+            if is_vertical:
+                if blend_size > 0:
+                    for jj in range(blend_size):
+                        alpha = jj / blend_size
+                        result[start + jj, :, :] = (1 - alpha) * result[start + jj, :, :] + alpha * tile_img[jj, :, :]
+                result[start + blend_size:end, :, :] = tile_img[blend_size:, :, :]
+            else:
+                if blend_size > 0:
+                    for jj in range(blend_size):
+                        alpha = jj / blend_size
+                        result[:, start + jj, :] = (1 - alpha) * result[:, start + jj, :] + alpha * tile_img[:, jj, :]
+                result[:, start + blend_size:end, :] = tile_img[:, blend_size:, :]
+        else:
+            if is_vertical:
+                if blend_size > 0:
+                    for jj in range(blend_size):
+                        alpha = jj / blend_size
+                        result[start + jj, :, :] = (1 - alpha) * result[start + jj, :, :] + alpha * tile_img[jj, :, :]
+
+                result[start + blend_size:end - blend_size, :, :] = tile_img[blend_size:-blend_size, :, :]
+
+                if blend_size > 0:
+                    for jj in range(blend_size):
+                        alpha = 1 - (jj / blend_size)
+                        idx = end - blend_size + jj
+                        tile_idx = tile_img.shape[0] - blend_size + jj
+                        result[idx, :, :] = alpha * tile_img[tile_idx, :, :] + (1 - alpha) * result[idx, :, :]
+            else:
+                if blend_size > 0:
+                    for jj in range(blend_size):
+                        alpha = jj / blend_size
+                        result[:, start + jj, :] = (1 - alpha) * result[:, start + jj, :] + alpha * tile_img[:, jj, :]
+
+                result[:, start + blend_size:end - blend_size, :] = tile_img[:, blend_size:-blend_size, :]
+
+                if blend_size > 0:
+                    for jj in range(blend_size):
+                        alpha = 1 - (jj / blend_size)
+                        idx = end - blend_size + jj
+                        tile_idx = tile_img.shape[1] - blend_size + jj
+                        result[:, idx, :] = alpha * tile_img[:, tile_idx, :] + (1 - alpha) * result[:, idx, :]
+
     if verbose:
-        print("[Inpainting Rearrange] patches merged successfully")
-    return merged
+        print("[Inpainting Split] tiles merged successfully")
+
+    return result
