@@ -21,6 +21,9 @@ except Exception:
 
 CJK_H2V = {
     "‥": "︰",
+    "─": "│",
+    "━": "┃",
+    "═": "║",
     "—": "︱",
     "―": "|",
     "–": "︲",
@@ -338,6 +341,16 @@ def _normalize_horizontal_block_content(content: str) -> str:
     content = re.sub(r'\s*(\[BR\]|<br\s*/?>|【BR】)\s*', '', content, flags=re.IGNORECASE)
     content = content.replace('\r', '').replace('\n', '')
     return content
+
+
+def prepare_text_for_direction_rendering(text: str, is_horizontal: bool, auto_rotate_symbols: bool = False) -> str:
+    """Apply the same direction-specific text preprocessing used by render/layout."""
+    text = text or ""
+    if is_horizontal:
+        return re.sub(r'<H>(.*?)</H>', r'\1', text, flags=re.IGNORECASE | re.DOTALL)
+    if auto_rotate_symbols:
+        return auto_add_horizontal_tags(text)
+    return text
 
 def _convert_br_outside_h_tags(text: str) -> str:
     """Convert BR markers to '\\n' outside <H>, and split BR inside <H> into per-line <H> blocks."""

@@ -113,6 +113,14 @@ def calc_text_block_dimensions(text: str, is_horizontal: bool, line_spacing: flo
     # 处理 BR 标记
     text_for_calc = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
 
+    text_for_calc = text_render.prepare_text_for_direction_rendering(
+        text_for_calc,
+        is_horizontal=is_horizontal,
+        auto_rotate_symbols=bool(
+            config and hasattr(config, 'render') and getattr(config.render, 'auto_rotate_symbols', False)
+        ),
+    )
+
     if is_horizontal:
         lines, widths = text_render.calc_horizontal(
             base_font, text_for_calc,
@@ -121,16 +129,12 @@ def calc_text_block_dimensions(text: str, is_horizontal: bool, line_spacing: flo
             letter_spacing=letter_spacing
         )
         if widths:
-            spacing_y = int(base_font * 0.01 * line_spacing)
+            spacing_y = text_render.calc_horizontal_line_spacing_px(base_font, line_spacing)
             # 和后端渲染一致：最大行宽 + 行间距
             base_width = max(widths)
             base_height = base_font * len(lines) + spacing_y * max(0, len(lines) - 1)
             return base_width, base_height, len(lines)
     else:
-        # 竖排：应用自动旋转符号
-        if config and hasattr(config, 'render') and config.render.auto_rotate_symbols:
-            text_for_calc = text_render.auto_add_horizontal_tags(text_for_calc)
-
         lines, heights = text_render.calc_vertical(
             base_font, text_for_calc,
             max_height=99999, config=config, letter_spacing=letter_spacing
@@ -2021,11 +2025,6 @@ def render(
         if has_br_in_text:
             text_to_render = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text_to_render, flags=re.IGNORECASE)
 
-        # Automatically add horizontal tags for vertical text
-        render_horizontally = _resolve_region_render_horizontal(region)
-        if not render_horizontally and config.render.auto_rotate_symbols:
-            text_to_render = text_render.auto_add_horizontal_tags(text_to_render)
-
     if disable_font_border :
         bg = None
 
@@ -2035,10 +2034,11 @@ def render(
     r_orig = np.mean(norm_h / norm_v)
 
     render_horizontally = _resolve_region_render_horizontal(region)
-
-    # 如果最终判断为横排,删除所有 <H> 标签,防止打印出来
-    if render_horizontally:
-        text_to_render = re.sub(r'<H>(.*?)</H>', r'\1', text_to_render, flags=re.IGNORECASE | re.DOTALL)
+    text_to_render = text_render.prepare_text_for_direction_rendering(
+        text_to_render,
+        is_horizontal=render_horizontally,
+        auto_rotate_symbols=bool(getattr(config.render, 'auto_rotate_symbols', False)),
+    )
 
     letter_spacing = _resolve_letter_spacing_multiplier(region, config)
 

@@ -395,7 +395,7 @@
 
 - **上色模型 (colorizer)**：上色器类型
   - **none**：不上色（默认）
-  - **openai_colorizer**：调用 OpenAI 图像接口做整页上色
+  - **openai_colorizer**：调用 OpenAI 兼容 / 硅基流动 / 百炼原生图像接口做整页上色，会按 `API Base URL` 自动切换请求格式
   - **gemini_colorizer**：调用 Gemini 图像接口做整页上色
   - 其他上色模型
 
@@ -411,6 +411,7 @@
 - **AI 上色并发数 (ai_colorizer_concurrency)**：OpenAI Colorizer / Gemini Colorizer 的最大并发请求数
   - 批量模式下可限制同时发出的上色请求数量
   - 仅 Qt 桌面端显示，服务端网页配置页不显示
+  - AI 上色多图提示词会自动按图号说明角色：`Image 1` 是当前待上色页，后续图片会分别标注为参考图或历史已上色页
 
 ---
 
@@ -445,11 +446,18 @@
   - OpenAI Colorizer：`COLOR_OPENAI_API_KEY`、`COLOR_OPENAI_MODEL`、`COLOR_OPENAI_API_BASE`
   - Gemini Colorizer：`COLOR_GEMINI_API_KEY`、`COLOR_GEMINI_MODEL`、`COLOR_GEMINI_API_BASE`
   - 若未填写上色专用变量，会自动回退到普通 `OPENAI_*` 或 `GEMINI_*`
+  - `COLOR_OPENAI_API_BASE` 命中不同后端时会自动切换请求格式：
+    - 硅基流动 `https://api.siliconflow.cn/v1`
+    - 百炼原生 `https://dashscope.aliyuncs.com/api/v1` / `https://dashscope-intl.aliyuncs.com/api/v1`
+    - 火山引擎 / 其他 OpenAI 兼容接口
+  - 若启用 `use_custom_api_params`，`colorizer` 分组参数会自动映射到对应后端请求体
 
 - **AI 渲染环境变量**：API 渲染优先读取独立的渲染接口配置
   - OpenAI Renderer：`RENDER_OPENAI_API_KEY`、`RENDER_OPENAI_MODEL`、`RENDER_OPENAI_API_BASE`
   - Gemini Renderer：`RENDER_GEMINI_API_KEY`、`RENDER_GEMINI_MODEL`、`RENDER_GEMINI_API_BASE`
   - 若未填写渲染专用变量，会自动回退到普通 `OPENAI_*` 或 `GEMINI_*`
+  - `RENDER_OPENAI_API_BASE` 命中不同后端时也会自动切换请求格式，规则与 OpenAI Colorizer 一致
+  - 若启用 `use_custom_api_params`，`render` 分组参数会自动映射到对应后端请求体
 
 - **启用混合OCR (use_hybrid_ocr)**：启用混合 OCR（同时使用两个模型，提高准确率）
   - **日漫推荐组合**：`48px + mocr`

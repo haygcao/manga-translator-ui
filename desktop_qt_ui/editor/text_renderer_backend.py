@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 
 import cv2
 import numpy as np
@@ -156,10 +155,11 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
         if config_obj:
             config_obj._current_region = text_block
 
-        # 渲染文本预处理：不在 UI 层自动添加 <H> 标签
-        text_for_render = text_block.get_translation_for_rendering()
-        if text_block.horizontal:
-            text_for_render = re.sub(r'<H>(.*?)</H>', r'\1', text_for_render, flags=re.IGNORECASE | re.DOTALL)
+        text_for_render = text_render.prepare_text_for_direction_rendering(
+            text_block.get_translation_for_rendering(),
+            is_horizontal=text_block.horizontal,
+            auto_rotate_symbols=bool(render_params.get('auto_rotate_symbols')),
+        )
 
         # 使用 freetype 渲染器（稳定可靠）
         if text_block.horizontal:
