@@ -44,6 +44,7 @@ from .utils.path_manager import (
     get_work_image_path,
 )
 from .utils.translation_text import remove_trailing_period_if_needed
+from .utils.region_json_compat import repair_legacy_white_frame_center
 
 from .detection import dispatch as dispatch_detection, prepare as prepare_detection, unload as unload_detection
 from .upscaling import dispatch as dispatch_upscaling, prepare as prepare_upscaling, unload as unload_upscaling
@@ -1081,7 +1082,10 @@ class MangaTranslator:
                 # 用户在编辑器中设置的 stroke_width 应该覆盖原始的 default_stroke_width
                 if 'stroke_width' in region_data:
                     region_data['default_stroke_width'] = region_data.pop('stroke_width')
-                
+
+                if repair_legacy_white_frame_center(region_data):
+                    logger.info("Repaired legacy white-frame center in load_text JSON region")
+                 
                 # 确保 line_spacing 和 default_stroke_width 被正确传递
                 # 这些参数已经在 region_data 中，会被 TextBlock 构造函数接收
 

@@ -2018,8 +2018,8 @@ class EditorController(QObject):
         json_path = self._resolve_editor_json_path(source_path)
 
         json_regions = [dict(region) for region in regions]
-        for region in json_regions:
-            self._apply_white_frame_center(region)
+        # Persist the editor geometry as-is. load_text rendering uses a separate
+        # runtime copy with center patched to the white-frame center.
         export_service._save_regions_data_with_path(json_regions, json_path, source_path, mask, config_dict)
 
         self._save_current_inpainted_image(source_path, config_dict, mask)

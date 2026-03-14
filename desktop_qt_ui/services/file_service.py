@@ -19,6 +19,7 @@ from PIL import Image
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from manga_translator.utils import open_pil_image
 from manga_translator.utils.path_manager import find_json_path, is_work_image_path
+from manga_translator.utils.region_json_compat import repair_legacy_white_frame_center
 
 
 class FileService:
@@ -126,12 +127,38 @@ class FileService:
                                 if scaled_poly:
                                     scaled_lines.append(scaled_poly)
                             region['lines'] = scaled_lines
-                    
+
+                    if 'center' in region and isinstance(region['center'], (list, tuple)) and len(region['center']) >= 2:
+                        try:
+                            region['center'] = [
+                                float(region['center'][0]) / upscale_ratio,
+                                float(region['center'][1]) / upscale_ratio,
+                            ]
+                        except (TypeError, ValueError):
+                            self.logger.warning(f"Invalid center format in region: {region.get('center')}")
+
+                    if 'white_frame_rect_local' in region:
+                        wf_local = region['white_frame_rect_local']
+                        if isinstance(wf_local, (list, tuple)) and len(wf_local) == 4:
+                            try:
+                                region['white_frame_rect_local'] = [
+                                    float(value) / upscale_ratio for value in wf_local
+                                ]
+                            except (TypeError, ValueError):
+                                self.logger.warning(f"Invalid white_frame_rect_local format in region: {wf_local}")
+                     
                     # 缩放字体大小
                     if 'font_size' in region and region['font_size']:
                         original_font_size = region['font_size']
                         region['font_size'] = int(original_font_size / upscale_ratio)
                         self.logger.debug(f"Font size scaled: {original_font_size} → {region['font_size']}")
+
+            repaired_regions = 0
+            for region in regions:
+                if repair_legacy_white_frame_center(region):
+                    repaired_regions += 1
+            if repaired_regions:
+                self.logger.info(f"已自动修复 {repaired_regions} 个旧版白框中心错误区域")
 
             config = self.config_service.get_config()
             default_target_lang = config.translator.target_lang if config else None
