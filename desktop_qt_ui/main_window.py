@@ -195,75 +195,9 @@ class MainWindow(QMainWindow):
 
     def _apply_native_title_bar_theme(self, theme: str):
         """同步 Windows 原生标题栏颜色，避免深色内容区配浅色系统标题栏。"""
-        import sys
+        from main_view_parts.theme import apply_native_title_bar_theme
 
-        if sys.platform != "win32":
-            return
-
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            from PyQt6.QtGui import QColor
-
-            from main_view_parts.theme import get_theme_colors, is_dark_theme
-
-            hwnd = int(self.winId())
-            if not hwnd:
-                return
-
-            colors = get_theme_colors(theme)
-            dwmapi = ctypes.windll.dwmapi
-            user32 = ctypes.windll.user32
-
-            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-            DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19
-            DWMWA_BORDER_COLOR = 34
-            DWMWA_CAPTION_COLOR = 35
-            DWMWA_TEXT_COLOR = 36
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            SWP_FRAMECHANGED = 0x0020
-
-            def _to_colorref(value: str):
-                color = QColor(value)
-                return wintypes.DWORD(color.red() | (color.green() << 8) | (color.blue() << 16))
-
-            def _set_dwm_attr(attribute: int, data):
-                return dwmapi.DwmSetWindowAttribute(
-                    wintypes.HWND(hwnd),
-                    ctypes.c_uint(attribute),
-                    ctypes.byref(data),
-                    ctypes.sizeof(data),
-                )
-
-            is_dark_caption = is_dark_theme(theme)
-            dark_mode = ctypes.c_int(1 if is_dark_caption else 0)
-            result = _set_dwm_attr(DWMWA_USE_IMMERSIVE_DARK_MODE, dark_mode)
-            if result != 0:
-                _set_dwm_attr(DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, dark_mode)
-
-            caption_color = _to_colorref(colors["bg_window_shell"])
-            border_color = _to_colorref(colors["border_sidebar"])
-            text_color = _to_colorref(colors["text_bright"] if is_dark_caption else colors["text_accent"])
-
-            _set_dwm_attr(DWMWA_CAPTION_COLOR, caption_color)
-            _set_dwm_attr(DWMWA_BORDER_COLOR, border_color)
-            _set_dwm_attr(DWMWA_TEXT_COLOR, text_color)
-
-            user32.SetWindowPos(
-                wintypes.HWND(hwnd),
-                wintypes.HWND(0),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-            )
-        except Exception as exc:
-            self.logger.debug(f"应用原生标题栏主题失败: {exc}")
+        apply_native_title_bar_theme(self, theme, logger=self.logger)
     
     def _detect_windows_theme(self) -> str:
         """检测Windows系统主题（深色/浅色）
