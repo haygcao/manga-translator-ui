@@ -307,6 +307,7 @@ class YOLOOBBDetector(OfflineDetector):
                 self.logger.error(f"Patch shape: {patch.shape}")
                 continue
 
+            patch_shape = patch.shape[:2]
             if len(boxes) > 0:
                 all_boxes.append(boxes)
                 all_scores.append(scores)

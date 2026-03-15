@@ -16,7 +16,7 @@
   "mask_dilation_offset": 20,
   "use_custom_api_params": true,
   "translator": {
-    "translator": "original",
+    "translator": "openai",
     "target_lang": "CHS",
     "enable_streaming": false,
     "no_text_lang_skip": false,
