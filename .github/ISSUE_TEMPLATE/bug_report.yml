@@ -1,5 +1,5 @@
-name: 功能问题 / Bug 反馈
-description: 提交功能异常、崩溃、结果错误等问题（请尽量附上源文件、配置、日志、JSON 数据）
+name: 中文 | 功能问题 / Bug 反馈
+description: 中文模板：提交功能异常、崩溃、结果错误等问题（请尽量附上源文件、配置、日志、JSON 数据）
 title: "[BUG] "
 labels:
   - bug
