@@ -187,7 +187,6 @@ jobs:
         cp -r dict dist/manga-translator-cpu/_internal/
         cp -r doc dist/manga-translator-cpu/_internal/
         mkdir -p dist/manga-translator-cpu/_internal/desktop_qt_ui
-        cp -r desktop_qt_ui/styles dist/manga-translator-cpu/_internal/desktop_qt_ui/styles
         cp -r desktop_qt_ui/locales dist/manga-translator-cpu/_internal/desktop_qt_ui/locales
         cp packaging/VERSION dist/manga-translator-cpu/_internal/
         
@@ -197,7 +196,6 @@ jobs:
         cp -r dict dist/manga-translator-gpu/_internal/
         cp -r doc dist/manga-translator-gpu/_internal/
         mkdir -p dist/manga-translator-gpu/_internal/desktop_qt_ui
-        cp -r desktop_qt_ui/styles dist/manga-translator-gpu/_internal/desktop_qt_ui/styles
         cp -r desktop_qt_ui/locales dist/manga-translator-gpu/_internal/desktop_qt_ui/locales
         cp packaging/VERSION dist/manga-translator-gpu/_internal/
 

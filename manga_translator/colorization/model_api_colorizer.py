@@ -172,7 +172,7 @@ class BaseAPIColorizer(CommonColorizer):
                     reference_images.append(
                         {
                             "kind": "history_reference",
-                            "label": f"Previously colorized page {idx}",
+                            "label": f"Previously colorized history page {idx}",
                             "image_bytes": self._image_to_png_bytes(self._to_rgb_image(history_image)),
                         }
                     )
@@ -183,7 +183,7 @@ class BaseAPIColorizer(CommonColorizer):
 
             prompt_text = (
                 f"{prompt_text}\n\n"
-                "Previously colorized pages are attached separately. Use them only to keep cross-page palette, "
+                "Previously colorized history pages are attached separately. Use them only to keep cross-page palette, "
                 "character colors, materials, and lighting consistent. Do not change the current page composition."
             ).strip()
 
@@ -205,29 +205,35 @@ class BaseAPIColorizer(CommonColorizer):
         lines = [
             (prompt_text or "").strip(),
             "",
-            "Input image order:",
-            "1. Target manga page to colorize. Use this image for composition, panel layout, line art, and page content.",
+            "Attached image roles:",
+            "1. Image 1 (first attached image): target manga page to colorize. Use this image for composition, panel layout, line art, and page content.",
         ]
-        history_indices: list[int] = []
         for idx, ref in enumerate(reference_images, start=2):
             label = str(ref.get("label") or f"Reference image {idx - 1}").strip()
             kind = str(ref.get("kind") or "").strip().lower()
             if kind == "prompt_reference":
                 role_text = label or "general reference"
-                lines.append(f"{idx}. Prompt-file reference image. Role/purpose: {role_text}.")
+                lines.append(
+                    f"{idx}. Image {idx} ({_ordinal_label(idx)} attached image): prompt-file reference image. "
+                    f"Role/purpose: {role_text}."
+                )
             elif kind == "history_reference":
-                history_indices.append(idx)
+                history_text = label or f"Previously colorized history page {idx - 1}"
+                lines.append(
+                    f"{idx}. Image {idx} ({_ordinal_label(idx)} attached image): previously colorized history page "
+                    f"for cross-page consistency: {history_text}."
+                )
             else:
                 role_text = label or "general reference"
-                lines.append(f"{idx}. Reference image. Role/purpose: {role_text}.")
-        if history_indices:
-            history_ranges = ", ".join(_format_contiguous_index_ranges(history_indices))
-            lines.append(f"{history_ranges}. Previously colorized history pages for cross-page consistency.")
+                lines.append(
+                    f"{idx}. Image {idx} ({_ordinal_label(idx)} attached image): reference image. "
+                    f"Role/purpose: {role_text}."
+                )
         lines.extend(
             [
                 "",
-                "Use image 1 as the only page to colorize. Use images 2 and above only as reference images for palette, character consistency, materials, and lighting.",
-                "If a later image is marked as a previously colorized page, use it mainly for cross-page consistency.",
+                "Use Image 1 as the only page to colorize. Use Image 2 and above only as reference images for palette, character consistency, materials, and lighting.",
+                "If Image 2 or above is marked as a previously colorized history page, use it mainly for cross-page consistency.",
             ]
         )
         return "\n".join(lines).strip()
@@ -476,24 +482,17 @@ class GeminiColorizer(BaseAPIColorizer):
         return image_result
 
 
-def _format_contiguous_index_ranges(indices: list[int]) -> list[str]:
-    if not indices:
-        return []
-
-    sorted_indices = sorted(set(indices))
-    ranges: list[str] = []
-    start = prev = sorted_indices[0]
-    for current in sorted_indices[1:]:
-        if current == prev + 1:
-            prev = current
-            continue
-        ranges.append(_format_index_range(start, prev))
-        start = prev = current
-    ranges.append(_format_index_range(start, prev))
-    return ranges
-
-
-def _format_index_range(start: int, end: int) -> str:
-    if start == end:
-        return str(start)
-    return f"{start}-{end}"
+def _ordinal_label(index: int) -> str:
+    labels = {
+        1: "first",
+        2: "second",
+        3: "third",
+        4: "fourth",
+        5: "fifth",
+        6: "sixth",
+        7: "seventh",
+        8: "eighth",
+        9: "ninth",
+        10: "tenth",
+    }
+    return labels.get(index, f"{index}th")

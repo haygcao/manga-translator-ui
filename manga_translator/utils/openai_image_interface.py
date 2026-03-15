@@ -3,6 +3,7 @@ import io
 import json
 import re
 from typing import Awaitable, Callable, Optional
+from urllib.parse import urlparse
 
 from PIL import Image
 
@@ -13,6 +14,11 @@ _OPENAI_IMAGE_INTERFACE_CACHE: dict[tuple[str, str], str] = {}
 _OPENAI_IMAGE_INTERFACES = ("images/edits", "images/generations", "chat/completions")
 _ENDPOINT_FALLBACK_STATUS_CODES = {404, 405, 501}
 _DATA_URL_RE = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+")
+_IMAGE_API_BACKEND_DEFAULT = "default"
+_IMAGE_API_BACKEND_SILICONFLOW = "siliconflow"
+_IMAGE_API_BACKEND_VOLCENGINE = "volcengine"
+_IMAGE_API_BACKEND_DASHSCOPE = "dashscope"
+_IMAGE_API_BACKEND_XAI = "xai"
 
 
 async def request_openai_image_with_fallback(
@@ -45,6 +51,7 @@ async def request_openai_image_with_fallback(
     candidate_interfaces = _build_candidate_interfaces(
         cache_key=cache_key,
         has_extra_images=bool(extra_images),
+        base_url=base_url,
     )
 
     errors: list[str] = []
@@ -52,40 +59,57 @@ async def request_openai_image_with_fallback(
     for index, interface_name in enumerate(candidate_interfaces):
         next_interface_name = candidate_interfaces[index + 1] if index + 1 < len(candidate_interfaces) else None
         if interface_name == "images/edits":
-            if extra_images:
+            backend = _detect_image_api_backend(base_url)
+            if extra_images and backend != _IMAGE_API_BACKEND_XAI:
                 errors.append("images/edits skipped because reference images require chat/completions")
                 continue
-            multipart = CurlMime()
-            multipart.addpart(
-                name="image",
-                filename=filename,
-                content_type="image/png",
-                data=image_bytes,
-            )
-            try:
-                request_data = {
-                    "model": model_name,
-                    "prompt": prompt_text,
-                    "response_format": "b64_json",
-                }
-                if extra_request_params:
-                    request_data.update(
-                        {
-                            key: json.dumps(value, ensure_ascii=False)
-                            if isinstance(value, (dict, list))
-                            else value
-                            for key, value in extra_request_params.items()
-                        }
-                    )
+            if backend == _IMAGE_API_BACKEND_XAI:
+                request_json = _build_edits_request_json(
+                    base_url=base_url,
+                    model_name=model_name,
+                    prompt_text=prompt_text,
+                    image_bytes=image_bytes,
+                    extra_images=extra_images,
+                    extra_request_params=extra_request_params,
+                )
                 response = await session.post(
                     f"{base_url}/images/edits",
                     headers=headers,
-                    data=request_data,
-                    multipart=multipart,
+                    json=request_json,
                     timeout=timeout,
                 )
-            finally:
-                multipart.close()
+            else:
+                multipart = CurlMime()
+                multipart.addpart(
+                    name="image",
+                    filename=filename,
+                    content_type="image/png",
+                    data=image_bytes,
+                )
+                try:
+                    request_data = {
+                        "model": model_name,
+                        "prompt": prompt_text,
+                        "response_format": "b64_json",
+                    }
+                    if extra_request_params:
+                        request_data.update(
+                            {
+                                key: json.dumps(value, ensure_ascii=False)
+                                if isinstance(value, (dict, list))
+                                else value
+                                for key, value in extra_request_params.items()
+                            }
+                        )
+                    response = await session.post(
+                        f"{base_url}/images/edits",
+                        headers=headers,
+                        data=request_data,
+                        multipart=multipart,
+                        timeout=timeout,
+                    )
+                finally:
+                    multipart.close()
 
             if response.status_code == 200:
                 try:
@@ -123,73 +147,101 @@ async def request_openai_image_with_fallback(
             )
 
         if interface_name == "images/generations":
-            generation_images = [
-                f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
-            ]
-            generation_images.extend(
-                f"data:image/png;base64,{base64.b64encode(item['image_bytes']).decode('ascii')}"
-                for item in extra_images
-                if isinstance(item.get("image_bytes"), (bytes, bytearray))
+            generation_candidates = _build_generation_request_candidates(
+                base_url=base_url,
+                model_name=model_name,
+                prompt_text=prompt_text,
+                image_bytes=image_bytes,
+                extra_images=extra_images,
+                extra_request_params=extra_request_params,
             )
-            request_json = {
-                "model": model_name,
-                "prompt": prompt_text,
-                "response_format": "b64_json",
-            }
-            request_json.update(extra_request_params)
-            if generation_images:
-                request_json.setdefault(
-                    "image",
-                    generation_images if len(generation_images) > 1 else generation_images[0],
-                )
-            if len(generation_images) > 1:
-                request_json.setdefault("sequential_image_generation", "disabled")
+            generation_attempt_errors: list[str] = []
 
-            response = await session.post(
-                f"{base_url}/images/generations",
-                headers=headers,
-                json=request_json,
-                timeout=timeout,
-            )
-
-            if response.status_code == 200:
-                try:
-                    payload = response.json()
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"{provider_name} {base_url}/images/generations returned invalid JSON: "
-                        f"{summarize_exception_message(exc)}"
-                    ) from exc
-                image = await _extract_image_from_images_payload(
-                    payload=payload,
-                    fetch_remote_image=fetch_remote_image,
+            for generation_index, (payload_variant, request_json) in enumerate(generation_candidates):
+                next_payload_variant = (
+                    generation_candidates[generation_index + 1][0]
+                    if generation_index + 1 < len(generation_candidates)
+                    else None
                 )
-                if image is not None:
-                    _OPENAI_IMAGE_INTERFACE_CACHE[cache_key] = interface_name
-                    return image
-                errors.append("images/generations returned 200 but did not contain image data")
+                generation_endpoint = _resolve_generation_endpoint(base_url, payload_variant)
+                response = await session.post(
+                    generation_endpoint,
+                    headers=headers,
+                    json=request_json,
+                    timeout=timeout,
+                )
+
+                if response.status_code == 200:
+                    try:
+                        payload = response.json()
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"{provider_name} {base_url}/images/generations returned invalid JSON: "
+                            f"{summarize_exception_message(exc)}"
+                        ) from exc
+                    image = await _extract_image_from_images_payload(
+                        payload=payload,
+                        fetch_remote_image=fetch_remote_image,
+                    )
+                    if image is None:
+                        image = await _extract_image_from_chat_payload(
+                            payload=payload,
+                            fetch_remote_image=fetch_remote_image,
+                        )
+                    if image is not None:
+                        _OPENAI_IMAGE_INTERFACE_CACHE[cache_key] = interface_name
+                        return image
+                    errors.append("images/generations returned 200 but did not contain image data")
+                    break
+
+                if next_payload_variant and _should_try_next_generation_payload_variant(
+                    response.status_code,
+                    response.text,
+                ):
+                    _log_generation_payload_fallback(
+                        logger=logger,
+                        provider_name=provider_name,
+                        endpoint=generation_endpoint,
+                        status_code=response.status_code,
+                        payload_variant=payload_variant,
+                        next_payload_variant=next_payload_variant,
+                    )
+                    generation_attempt_errors.append(
+                        f"{payload_variant} HTTP {response.status_code}"
+                    )
+                    continue
+
+                if _should_try_next_interface(
+                    response.status_code,
+                    response.text,
+                    interface_name=interface_name,
+                ):
+                    _log_fallback(
+                        logger=logger,
+                        provider_name=provider_name,
+                        endpoint=generation_endpoint,
+                        status_code=response.status_code,
+                        next_interface_name=next_interface_name,
+                    )
+                    variant_prefix = ""
+                    if generation_attempt_errors:
+                        variant_prefix = (
+                            f"payload variants tried: {', '.join(generation_attempt_errors + [f'{payload_variant} HTTP {response.status_code}'])}; "
+                        )
+                    errors.append(
+                        f"images/generations {variant_prefix}HTTP {response.status_code}".strip()
+                    )
+                    break
+
+                raise RuntimeError(
+                    f"{provider_name} request failed at {generation_endpoint} "
+                    f"with status {response.status_code}: "
+                    f"{_response_text_preview(response.text)}"
+                )
+            else:
                 continue
 
-            if _should_try_next_interface(
-                response.status_code,
-                response.text,
-                interface_name=interface_name,
-            ):
-                _log_fallback(
-                    logger=logger,
-                    provider_name=provider_name,
-                    endpoint=f"{base_url}/images/generations",
-                    status_code=response.status_code,
-                    next_interface_name=next_interface_name,
-                )
-                errors.append(f"images/generations HTTP {response.status_code}")
-                continue
-
-            raise RuntimeError(
-                f"{provider_name} request failed at {base_url}/images/generations "
-                f"with status {response.status_code}: "
-                f"{_response_text_preview(response.text)}"
-            )
+            continue
 
         message_content = [
             {"type": "text", "text": prompt_text},
@@ -282,10 +334,20 @@ async def request_openai_image_with_fallback(
     )
 
 
-def _build_candidate_interfaces(*, cache_key: tuple[str, str], has_extra_images: bool) -> list[str]:
+def _build_candidate_interfaces(
+    *,
+    cache_key: tuple[str, str],
+    has_extra_images: bool,
+    base_url: Optional[str] = None,
+) -> list[str]:
     preferred_interface = _OPENAI_IMAGE_INTERFACE_CACHE.get(cache_key)
+    backend = _detect_image_api_backend(base_url or cache_key[0])
     if preferred_interface:
         default_order = [preferred_interface]
+    elif backend == _IMAGE_API_BACKEND_DASHSCOPE:
+        default_order = ["images/generations", "chat/completions", "images/edits"]
+    elif backend == _IMAGE_API_BACKEND_XAI:
+        default_order = ["images/edits", "images/generations", "chat/completions"]
     elif has_extra_images:
         default_order = ["images/generations", "chat/completions", "images/edits"]
     else:
@@ -307,6 +369,223 @@ def _normalize_extra_request_params(extra_request_params: Optional[dict]) -> dic
     return normalized
 
 
+def _detect_image_api_backend(base_url: str) -> str:
+    normalized_base_url = (base_url or "").strip().lower()
+    parsed = urlparse(normalized_base_url)
+    host = (parsed.netloc or parsed.path).lower()
+    path = parsed.path.lower() if parsed.netloc else ""
+    combined = f"{host}{path}"
+
+    if "siliconflow.cn" in combined:
+        return _IMAGE_API_BACKEND_SILICONFLOW
+
+    if host == "api.x.ai" or host.startswith("api.x.ai:"):
+        return _IMAGE_API_BACKEND_XAI
+
+    dashscope_hosts = {
+        "dashscope.aliyuncs.com",
+        "dashscope-intl.aliyuncs.com",
+    }
+    if host in dashscope_hosts and "/compatible-mode/" not in path:
+        if (
+            path.endswith("/api/v1")
+            or path.endswith("/api/v1/")
+            or path.endswith("/services/aigc/multimodal-generation/generation")
+        ):
+            return _IMAGE_API_BACKEND_DASHSCOPE
+
+    volcengine_host_markers = (
+        "volces.com",
+        "volcengineapi.com",
+    )
+    if (
+        any(marker in host for marker in volcengine_host_markers)
+        or host.startswith("ark.")
+        or path.endswith("/v3")
+        or "/v3/" in path
+    ):
+        return _IMAGE_API_BACKEND_VOLCENGINE
+
+    return _IMAGE_API_BACKEND_DEFAULT
+
+
+def _encode_generation_image(image_bytes: bytes) -> str:
+    return f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+
+
+def _build_edits_request_json(
+    *,
+    base_url: str,
+    model_name: str,
+    prompt_text: str,
+    image_bytes: bytes,
+    extra_images: Optional[list[dict]] = None,
+    extra_request_params: Optional[dict] = None,
+) -> dict:
+    backend = _detect_image_api_backend(base_url)
+    if backend == _IMAGE_API_BACKEND_XAI:
+        encoded_images = [_encode_generation_image(image_bytes)]
+        encoded_images.extend(
+            _encode_generation_image(item["image_bytes"])
+            for item in (extra_images or [])
+            if isinstance(item.get("image_bytes"), (bytes, bytearray))
+        )
+        image_items = [
+            {
+                "url": image_value,
+                "type": "image_url",
+            }
+            for image_value in encoded_images
+        ]
+        request_json = {
+            "model": model_name,
+            "prompt": prompt_text,
+        }
+        if len(image_items) == 1:
+            request_json["image"] = image_items[0]
+        else:
+            request_json["images"] = image_items
+        if extra_request_params:
+            request_json.update(extra_request_params)
+        return request_json
+
+    request_json = {
+        "model": model_name,
+        "prompt": prompt_text,
+        "response_format": "b64_json",
+    }
+    if extra_request_params:
+        request_json.update(extra_request_params)
+    return request_json
+
+
+def _build_generation_request_json(
+    *,
+    base_url: str,
+    model_name: str,
+    prompt_text: str,
+    image_bytes: bytes,
+    extra_images: Optional[list[dict]] = None,
+    extra_request_params: Optional[dict] = None,
+    backend_override: Optional[str] = None,
+) -> dict:
+    backend = backend_override or _detect_image_api_backend(base_url)
+    generation_images = [_encode_generation_image(image_bytes)]
+    generation_images.extend(
+        _encode_generation_image(item["image_bytes"])
+        for item in (extra_images or [])
+        if isinstance(item.get("image_bytes"), (bytes, bytearray))
+    )
+
+    request_json = {
+        "model": model_name,
+        "prompt": prompt_text,
+    }
+    if backend != _IMAGE_API_BACKEND_SILICONFLOW:
+        request_json["response_format"] = "b64_json"
+    if extra_request_params:
+        request_json.update(extra_request_params)
+
+    if not generation_images:
+        return request_json
+
+    if backend == _IMAGE_API_BACKEND_SILICONFLOW:
+        request_json.setdefault("image", generation_images[0])
+        for index, image_value in enumerate(generation_images[1:], start=2):
+            request_json.setdefault(f"image{index}", image_value)
+        return request_json
+
+    if backend == _IMAGE_API_BACKEND_DASHSCOPE:
+        content_parts = [{"image": image_value} for image_value in generation_images]
+        content_parts.append({"text": prompt_text})
+        request_json = {
+            "model": model_name,
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content_parts,
+                    }
+                ]
+            },
+            "parameters": dict(extra_request_params or {}),
+        }
+        return request_json
+
+    request_json.setdefault(
+        "image",
+        generation_images if len(generation_images) > 1 else generation_images[0],
+    )
+    if len(generation_images) > 1:
+        request_json.setdefault("sequential_image_generation", "disabled")
+    return request_json
+
+
+def _build_generation_request_candidates(
+    *,
+    base_url: str,
+    model_name: str,
+    prompt_text: str,
+    image_bytes: bytes,
+    extra_images: Optional[list[dict]] = None,
+    extra_request_params: Optional[dict] = None,
+) -> list[tuple[str, dict]]:
+    backend = _detect_image_api_backend(base_url)
+    if backend == _IMAGE_API_BACKEND_SILICONFLOW:
+        variant_order = [_IMAGE_API_BACKEND_SILICONFLOW]
+    elif backend == _IMAGE_API_BACKEND_DASHSCOPE:
+        variant_order = [_IMAGE_API_BACKEND_DASHSCOPE]
+    elif backend == _IMAGE_API_BACKEND_VOLCENGINE:
+        variant_order = [_IMAGE_API_BACKEND_DEFAULT]
+    else:
+        variant_order = [_IMAGE_API_BACKEND_DEFAULT, _IMAGE_API_BACKEND_SILICONFLOW]
+
+    candidates: list[tuple[str, dict]] = []
+    seen_payloads: set[str] = set()
+    for variant in variant_order:
+        payload = _build_generation_request_json(
+            base_url=base_url,
+            model_name=model_name,
+            prompt_text=prompt_text,
+            image_bytes=image_bytes,
+            extra_images=extra_images,
+            extra_request_params=extra_request_params,
+            backend_override=variant,
+        )
+        payload_key = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        if payload_key in seen_payloads:
+            continue
+        seen_payloads.add(payload_key)
+        candidates.append((variant, payload))
+    return candidates
+
+
+def _log_generation_payload_fallback(
+    *,
+    logger,
+    provider_name: str,
+    endpoint: str,
+    status_code: int,
+    payload_variant: str,
+    next_payload_variant: str,
+):
+    logger.warning(
+        f"{provider_name}: {endpoint} payload variant '{payload_variant}' failed "
+        f"(HTTP {status_code}), trying '{next_payload_variant}'."
+    )
+
+
+def _resolve_generation_endpoint(base_url: str, payload_variant: str) -> str:
+    normalized_base_url = (base_url or "").rstrip("/")
+    if payload_variant != _IMAGE_API_BACKEND_DASHSCOPE:
+        return f"{normalized_base_url}/images/generations"
+
+    dashscope_suffix = "/services/aigc/multimodal-generation/generation"
+    if normalized_base_url.endswith(dashscope_suffix):
+        return normalized_base_url
+    return f"{normalized_base_url}{dashscope_suffix}"
+
+
 def _log_fallback(*, logger, provider_name: str, endpoint: str, status_code: int, next_interface_name: Optional[str]):
     if not next_interface_name:
         return
@@ -314,6 +593,30 @@ def _log_fallback(*, logger, provider_name: str, endpoint: str, status_code: int
         f"{provider_name}: {endpoint} unavailable (HTTP {status_code}), "
         f"trying /{next_interface_name}."
     )
+
+
+def _should_try_next_generation_payload_variant(status_code: int, response_text: str) -> bool:
+    if status_code not in {400, 415, 422}:
+        return False
+
+    text = (response_text or "").lower()
+    non_payload_markers = (
+        "model does not exist",
+        "model not found",
+        "unknown model",
+        "invalid api key",
+        "unauthorized",
+        "authentication",
+        "insufficient quota",
+        "insufficient balance",
+        "rate limit",
+        "too many requests",
+        "content policy",
+        "safety",
+        "moderation",
+        "prompt blocked",
+    )
+    return not any(marker in text for marker in non_payload_markers)
 
 
 def _should_try_next_interface(status_code: int, response_text: str, interface_name: Optional[str] = None) -> bool:
@@ -458,7 +761,7 @@ async def _image_from_candidate(
         if isinstance(value, str):
             return await _image_from_string(value, fetch_remote_image)
 
-    for nested_key in ("image", "content", "output", "result"):
+    for nested_key in ("image", "content", "output", "result", "choices", "message", "messages"):
         nested_value = candidate.get(nested_key)
         image = await _extract_image_from_content(nested_value, fetch_remote_image)
         if image is not None:

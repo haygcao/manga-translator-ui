@@ -5,8 +5,6 @@ from functools import partial
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QLabel, QLineEdit
 
-from widgets.themed_message_box import show_error_dialog
-
 from utils.wheel_filter import NoWheelComboBox as QComboBox
 
 
@@ -70,11 +68,13 @@ def create_env_widgets(self, keys: list, current_values: dict):
 
             if "API_KEY" in key or "AUTH_KEY" in key or "TOKEN" in key:
                 test_button = QPushButton(self._t("Test"))
+                test_button.setProperty("chipButton", True)
                 test_button.setFixedWidth(60)
                 test_button.clicked.connect(partial(self._on_test_api_clicked, key))
                 self.env_layout.addWidget(test_button, row, 2)
             elif "MODEL" in key:
                 get_models_button = QPushButton(self._t("Get Models"))
+                get_models_button.setProperty("chipButton", True)
                 get_models_button.setFixedWidth(100)
                 get_models_button.clicked.connect(partial(self._on_get_models_clicked, key))
                 self.env_layout.addWidget(get_models_button, row, 2)
@@ -212,7 +212,13 @@ def _format_test_connection_error(api_type: str, message: str) -> str:
 def _show_api_error_dialog(parent, title: str, heading: str, details: str) -> None:
     from PyQt6.QtWidgets import QMessageBox
 
-    show_error_dialog(parent, heading or title, "", details, icon=QMessageBox.Icon.Critical)
+    QMessageBox.critical(parent, heading or title, details)
+
+
+def _show_api_success_dialog(parent, title: str, heading: str, details: str) -> None:
+    from PyQt6.QtWidgets import QMessageBox
+
+    QMessageBox.information(parent, heading or title, details)
 
 
 def _split_env_key(env_key: str) -> tuple[str, str, str]:
@@ -299,7 +305,6 @@ def on_test_api_clicked(self, key: str):
     import asyncio
 
     from PyQt6.QtCore import QThread
-    from PyQt6.QtWidgets import QMessageBox
 
     from widgets.themed_progress_dialog import create_progress_dialog
 
@@ -347,7 +352,13 @@ def on_test_api_clicked(self, key: str):
     def on_test_finished(success, message):
         progress.close()
         if success:
-            QMessageBox.information(self, self._t("Success"), self._t("API connection test successful!"))
+            success_details = _wrap_error_text(message) if message else self._t("API connection test successful!")
+            _show_api_success_dialog(
+                self,
+                self._t("Success"),
+                self._t("API connection test successful!"),
+                success_details,
+            )
         else:
             friendly_message = _format_test_connection_error(api_type, message)
             _show_api_error_dialog(

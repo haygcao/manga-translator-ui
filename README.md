@@ -16,6 +16,8 @@
 </div>
 
 
+**语言 / Language**: 简体中文
+
 一键翻译漫画图片中的文字，支持日漫、韩漫、美漫，黑白漫和彩漫均可识别。自动检测、翻译、嵌字，支持日语、中文、英语等多种语言，内置可视化编辑器可调整文本框。
 
 **💬 QQ 交流群：1079089991（密码：kP9#mB2!vR5*sL1）** | **🐛 [提交 Issue](https://github.com/hgmzhn/manga-translator-ui/issues)**
@@ -354,6 +356,7 @@ python -m manga_translator --help
 - [bilibili/ailab](https://github.com/bilibili/ailab) - Real-CUGAN 超分辨率模型
 - [the-database/MangaJaNai](https://github.com/the-database/MangaJaNai) - MangaJaNai/IllustrationJaNai 超分辨率模型
 - [lhj5426/YSG](https://github.com/lhj5426/YSG) - 提供模型支持
+- [huyvux3005/manga109-segmentation-bubble](https://huggingface.co/huyvux3005/manga109-segmentation-bubble) - MangaLens Bubble Segmentation 气泡分割模型
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 提供 OCR 模型支持
 - [kha-white/manga-ocr](https://github.com/kha-white/manga-ocr) - MangaOCR 模型支持
 - [jzhang533/PaddleOCR-VL-For-Manga](https://github.com/jzhang533/PaddleOCR-VL-For-Manga) - 提供 PaddleOCR-VL-For-Manga 模型支持
