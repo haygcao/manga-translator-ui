@@ -40,6 +40,12 @@ from manga_translator.utils import open_pil_image
 router = APIRouter(prefix="/translate", tags=["translation"])
 
 
+def _get_translator_name(config) -> str:
+    if hasattr(config, 'translator') and hasattr(config.translator, 'translator'):
+        return config.translator.translator
+    return "unknown"
+
+
 # ============================================================================
 # Basic Translation Endpoints (JSON format)
 # ============================================================================
@@ -213,8 +219,17 @@ async def translate_json_form(req: Request, image: UploadFile = File(...), confi
     """Translate image (form upload) and return JSON format result"""
     img = await image.read()
     conf = parse_config(config)
-    ctx = await get_ctx(req, conf, img, "save_json")
-    return to_translation(ctx)
+    username, ip_address = await verify_translation_auth(req, conf)
+    translator = _get_translator_name(conf)
+    conf._username = username
+    track_task_start(username)
+
+    try:
+        log_translation_task_created(username, ip_address, translator, conf)
+        ctx = await get_ctx(req, conf, img, "save_json")
+        return to_translation(ctx)
+    finally:
+        track_task_end(username)
 
 
 @router.post("/with-form/bytes", response_class=StreamingResponse, tags=["api", "form"],
@@ -223,8 +238,17 @@ async def bytes_form(req: Request, image: UploadFile = File(...), config: str = 
     """Translate image (form upload) and return custom byte format result"""
     img = await image.read()
     conf = parse_config(config)
-    ctx = await get_ctx(req, conf, img, "save_json")
-    return StreamingResponse(content=to_translation(ctx).to_bytes())
+    username, ip_address = await verify_translation_auth(req, conf)
+    translator = _get_translator_name(conf)
+    conf._username = username
+    track_task_start(username)
+
+    try:
+        log_translation_task_created(username, ip_address, translator, conf)
+        ctx = await get_ctx(req, conf, img, "save_json")
+        return StreamingResponse(content=to_translation(ctx).to_bytes())
+    finally:
+        track_task_end(username)
 
 
 @router.post("/with-form/image", response_description="the result image", tags=["api", "form"],
@@ -233,16 +257,25 @@ async def image_form(req: Request, image: UploadFile = File(...), config: str = 
     """Translate image (form upload) and return result image"""
     img = await image.read()
     conf = parse_config(config)
-    ctx = await get_ctx(req, conf, img, "normal")
-    
-    if not ctx.result:
-        raise HTTPException(500, detail="Translation failed: no result image generated")
-    
-    img_byte_arr = io.BytesIO()
-    ctx.result.save(img_byte_arr, format="PNG")
-    img_byte_arr.seek(0)
+    username, ip_address = await verify_translation_auth(req, conf)
+    translator = _get_translator_name(conf)
+    conf._username = username
+    track_task_start(username)
 
-    return StreamingResponse(img_byte_arr, media_type="image/png")
+    try:
+        log_translation_task_created(username, ip_address, translator, conf)
+        ctx = await get_ctx(req, conf, img, "normal")
+
+        if not ctx.result:
+            raise HTTPException(500, detail="Translation failed: no result image generated")
+
+        img_byte_arr = io.BytesIO()
+        ctx.result.save(img_byte_arr, format="PNG")
+        img_byte_arr.seek(0)
+
+        return StreamingResponse(img_byte_arr, media_type="image/png")
+    finally:
+        track_task_end(username)
 
 
 # ============================================================================

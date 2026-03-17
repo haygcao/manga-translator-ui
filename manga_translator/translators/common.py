@@ -87,6 +87,57 @@ class InvalidServerResponse(Exception):
     pass
 
 
+def _extract_http_error_details(response) -> str:
+    raw_text = summarize_response_text(
+        getattr(response, "text", ""),
+        empty_placeholder="(empty response)",
+    )
+    try:
+        payload = response.json()
+    except Exception:
+        return raw_text
+
+    if not isinstance(payload, dict):
+        return raw_text
+
+    details: List[str] = []
+    error_obj = payload.get("error")
+    if isinstance(error_obj, dict):
+        for key in ("code", "type", "param"):
+            value = error_obj.get(key)
+            if value not in (None, ""):
+                details.append(f"{key}={value}")
+        message = error_obj.get("message")
+        if message:
+            details.append(str(message))
+    else:
+        for key in ("code", "type"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                details.append(f"{key}={value}")
+        for key in ("message", "msg", "detail"):
+            value = payload.get(key)
+            if value:
+                details.append(str(value))
+                break
+        data_value = payload.get("data")
+        if data_value not in (None, "", [], {}):
+            try:
+                data_text = json.dumps(data_value, ensure_ascii=False)
+            except Exception:
+                data_text = str(data_value)
+            details.append(f"data={summarize_response_text(data_text, limit=400)}")
+
+    try:
+        raw_json = json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        raw_json = raw_text
+
+    if details:
+        return f"{'; '.join(details)} | raw={summarize_response_text(raw_json, limit=800)}"
+    return summarize_response_text(raw_json, limit=800, empty_placeholder="(empty response)")
+
+
 
 class LanguageUnsupportedException(Exception):
     def __init__(self, language_code: str, translator: str = None, supported_languages: List[str] = None):
@@ -180,13 +231,10 @@ class AsyncOpenAICurlCffi:
                 print(f"[AsyncOpenAICurlCffi] Error - URL: {url}")
                 print(f"[AsyncOpenAICurlCffi] Error - Status: {response.status_code}")
                 print(f"[AsyncOpenAICurlCffi] Error - Response: {summarize_response_text(response.text)}")
-                error_msg = f"API request failed with status {response.status_code}"
-                try:
-                    error_data = response.json()
-                    if "error" in error_data:
-                        error_msg = f"{error_msg}: {error_data['error'].get('message', '')}"
-                except Exception:
-                    error_msg = f"{error_msg}: {summarize_response_text(response.text)}"
+                error_msg = (
+                    f"API request failed with status {response.status_code}: "
+                    f"{_extract_http_error_details(response)}"
+                )
                 raise Exception(error_msg)
 
             result = response.json()
@@ -265,13 +313,10 @@ class AsyncOpenAICurlCffi:
                 print(f"[AsyncOpenAICurlCffi] List Error - URL: {url}")
                 print(f"[AsyncOpenAICurlCffi] List Error - Status: {response.status_code}")
                 print(f"[AsyncOpenAICurlCffi] List Error - Response: {summarize_response_text(response.text)}")
-                error_msg = f"API request failed with status {response.status_code}"
-                try:
-                    error_data = response.json()
-                    if "error" in error_data:
-                        error_msg = f"{error_msg}: {error_data['error'].get('message', '')}"
-                except Exception:
-                    error_msg = f"{error_msg}: {summarize_response_text(response.text)}"
+                error_msg = (
+                    f"API request failed with status {response.status_code}: "
+                    f"{_extract_http_error_details(response)}"
+                )
                 raise Exception(error_msg)
 
             # 检查响应内容类型

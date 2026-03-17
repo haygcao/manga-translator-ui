@@ -7,7 +7,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, Header, HTTPException, Query
+from fastapi import Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 
 from manga_translator.server.core.account_service import AccountService
@@ -93,17 +93,14 @@ def create_error_response(
 # 认证依赖函数
 async def require_auth(
     x_session_token: Optional[str] = Header(None, alias="X-Session-Token"),
-    token: Optional[str] = Query(None, description="会话令牌（用于下载器兼容）")
 ) -> Session:
     """
     FastAPI 依赖函数：要求用户认证（管理员或普通用户）
     
     验证会话令牌并返回会话对象。如果令牌无效或缺失，抛出 401 错误。
-    支持从请求头或 URL 查询参数获取令牌（用于下载器兼容）。
     
     Args:
         x_session_token: 从请求头获取的会话令牌
-        token: 从 URL 查询参数获取的会话令牌（用于 IDM 等下载器）
     
     Returns:
         Session: 验证通过的会话对象
@@ -113,8 +110,7 @@ async def require_auth(
     """
     _, session_service, _ = get_services()
     
-    # 优先使用请求头，其次使用 URL 参数
-    session_token = x_session_token or token
+    session_token = x_session_token
     
     # 检查令牌是否存在
     if not session_token:

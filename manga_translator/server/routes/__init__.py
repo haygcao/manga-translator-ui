@@ -20,25 +20,9 @@ from manga_translator.server.routes.resources import router as resources_router
 from manga_translator.server.routes.translation import router as translation_router
 from manga_translator.server.routes.users import router as users_router
 from manga_translator.server.routes.web import router as web_router
-
-# Cleanup routes - 延迟导入避免循环依赖
-try:
-    from manga_translator.server.routes.cleanup import (
-        init_auto_cleanup_scheduler,
-        init_cleanup_routes,
-    )
-    from manga_translator.server.routes.cleanup import router as cleanup_router
-except ImportError as e:
-    import logging
-    logging.getLogger(__name__).warning(f"Cleanup routes not available: {e}")
-    cleanup_router = None
-    init_cleanup_routes = None
-    init_auto_cleanup_scheduler = None
 from manga_translator.server.routes.config_management import (
     router as config_management_router,
 )
-from manga_translator.server.routes.locales import init_locales_routes
-from manga_translator.server.routes.locales import router as locales_router
 from manga_translator.server.routes.logs import logs_router
 
 # Import sessions router
@@ -61,12 +45,7 @@ __all__ = [
     'init_history_routes',
     'quota_router',
     'init_quota_routes',
-    'cleanup_router',
-    'init_cleanup_routes',
-    'init_auto_cleanup_scheduler',
     'config_management_router',
     'logs_router',
-    'locales_router',
-    'init_locales_routes',
     'sessions_router',
 ]

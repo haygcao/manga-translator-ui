@@ -660,7 +660,7 @@
                         saveTokenAndRedirect();
                     }
                 } else {
-                    showError(data.message || '登录失败，请检查用户名和密码');
+                    showError(data.detail || data.message || '登录失败，请检查用户名和密码');
                     btn.disabled = false;
                     btn.textContent = '登录';
                 }

@@ -602,7 +602,6 @@ docker run -e MANGA_TRANSLATOR_ADMIN_PASSWORD=your_password_here ...
 |------|------|------|
 | `/config` | GET | 获取配置结构（支持 mode 参数：user/authenticated/admin） |
 | `/config/defaults` | GET | 获取服务器默认配置 |
-| `/config/structure` | GET | 获取完整配置结构（管理员） |
 | `/config/options` | GET | 获取配置选项（翻译器、语言等） |
 | `/translator-config/{translator}` | GET | 获取指定翻译器的配置信息 |
 
@@ -614,32 +613,50 @@ docker run -e MANGA_TRANSLATOR_ADMIN_PASSWORD=your_password_here ...
 | `/translators` | GET | 获取可用翻译器列表（支持 mode 参数） |
 | `/languages` | GET | 获取可用目标语言列表（支持 mode 参数） |
 | `/workflows` | GET | 获取可用工作流列表（支持 mode 参数） |
+| `/i18n/languages` | GET | 获取可用界面语言列表 |
+| `/i18n/{locale}` | GET | 获取指定界面语言翻译 |
+| `/announcement` | GET | 获取当前公告 |
 
-### 用户设置端点
+### 用户侧配置端点
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/user/settings` | GET | 获取用户设置（包含用户组配额） |
+| `/user/access` | GET | 获取用户访问策略（是否要求密码） |
+| `/api-key-policy` | GET | 获取 API Key 使用策略 |
+| `/env` | GET | 获取当前用户可见的 API Keys（需登录，且受管理员策略控制） |
+| `/env` | POST | 保存当前用户 API Keys（需登录，且受管理员策略控制） |
+| `/api/config/user` | GET | 获取当前用户的配置 |
+| `/api/config/user` | PUT | 保存当前用户的配置 |
+| `/api/presets` | GET | 获取当前用户可见的配置预设 |
+| `/api/presets/{preset_id}/apply` | POST | 应用配置预设到当前用户 |
 
 ### 管理员端点 (`/admin`)
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/admin/need-setup` | GET | 检查是否需要首次设置 |
-| `/admin/setup` | POST | 首次设置管理员密码 |
-| `/admin/login` | POST | 管理员登录（旧版，建议用 /auth/login） |
-| `/admin/change-password` | POST | 修改管理员密码 |
 | `/admin/settings` | GET/POST/PUT | 获取/更新管理员设置 |
-| `/admin/settings/parameter-visibility` | POST | 更新参数可见性设置 |
-| `/admin/server-config` | GET/POST | 获取/更新服务器配置 |
 | `/admin/announcement` | PUT | 更新公告 |
 | `/admin/tasks` | GET | 获取所有活动任务 |
 | `/admin/tasks/{task_id}/cancel` | POST | 取消指定任务（支持 force 参数） |
 | `/admin/logs` | GET | 获取日志（支持筛选和分页） |
 | `/admin/logs/export` | GET | 导出日志为文本文件 |
-| `/admin/env-vars` | GET/POST | 获取/保存环境变量 |
 | `/admin/storage/info` | GET | 获取存储使用情况 |
 | `/admin/cleanup/{target}` | POST | 清理指定目录（uploads/results/cache/all） |
+
+### 管理员配置端点 (`/api/admin`)
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/admin/config/server` | GET | 获取服务器配置 |
+| `/api/admin/config/server` | PUT | 更新服务器配置 |
+| `/api/admin/config/backups` | GET | 获取服务器配置备份列表 |
+| `/api/admin/config/restore` | POST | 从备份恢复服务器配置 |
+| `/api/admin/presets` | POST | 创建配置预设 |
+| `/api/admin/presets` | GET | 获取全部配置预设 |
+| `/api/admin/presets/{preset_id}` | GET | 获取指定配置预设 |
+| `/api/admin/presets/{preset_id}` | PUT | 更新指定配置预设 |
+| `/api/admin/presets/{preset_id}` | DELETE | 删除指定配置预设 |
 
 ### 用户管理端点 (`/api/admin/users`)
 
@@ -689,18 +706,33 @@ docker run -e MANGA_TRANSLATOR_ADMIN_PASSWORD=your_password_here ...
 | `/api/resources/fonts/by-name/{filename}` | DELETE | 按文件名删除字体 |
 | `/api/resources/stats` | GET | 获取资源统计信息 |
 
+### 服务器级文件端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/upload/font` | POST | 上传服务器字体（管理员） |
+| `/fonts/{filename}` | DELETE | 删除服务器字体（管理员） |
+| `/upload/prompt` | POST | 上传服务器提示词（管理员） |
+| `/prompts` | GET | 获取服务器提示词列表（管理员） |
+| `/prompts/{filename}` | GET | 获取指定服务器提示词内容（管理员） |
+| `/prompts/{filename}` | DELETE | 删除指定服务器提示词（管理员） |
+
 ### 历史记录端点 (`/api/history`)
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
+| `/api/history/downloads/t/{ticket}` | GET/HEAD | 使用短时 ticket 下载文件 |
 | `/api/history` | GET | 获取用户翻译历史（支持筛选） |
 | `/api/history/search` | GET | 搜索翻译历史 |
 | `/api/history/admin/all` | GET | 管理员查看所有历史（支持分页） |
+| `/api/history/batch-download-ticket` | POST | 为批量历史下载创建短时 ticket |
+| `/api/history/batch-download` | POST | 直接批量下载多个会话 |
 | `/api/history/{session_token}` | GET | 获取会话详情 |
 | `/api/history/{session_token}` | DELETE | 删除翻译会话 |
-| `/api/history/{session_token}/download` | GET | 下载会话结果（ZIP） |
+| `/api/history/{session_token}/download-ticket` | POST | 为单个会话 ZIP 下载创建短时 ticket |
+| `/api/history/{session_token}/download` | GET | 直接下载会话结果（ZIP） |
 | `/api/history/{session_token}/file/{filename}` | GET | 获取历史记录中的单个文件 |
-| `/api/history/batch-download` | POST | 批量下载多个会话 |
+| `/api/history/{session_token}/file/{filename}/download-ticket` | POST | 为历史单文件下载创建短时 ticket |
 
 ### 配额管理端点 (`/api`)
 
@@ -712,24 +744,21 @@ docker run -e MANGA_TRANSLATOR_ADMIN_PASSWORD=your_password_here ...
 | `/api/admin/quota/reset` | POST | 重置配额（管理员） |
 | `/api/admin/quota/set-limits` | POST | 设置配额限制（管理员） |
 
-### 清理管理端点 (`/api/admin/cleanup`)
+### 日志端点 (`/api/logs`)
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/admin/cleanup/rules` | GET | 获取所有清理规则 |
-| `/api/admin/cleanup/rules` | POST | 创建清理规则 |
-| `/api/admin/cleanup/rules/{rule_id}` | DELETE | 删除清理规则 |
-| `/api/admin/cleanup/manual` | POST | 执行手动清理 |
-| `/api/admin/cleanup/preview` | POST | 预览清理结果 |
-| `/api/admin/cleanup/auto/status` | GET | 获取自动清理状态 |
-| `/api/admin/cleanup/auto/trigger` | POST | 手动触发自动清理 |
-| `/api/admin/cleanup/auto/history` | GET | 获取自动清理历史 |
-
-### 日志端点
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/logs` | GET | 获取实时日志（旧版） |
+| `/api/logs` | GET | 获取当前任务日志（支持按 task_id 过滤） |
+| `/api/logs/user` | GET | 获取当前用户日志 |
+| `/api/logs/search` | GET | 搜索日志 |
+| `/api/logs/session/{session_token}` | GET | 获取指定会话日志 |
+| `/api/logs/session/{session_token}/export` | GET | 导出指定会话日志 |
+| `/api/logs/session/{session_token}/clear` | DELETE | 清空指定会话日志 |
+| `/api/logs/admin/system` | GET | 获取系统日志（管理员） |
+| `/api/logs/admin/sessions` | GET | 获取全部会话日志（管理员） |
+| `/api/logs/admin/export` | POST | 批量导出会话日志（管理员） |
+| `/api/logs/admin/statistics` | GET | 获取日志统计（管理员） |
+| `/api/logs/admin/cleanup` | POST | 清理旧日志（管理员） |
 
 ### 翻译端点 (`/translate`)
 
@@ -834,21 +863,6 @@ if response.status_code == 200:
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/translate/complete` | POST | 翻译图片，返回完整结果（JSON + 图片，multipart 格式） |
-
-**结果管理端点**：
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/results/list` | GET | 列出所有结果目录 |
-| `/result/{folder_name}/final.png` | GET | 获取指定结果图片 |
-| `/results/{folder_name}` | DELETE | 删除指定结果目录 |
-| `/results/clear` | DELETE | 清空所有结果目录 |
-
-**维护端点**：
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/cleanup/temp` | POST | 清理临时文件（默认清理24小时前的文件） |
 
 ---
 
@@ -1143,51 +1157,35 @@ with open('manga.jpg', 'rb') as img, \
 3. 支持模糊匹配（标准化后匹配）
 4. 更新 `translation` 字段
 
-### 临时文件清理
+### 历史记录下载
 
-流式端点（`/stream`）会在 `result` 目录中生成临时文件。为了避免磁盘空间占用，建议定期清理。
+当前推荐通过短时 `ticket` 下载历史文件，这样浏览器和 `IDM` 都可以使用，同时不会把会话 token 暴露在 URL 里。
 
-**清理端点**：
-```python
-POST /cleanup/temp?max_age_hours=24
-```
-
-**参数**：
-- `max_age_hours` - 清理多少小时前的临时文件（默认：24小时）
-
-**返回示例**：
-```json
-{
-  "deleted": 15,
-  "message": "Successfully cleaned up 15 temporary files older than 24 hours"
-}
-```
-
-**使用示例**：
+**推荐流程**：
 ```python
 import requests
 
-# 清理24小时前的临时文件（默认）
-response = requests.post('http://localhost:8000/cleanup/temp')
-result = response.json()
-print(f"已清理 {result['deleted']} 个临时文件")
+headers = {'X-Session-Token': token}
 
-# 清理1小时前的临时文件
-response = requests.post('http://localhost:8000/cleanup/temp?max_age_hours=1')
-result = response.json()
-print(f"已清理 {result['deleted']} 个临时文件")
+# 1. 申请短时下载 ticket
+ticket_response = requests.post(
+    f'http://localhost:8000/api/history/{session_token}/download-ticket',
+    headers=headers
+)
+ticket = ticket_response.json()
+
+# 2. 使用返回的短时链接下载
+download_url = f"http://localhost:8000{ticket['url']}"
+response = requests.get(download_url)
+
+with open('history.zip', 'wb') as f:
+    f.write(response.content)
 ```
 
-**建议**：
-- 在生产环境中，建议使用定时任务（如 cron）定期调用清理端点
-- 开发环境可以设置较短的清理时间（如 1 小时）
-- 生产环境建议设置较长的清理时间（如 24-48 小时）
-
-**注意**：
-- 只会清理 `result` 目录中以 `temp_` 开头的文件和文件夹
-- 正在使用的文件会被跳过（Windows 文件锁定）
-- 清理操作是安全的，不会影响正在进行的翻译任务
-- `DELETE /results/clear` - 清空所有结果目录
+**说明**：
+- `POST /api/history/{session_token}/download-ticket` 需要携带 `X-Session-Token`
+- 返回的 `ticket URL` 为短时有效链接，适合浏览器直接下载，也适合交给 `IDM`
+- 如果是脚本直连，也可以继续使用带认证头的 `/api/history/{session_token}/download` 和 `/api/history/batch-download`
 
 **支持的工作流程**：
 - `normal` - 正常翻译（默认）
@@ -1510,11 +1508,15 @@ print(f"今日已用: {quota['used_today']}/{quota['daily_limit']}")
 response = requests.get('http://localhost:8000/api/history', headers=headers)
 history = response.json()
 
-# 下载历史记录
-response = requests.get(
-    f'http://localhost:8000/api/history/{session_token}/download',
+# 申请短时下载 ticket
+ticket_response = requests.post(
+    f'http://localhost:8000/api/history/{session_token}/download-ticket',
     headers=headers
 )
+ticket = ticket_response.json()
+
+# 使用 ticket 下载历史记录
+response = requests.get(f"http://localhost:8000{ticket['url']}")
 with open('history.zip', 'wb') as f:
     f.write(response.content)
 ```

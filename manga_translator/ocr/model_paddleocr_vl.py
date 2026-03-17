@@ -1,8 +1,8 @@
 """
-PaddleOCR-VL for Manga OCR Model
+PaddleOCR-VL-1.5 OCR Model
 
-基于 PaddleOCR-VL 的漫画文字识别模型
-模型来源: https://huggingface.co/jzhang533/PaddleOCR-VL-For-Manga
+基于 PaddleOCR-VL-1.5 的 OCR 模型
+模型来源: https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5
 """
 
 import os
@@ -23,20 +23,20 @@ from .common import OfflineOCR
 
 class ModelPaddleOCRVL(OfflineOCR):
     """
-    PaddleOCR-VL for Manga OCR 模型
+    PaddleOCR-VL-1.5 OCR 模型
 
-    这是一个基于 VLM 的 OCR 模型，专门针对日本漫画进行了微调。
+    这是一个基于 VLM 的 OCR 模型。
     模型使用 transformers 库加载，支持 GPU 加速。
     """
 
     _MODEL_MAPPING = {
         'model': {
             'url': [
-                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/paddleocr_vl.7z',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/PaddleOCR-VL-1.5.7z',
             ],
-            'hash': 'a84de910b06126af371c8092396f2943b99cbd6cf9a20fa88dd432ef74ded674',
+            'hash': '6427e6fbe68f28cdb99594ea39d98d6169f38f04d386b0f4eb62cc176510c2eb',
             'archive': {
-                'paddleocr_vl/': '.',
+                'PaddleOCR-VL-1.5/': '.',
             },
         },
         # 48px 颜色预测模型
@@ -57,7 +57,7 @@ class ModelPaddleOCRVL(OfflineOCR):
     }
 
     # 模型子目录名（在 models/ocr/ 下）
-    MODEL_DIR_NAME = "paddleocr_vl"
+    MODEL_DIR_NAME = "PaddleOCR-VL-1.5"
     _OCR_VL_LANGUAGE_HINTS = {
         "auto": "OCR: Extract all text.",
         "multilingual": "OCR: Extract all multilingual text.",
@@ -125,7 +125,7 @@ class ModelPaddleOCRVL(OfflineOCR):
         import warnings
         warnings.filterwarnings('ignore', message='.*slow image processor.*')
 
-        # 确定模型路径 - 使用 models/ocr/paddleocr_vl
+        # 确定模型路径 - 使用 models/ocr/PaddleOCR-VL-1.5
         model_path = os.path.join(self.model_dir, self.MODEL_DIR_NAME)
         
         # 自动修补模型文件
@@ -142,7 +142,7 @@ class ModelPaddleOCRVL(OfflineOCR):
 
         if not os.path.exists(model_path) or not os.path.exists(os.path.join(model_path, "config.json")):
             # 如果本地没有，尝试从 HuggingFace 加载
-            model_path = "jzhang533/PaddleOCR-VL-For-Manga"
+            model_path = "PaddlePaddle/PaddleOCR-VL-1.5"
         else:
             # Windows 中文路径兼容：使用 tokenizers 后端（use_fast=True）避免 sentencepiece 路径问题
             # 通过切换工作目录使用相对路径来规避

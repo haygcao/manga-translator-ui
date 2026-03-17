@@ -10,7 +10,7 @@
 [![模型](https://img.shields.io/badge/Model-MangaLens%20Bubble%20Segmentation-orange?logo=huggingface)](https://huggingface.co/huyvux3005/manga109-segmentation-bubble)
 [![OCR](https://img.shields.io/badge/OCR-PaddleOCR-blue)](https://github.com/PaddlePaddle/PaddleOCR)
 [![OCR](https://img.shields.io/badge/OCR-MangaOCR-blue)](https://github.com/kha-white/manga-ocr)
-[![OCR](https://img.shields.io/badge/OCR-PaddleOCR--VL-blue)](https://github.com/jzhang533/PaddleOCR-VL-For-Manga)
+[![OCR](https://img.shields.io/badge/OCR-PaddleOCR--VL--1.5-blue)](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5)
 [![许可证](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-GPL--3.0-red)](LICENSE)
 
 </div>
@@ -359,7 +359,7 @@ python -m manga_translator --help
 - [huyvux3005/manga109-segmentation-bubble](https://huggingface.co/huyvux3005/manga109-segmentation-bubble) - MangaLens Bubble Segmentation 气泡分割模型
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 提供 OCR 模型支持
 - [kha-white/manga-ocr](https://github.com/kha-white/manga-ocr) - MangaOCR 模型支持
-- [jzhang533/PaddleOCR-VL-For-Manga](https://github.com/jzhang533/PaddleOCR-VL-For-Manga) - 提供 PaddleOCR-VL-For-Manga 模型支持
+- [PaddlePaddle/PaddleOCR-VL-1.5](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5) - 官方 PaddleOCR-VL-1.5 模型页
 - 所有贡献者和用户的支持
 
 ---

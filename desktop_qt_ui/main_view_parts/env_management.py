@@ -156,16 +156,28 @@ def _wrap_error_text(message: str, width: int = 60) -> str:
 
 def _format_test_connection_error(api_type: str, message: str) -> str:
     raw_message = str(message or "").strip()
-    error_lower = raw_message.lower()
+    analysis_message = raw_message
+    for prefix in ("连接失败:", "连接失败：", "api connection failed:", "connection failed:"):
+        if analysis_message.lower().startswith(prefix):
+            analysis_message = analysis_message[len(prefix):].strip()
+            break
+    error_lower = analysis_message.lower()
 
     network_keywords = (
         "connection",
+        "connect",
+        "failed to connect",
+        "could not connect to server",
         "cannot connect to host",
         "connection refused",
         "connection reset",
+        "connection timed out",
         "network",
         "timeout",
         "timed out",
+        "timed out after",
+        "curl: (7)",
+        "curl: (28)",
         "dns",
         "host",
         "hostname",
@@ -182,15 +194,43 @@ def _format_test_connection_error(api_type: str, message: str) -> str:
         "主机",
     )
 
+    service_keywords = (
+        "502",
+        "503",
+        "504",
+        "service unavailable",
+        "server error",
+        "bad gateway",
+        "gateway timeout",
+        "upstream",
+        "overloaded",
+        "distributor",
+        "channel",
+        "unavailable",
+        "not available",
+        "无可用渠道",
+        "渠道",
+        "服务不可用",
+        "服务异常",
+        "站点异常",
+        "模型不可用",
+    )
+
     is_network_error = any(keyword in error_lower for keyword in network_keywords)
+    is_service_error = any(keyword in error_lower for keyword in service_keywords)
 
     if is_network_error:
         friendly_message = (
             "检测到连接错误、超时或 Host 解析错误。\n"
-            "请检查网络连接，并尝试开启 TUN（虚拟网卡模式）。"
+            "请先检查模型、API 地址和 API 密钥是否正确；如果配置无误，再检查网络连接，并尝试开启 TUN（虚拟网卡模式）。"
+        )
+    elif is_service_error:
+        friendly_message = (
+            "请先检查模型、API 地址和 API 密钥是否正确。\n"
+            "如果配置无误，这也可能是 API 站点、中转渠道或服务端暂时异常，或当前网络链路不稳定；建议稍后重试，或更换 API 站点 / 渠道。"
         )
     else:
-        friendly_message = "请检查 API 密钥和地址。"
+        friendly_message = "请检查模型、API 地址和 API 密钥是否正确。"
 
     friendly_message += f"\n\nAPI 地址示例：{_get_api_address_example(api_type)}"
     if raw_message:

@@ -353,7 +353,7 @@ class HistoryManagementService:
         
         # Create temporary ZIP file
         temp_dir = tempfile.gettempdir()
-        zip_path = os.path.join(temp_dir, f"{session_token}.zip")
+        zip_path = os.path.join(temp_dir, f"{session_token}_{uuid.uuid4().hex[:8]}.zip")
         
         try:
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -395,7 +395,10 @@ class HistoryManagementService:
         
         # Create temporary ZIP file
         temp_dir = tempfile.gettempdir()
-        zip_filename = f"batch_download_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.zip"
+        zip_filename = (
+            f"batch_download_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_"
+            f"{uuid.uuid4().hex[:8]}.zip"
+        )
         zip_path = os.path.join(temp_dir, zip_filename)
         
         try:

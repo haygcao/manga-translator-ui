@@ -14,7 +14,7 @@ license: CC-BY-NC-4.0
 [![模型](https://img.shields.io/badge/%E6%A8%A1%E5%9E%8B-MangaJaNai-orange)](https://github.com/the-database/MangaJaNai)
 [![OCR](https://img.shields.io/badge/OCR-PaddleOCR-blue)](https://github.com/PaddlePaddle/PaddleOCR)
 [![OCR](https://img.shields.io/badge/OCR-MangaOCR-blue)](https://github.com/kha-white/manga-ocr)
-[![OCR](https://img.shields.io/badge/OCR-PaddleOCR--VL--For--Manga-blue)](https://github.com/jzhang533/PaddleOCR-VL-For-Manga)
+[![OCR](https://img.shields.io/badge/OCR-PaddleOCR--VL--1.5-blue)](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5)
 [![Hugging Face](https://img.shields.io/badge/HuggingFace-manga109--segmentation--bubble-yellow?logo=huggingface)](https://huggingface.co/huyvux3005/manga109-segmentation-bubble)
 [![许可证](https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-CC--BY--NC--4.0-red)](LICENSE)
 
@@ -57,7 +57,7 @@ license: CC-BY-NC-4.0
 - `ch_PP-OCRv5_rec_server_infer.onnx` + `ppocrv5_dict.txt` - PaddleOCR 中文模型
 - `korean_PP-OCRv5_rec_mobile_infer.onnx` + `ppocrv5_korean_dict.txt` - PaddleOCR 韩文模型
 - `latin_PP-OCRv5_rec_mobile_infer.onnx` + `ppocrv5_latin_dict.txt` - PaddleOCR 拉丁文模型
-- `PaddleOCR-VL-For-Manga` - PaddleOCR-VL-For-Manga 模型（日文漫画效果最好）
+- `PaddleOCR-VL-1.5.7z` → 解压为 `PaddleOCR-VL-1.5/`，对应官方 PaddleOCR-VL-1.5 模型
 
 ### 图像修复模型 (Inpainting)
 - `inpainting.ckpt` - AOT 修复器
@@ -99,6 +99,8 @@ license: CC-BY-NC-4.0
 - **主项目地址**：https://github.com/hgmzhn/manga-translator-ui
 - **原始项目**：https://github.com/zyddnys/manga-image-translator
 - **问题反馈**：https://github.com/hgmzhn/manga-translator-ui/issues
+- **PaddleOCR-VL-1.5 官方模型页**：https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5
+- **PaddleOCR-VL 官方文档**：https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PaddleOCR-VL.html
 
 ## 📝 模型来源与协议
 
@@ -107,7 +109,7 @@ license: CC-BY-NC-4.0
 - [manga-image-translator](https://github.com/zyddnys/manga-image-translator) - 主要模型来源
 - [manga-ocr](https://github.com/kha-white/manga-ocr) - 日文 OCR 模型
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - 多语言 OCR 模型
-- [PaddleOCR-VL-For-Manga](https://github.com/jzhang533/PaddleOCR-VL-For-Manga) - 日文漫画 OCR 模型
+- [PaddlePaddle/PaddleOCR-VL-1.5](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5) - 官方 PaddleOCR-VL-1.5 模型
 - [manga109-segmentation-bubble](https://huggingface.co/huyvux3005/manga109-segmentation-bubble) - 漫画气泡检测模型
 - [Real-CUGAN](https://github.com/bilibili/ailab) - B站 AI Lab 超分模型
 - [MangaJaNai](https://github.com/the-database/MangaJaNai) - 漫画专用超分模型 **(CC BY-NC 4.0，仅限非商业用途)**
@@ -138,7 +140,7 @@ license: CC-BY-NC-4.0
 - [the-database/MangaJaNai](https://github.com/the-database/MangaJaNai) - MangaJaNai/IllustrationJaNai 超分辨率模型
 - [PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - PaddleOCR 模型支持
 - [kha-white/manga-ocr](https://github.com/kha-white/manga-ocr) - MangaOCR 模型支持
-- [jzhang533/PaddleOCR-VL-For-Manga](https://github.com/jzhang533/PaddleOCR-VL-For-Manga) - 提供 PaddleOCR-VL-For-Manga 模型支持
+- [PaddlePaddle/PaddleOCR-VL-1.5](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5) - 提供 PaddleOCR-VL-1.5 模型支持
 - [huyvux3005/manga109-segmentation-bubble](https://huggingface.co/huyvux3005/manga109-segmentation-bubble) - 漫画气泡检测模型支持
 - [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) - Real-ESRGAN 超分模型
 - [nihui/waifu2x-ncnn-vulkan](https://github.com/nihui/waifu2x-ncnn-vulkan) - Waifu2x 超分模型

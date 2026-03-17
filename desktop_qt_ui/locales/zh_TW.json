@@ -820,7 +820,7 @@
   "desc_app_unload_models_after_translation": "翻譯完成後卸載所有模型以釋放顯存和記憶體。適合顯存不足的場景，但下次翻譯需要重新載入。",
   "desc_cli_attempts": "呼叫 API 出錯時的重試次數。設為 -1 表示無限重試。",
   "desc_cli_context_size": "翻譯上下文頁面數，用於多頁聯合翻譯。值越大翻譯品質越好，但 token 消耗越多。",
-  "desc_ocr_ocr": "OCR 辨識模型。日漫推薦 48px 或 mocr；韓漫推薦 paddleocr_korean；英肉推薦原始 paddle（paddleocr）。paddleocr_vl 效果最好但最耗配置。若啟用混合 OCR，日漫推薦 48px + mocr。",
+  "desc_ocr_ocr": "OCR 辨識模型。32px：舊版輕量模型，可作相容性備選；48px：預設推薦，速度與準確率較均衡；48px_ctc：48px 的 CTC 變體，可作對比；mocr：日漫專用模型；paddleocr：通用多語言模型；paddleocr_korean / paddleocr_latin / paddleocr_thai：分別適合韓文、拉丁字母文本、泰文，其中英文建議優先使用 paddleocr_latin；paddleocr_vl：通用模型，效果最好但最耗配置，建議在下方的 PaddleOCR-VL 語言提示 中選擇對應語言，或填寫 PaddleOCR-VL 自訂提示詞；openai_ocr：呼叫 OpenAI 相容多模態介面做 OCR；gemini_ocr：呼叫 Gemini 多模態介面做 OCR。兩者都需先在 API密鑰(.env) 中填寫對應 API Key，否則 UI 不會開始翻譯；通常效果最好，但和本地 OCR 的差距通常不大，而且會按文字框大量消耗請求次數，如果是按次收費的站點不建議使用。若啟用混合 OCR，日漫推薦 48px + mocr。",
   "desc_ocr_use_hybrid_ocr": "同時使用兩個 OCR 模型進行辨識，取最佳結果以提高準確率。日漫推薦組合：48px + mocr。",
   "desc_ocr_secondary_ocr": "混合 OCR 時使用的第二個 OCR 模型。日漫推薦與主 OCR 的 48px 搭配使用 mocr。",
   "desc_ocr_ocr_vl_language_hint": "PaddleOCR-VL 的語言提示，幫助模型更準確地辨識指定語言的文字。",

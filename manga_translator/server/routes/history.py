@@ -5,13 +5,17 @@
 """
 
 import logging
+import mimetypes
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from manga_translator.server.core.download_ticket_service import DownloadTicketService
 from manga_translator.server.core.history_service import HistoryManagementService
 from manga_translator.server.core.middleware import require_admin, require_auth
 from manga_translator.server.core.models import Session
@@ -32,11 +36,13 @@ router = APIRouter(prefix="/api/history", tags=["history"])
 class BatchDownloadRequest(BaseModel):
     """批量下载请求模型"""
     session_tokens: List[str]
+    filename: Optional[str] = None
 
 # 全局服务实例（将在服务器启动时初始化）
 _history_service: HistoryManagementService = None
 _search_service: SearchService = None
 _permission_service: IntegratedPermissionService = None
+_download_ticket_service = DownloadTicketService()
 
 
 def init_history_routes(
@@ -79,6 +85,82 @@ def get_search_service() -> SearchService:
     if not _search_service:
         raise RuntimeError("Search service not initialized")
     return _search_service
+
+
+def _sanitize_history_filename(filename: str) -> str:
+    if not filename or '/' in filename or '\\' in filename or filename in {'.', '..'}:
+        raise HTTPException(status_code=400, detail="无效的文件名")
+    return filename
+
+
+def _resolve_history_file_path(result_path: str, filename: str) -> Path:
+    safe_filename = _sanitize_history_filename(filename)
+    session_dir = Path(result_path).resolve()
+    if not session_dir.exists() or not session_dir.is_dir():
+        raise HTTPException(status_code=404, detail="会话文件目录不存在")
+
+    file_path = (session_dir / safe_filename).resolve()
+    if file_path.parent != session_dir:
+        raise HTTPException(status_code=400, detail="无效的文件名")
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return file_path
+
+
+def _sanitize_download_filename(filename: Optional[str], default_name: str) -> str:
+    if not filename:
+        return default_name
+
+    sanitized = Path(filename).name.strip().replace('\r', '').replace('\n', '')
+    if not sanitized or sanitized in {'.', '..'}:
+        return default_name
+    if not sanitized.endswith('.zip'):
+        sanitized += '.zip'
+    return sanitized
+
+
+def _get_history_user_id(session: Session) -> Optional[str]:
+    return None if session.role == 'admin' else session.username
+
+
+def _build_ticket_response(ticket, url: str) -> dict:
+    expires_in = max(1, int((ticket.expires_at - datetime.now(timezone.utc)).total_seconds()))
+    return {
+        "url": url,
+        "filename": ticket.filename,
+        "expires_in": expires_in,
+        "expires_at": ticket.expires_at.isoformat(),
+    }
+
+
+def _issue_download_ticket(
+    path: str | Path,
+    filename: str,
+    media_type: str,
+    delete_on_cleanup: bool = False,
+) -> dict:
+    ticket = _download_ticket_service.issue_ticket(
+        path=path,
+        filename=filename,
+        media_type=media_type,
+        delete_on_cleanup=delete_on_cleanup,
+    )
+    return _build_ticket_response(ticket, f"/api/history/downloads/t/{ticket.token}")
+
+
+@router.api_route("/downloads/t/{ticket}", methods=["GET", "HEAD"])
+async def download_by_ticket(ticket: str):
+    """使用短时下载票据提供文件下载。"""
+    download_ticket = _download_ticket_service.get_ticket(ticket)
+    if download_ticket is None:
+        raise HTTPException(status_code=404, detail="下载链接无效或已过期")
+
+    return FileResponse(
+        path=download_ticket.path,
+        filename=download_ticket.filename,
+        media_type=download_ticket.media_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 # ============================================================================
@@ -176,8 +258,7 @@ async def get_session_details(
     
     try:
         # 确定用户ID（管理员可以查看所有）
-        is_admin = session.role == 'admin'
-        user_id = None if is_admin else session.username
+        user_id = _get_history_user_id(session)
         
         # 直接通过 history_service 获取会话，它会自动检查所有权
         result = history_service.get_session_by_token(session_token, user_id)
@@ -189,7 +270,10 @@ async def get_session_details(
             )
         
         # 获取会话文件列表
-        files = history_service.get_session_files(session_token, user_id)
+        files = [
+            Path(file_path).name
+            for file_path in history_service.get_session_files(session_token, user_id)
+        ]
         
         result_dict = result.to_dict()
         result_dict['files'] = files
@@ -204,6 +288,36 @@ async def get_session_details(
     except Exception as e:
         logger.error(f"Error getting session details: {e}")
         raise HTTPException(status_code=500, detail="获取会话详情时发生错误")
+
+
+@router.post("/{session_token}/download-ticket")
+async def create_session_download_ticket(
+    session_token: str,
+    filename: Optional[str] = Query(None, description="自定义下载文件名"),
+    session: Session = Depends(require_auth),
+    history_service: HistoryManagementService = Depends(get_history_service),
+    permission_service: IntegratedPermissionService = Depends(get_permission_service)
+):
+    """为单个会话的 ZIP 下载创建短时票据。"""
+    view_permission = permission_service.get_view_history_permission(session.username)
+    if view_permission == 'none':
+        raise HTTPException(status_code=403, detail="您没有下载历史记录的权限")
+
+    user_id = _get_history_user_id(session)
+    zip_path = history_service.create_download_archive(session_token, user_id)
+    if not zip_path or not os.path.exists(zip_path):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    download_filename = _sanitize_download_filename(
+        filename,
+        f"history_{session_token[:8]}.zip",
+    )
+    return _issue_download_ticket(
+        path=zip_path,
+        filename=download_filename,
+        media_type="application/zip",
+        delete_on_cleanup=True,
+    )
 
 
 # ============================================================================
@@ -342,8 +456,7 @@ async def search_history(
             filters['status'] = status
         
         # 确定搜索范围
-        is_admin = session.role == 'admin'
-        user_id = None if is_admin else session.username
+        user_id = _get_history_user_id(session)
         
         # 执行搜索
         results = search_service.search(q, filters, user_id)
@@ -417,9 +530,10 @@ async def download_session(
         background_tasks.add_task(history_service.cleanup_temp_file, zip_path)
         
         # 使用自定义文件名或默认文件名
-        download_filename = filename if filename else f"history_{session_token[:8]}.zip"
-        if not download_filename.endswith('.zip'):
-            download_filename += '.zip'
+        download_filename = _sanitize_download_filename(
+            filename,
+            f"history_{session_token[:8]}.zip",
+        )
         
         # 返回文件
         return FileResponse(
@@ -433,6 +547,35 @@ async def download_session(
     except Exception as e:
         logger.error(f"Error downloading session: {e}")
         raise HTTPException(status_code=500, detail="下载会话时发生错误")
+
+
+@router.post("/batch-download-ticket")
+async def create_batch_download_ticket(
+    request: BatchDownloadRequest,
+    session: Session = Depends(require_auth),
+    history_service: HistoryManagementService = Depends(get_history_service),
+    permission_service: IntegratedPermissionService = Depends(get_permission_service)
+):
+    """为批量历史 ZIP 下载创建短时票据。"""
+    view_permission = permission_service.get_view_history_permission(session.username)
+    if view_permission == 'none':
+        raise HTTPException(status_code=403, detail="您没有下载历史记录的权限")
+
+    if len(request.session_tokens) > 50:
+        raise HTTPException(status_code=400, detail="批量下载最多支持50个会话")
+
+    user_id = _get_history_user_id(session)
+    zip_path = history_service.create_batch_download_archive(request.session_tokens, user_id)
+    if not zip_path or not os.path.exists(zip_path):
+        raise HTTPException(status_code=404, detail="无法创建下载文件或您没有访问权限")
+
+    download_filename = _sanitize_download_filename(request.filename, os.path.basename(zip_path))
+    return _issue_download_ticket(
+        path=zip_path,
+        filename=download_filename,
+        media_type="application/zip",
+        delete_on_cleanup=True,
+    )
 
 
 @router.post("/batch-download")
@@ -473,8 +616,7 @@ async def batch_download_sessions(
     
     try:
         # 确定用户ID（管理员可以下载所有）
-        is_admin = session.role == 'admin'
-        user_id = None if is_admin else session.username
+        user_id = _get_history_user_id(session)
         
         # 创建批量ZIP文件
         zip_path = history_service.create_batch_download_archive(
@@ -549,16 +691,14 @@ async def get_history_file(
             raise HTTPException(status_code=404, detail="会话不存在或您没有访问权限")
         
         # 构建文件路径
-        file_path = os.path.join(result.result_path, filename)
-        
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="文件不存在")
+        file_path = _resolve_history_file_path(result.result_path, filename)
+        media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
         
         # 返回文件
         return FileResponse(
             path=file_path,
-            filename=filename,
-            media_type="image/png"
+            filename=file_path.name,
+            media_type=media_type
         )
     
     except HTTPException:
@@ -566,6 +706,34 @@ async def get_history_file(
     except Exception as e:
         logger.error(f"Error getting history file: {e}")
         raise HTTPException(status_code=500, detail="获取文件时发生错误")
+
+
+@router.post("/{session_token}/file/{filename}/download-ticket")
+async def create_history_file_download_ticket(
+    session_token: str,
+    filename: str,
+    session: Session = Depends(require_auth),
+    history_service: HistoryManagementService = Depends(get_history_service),
+    permission_service: IntegratedPermissionService = Depends(get_permission_service)
+):
+    """为历史单文件下载创建短时票据。"""
+    view_permission = permission_service.get_view_history_permission(session.username)
+    if view_permission == 'none':
+        raise HTTPException(status_code=403, detail="您没有查看历史记录的权限")
+
+    user_id = _get_history_user_id(session)
+    result = history_service.get_session_by_token(session_token, user_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="会话不存在或您没有访问权限")
+
+    file_path = _resolve_history_file_path(result.result_path, filename)
+    media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    return _issue_download_ticket(
+        path=file_path,
+        filename=file_path.name,
+        media_type=media_type,
+        delete_on_cleanup=False,
+    )
 
 
 @router.delete("/{session_token}", response_model=dict)

@@ -84,6 +84,16 @@ ARCHIVE_EXTRACT_IMAGE_DIRNAME = 'original_images'
 ARCHIVE_EXTRACT_META_FILENAME = '.extract_meta.json'
 
 
+class FileTranslationFailure(Exception):
+    """Abort the current file while allowing the overall batch to continue."""
+
+    def __init__(self, stage: str, error: Exception):
+        self.stage = stage
+        self.original_error = error
+        message = str(error).strip() or repr(error)
+        super().__init__(message)
+
+
 def _resolve_archive_output_dir_from_extracted_image(image_path: str, output_folder: str) -> Optional[str]:
     """
     如果 image_path 指向输出目录中的压缩包解压图片，返回对应压缩包输出目录。
@@ -525,6 +535,12 @@ class MangaTranslator:
             # 标记成功
             if success or not overwrite:  # 跳过已存在的文件也算成功
                 ctx.success = True
+            elif overwrite:
+                self._mark_context_failure(
+                    ctx,
+                    RuntimeError(f"保存输出文件失败: {os.path.basename(final_output_path)}"),
+                    stage='saving',
+                )
             
             # 导出可编辑PSD（如果启用）
             if config and hasattr(config, 'cli') and hasattr(config.cli, 'export_editable_psd') and config.cli.export_editable_psd:
@@ -549,6 +565,7 @@ class MangaTranslator:
             return success
         except Exception as e:
             logger.error(f"Error in _save_and_cleanup_context: {e}")
+            self._mark_context_failure(ctx, e, stage='saving')
             return False
 
     def _save_text_to_file(self, image_path: str, ctx: Context, config: Config = None):
@@ -1815,11 +1832,24 @@ class MangaTranslator:
             "preprocessing": "预处理",
             "ocr": "OCR",
             "colorizing": "上色",
+            "upscaling": "超分",
+            "detection": "检测",
+            "textline_merge": "文本合并",
+            "translation": "翻译",
+            "mask-generation": "蒙版生成",
+            "inpainting": "修复",
             "rendering": "渲染",
+            "saving": "保存",
         }
         raw_message = str(error).strip() or repr(error)
         stage_label = stage_labels.get(stage, stage or "处理")
         return f"{stage_label}失败: {raw_message}"
+
+    def _resolve_pipeline_error(self, stage: str, error: Exception) -> tuple[str, Exception]:
+        if isinstance(error, FileTranslationFailure):
+            stage = error.stage or stage
+            error = error.original_error
+        return stage, error
 
     def _build_stage_error_context(
         self,
@@ -1828,6 +1858,7 @@ class MangaTranslator:
         config: Config = None,
         stage: str = "",
     ) -> Context:
+        stage, error = self._resolve_pipeline_error(stage, error)
         image_name = getattr(image, "name", None) if image is not None else None
         ctx = Context()
         if image is not None:
@@ -1843,6 +1874,7 @@ class MangaTranslator:
         return ctx
 
     def _mark_context_failure(self, ctx: Context, error: Exception, stage: str = "") -> Context:
+        stage, error = self._resolve_pipeline_error(stage, error)
         if ctx is None:
             ctx = Context()
         if ctx.text_regions is None:
@@ -3282,7 +3314,8 @@ class MangaTranslator:
             if display_total <= 0:
                 return
             completed = min(global_offset + len(results), display_total)
-            await self._report_progress(f"batch:{completed}:{completed}:{display_total}")
+            failed_count = sum(1 for ctx in results if getattr(ctx, 'translation_error', None))
+            await self._report_progress(f"batch:{completed}:{completed}:{display_total}:{failed_count}")
 
         # 分批处理所有图片
         for batch_start in range(0, total_images, batch_size):
@@ -3783,11 +3816,11 @@ class MangaTranslator:
             await self._report_progress('colorizing')
             try:
                 ctx.img_colorized = await self._run_colorizer(config, ctx)
-            except Exception:
+            except Exception as e:
                 logger.error(f"Error during colorizing:\n{traceback.format_exc()}")  
                 if not self.ignore_errors:  
                     raise  
-                ctx.img_colorized = ctx.input
+                raise FileTranslationFailure("colorizing", e) from e
         else:
             ctx.img_colorized = ctx.input
 
@@ -3810,11 +3843,11 @@ class MangaTranslator:
             await self._report_progress('upscaling')
             try:
                 ctx.upscaled = await self._run_upscaling(config, ctx)
-            except Exception:
+            except Exception as e:
                 logger.error(f"Error during upscaling:\n{traceback.format_exc()}")  
                 if not self.ignore_errors:  
                     raise  
-                ctx.upscaled = ctx.img_colorized
+                raise FileTranslationFailure("upscaling", e) from e
         else:
             ctx.upscaled = ctx.img_colorized
 
@@ -3857,13 +3890,11 @@ class MangaTranslator:
                 logger.info(f"  - mask_raw: {ctx.mask_raw.shape if ctx.mask_raw is not None else 'None'}")
                 if ctx.mask_raw is not None:
                     logger.info(f"  - mask_raw non-zero pixels: {np.count_nonzero(ctx.mask_raw)}")
-            except Exception:
+            except Exception as e:
                 logger.error(f"Error during detection:\n{traceback.format_exc()}")
                 if not self.ignore_errors:
                     raise
-                ctx.textlines = []
-                ctx.mask_raw = None
-                ctx.mask = None
+                raise FileTranslationFailure("detection", e) from e
             
             if not ctx.textlines or ctx.mask_raw is None:
                 logger.warning("No textlines or mask_raw detected, skipping inpainting.")
@@ -3959,11 +3990,11 @@ class MangaTranslator:
                 try:
                     ctx.img_inpainted = await self._run_inpainting(config, ctx)
                     logger.info("✓ Step 5 - Inpainting: Completed successfully")
-                except Exception:
+                except Exception as e:
                     logger.error(f"Error during inpainting:\n{traceback.format_exc()}")
                     if not self.ignore_errors:
                         raise
-                    ctx.img_inpainted = ctx.img_rgb
+                    raise FileTranslationFailure("inpainting", e) from e
             
             # 设置结果 - 转换为PIL Image（保存函数需要PIL格式）
             from PIL import Image
@@ -3989,25 +4020,23 @@ class MangaTranslator:
             logger.error("加载图片失败: img_rgb为空或无效")
             if not self.ignore_errors:
                 raise Exception("加载图片失败: img_rgb为空或无效")
-            # 尝试从原始输入重新加载
-            ctx.img_rgb, ctx.img_alpha = load_image(ctx.input)
+            raise FileTranslationFailure("preprocessing", RuntimeError("加载图片失败: img_rgb为空或无效"))
         
         if len(ctx.img_rgb.shape) < 2 or ctx.img_rgb.shape[0] == 0 or ctx.img_rgb.shape[1] == 0:
             logger.error(f"加载的图片尺寸无效: {ctx.img_rgb.shape}")
             if not self.ignore_errors:
                 raise Exception(f"加载的图片尺寸无效: {ctx.img_rgb.shape}")
+            raise FileTranslationFailure("preprocessing", RuntimeError(f"加载的图片尺寸无效: {ctx.img_rgb.shape}"))
 
         # -- Detection
         await self._report_progress('detection')
         try:
             ctx.textlines, ctx.mask_raw, ctx.mask = await self._run_detection(config, ctx)
-        except Exception:
+        except Exception as e:
             logger.error(f"Error during detection:\n{traceback.format_exc()}")  
             if not self.ignore_errors:  
                 raise 
-            ctx.textlines = [] 
-            ctx.mask_raw = None
-            ctx.mask = None
+            raise FileTranslationFailure("detection", e) from e
 
         if self.verbose and ctx.mask_raw is not None:
             # 生成带置信度颜色映射和颜色条的热力图
@@ -4044,11 +4073,11 @@ class MangaTranslator:
         await self._report_progress('ocr')
         try:
             ctx.textlines = await self._run_ocr(config, ctx)
-        except Exception:
+        except Exception as e:
             logger.error(f"Error during ocr:\n{traceback.format_exc()}")  
             if not self.ignore_errors:  
                 raise 
-            ctx.textlines = []
+            raise FileTranslationFailure("ocr", e) from e
 
         if not ctx.textlines:
             await self._report_progress('skip-no-text', True)
@@ -4060,11 +4089,11 @@ class MangaTranslator:
         await self._report_progress('textline_merge')
         try:
             ctx.text_regions = await self._run_textline_merge(config, ctx)
-        except Exception:
+        except Exception as e:
             logger.error(f"Error during textline_merge:\n{traceback.format_exc()}")  
             if not self.ignore_errors:  
                 raise 
-            ctx.text_regions = []
+            raise FileTranslationFailure("textline_merge", e) from e
 
         if self.verbose and ctx.text_regions:
             show_panels = not config.force_simple_sort  # 当不使用简单排序时显示panel
@@ -4395,15 +4424,10 @@ class MangaTranslator:
                 logger.error(traceback.format_exc())
                 if not self.ignore_errors:
                     raise
-                # 错误时保持原文
+                # 错误时标记当前批次文件失败，不再回退原文
                 for ctx, config in batch:
-                    if not ctx.text_regions:  # 检查text_regions是否为None或空
-                        continue
-                    for region in ctx.text_regions:
-                        region.translation = region.text
-                        region.target_lang = config.translator.target_lang
-                        region._alignment = config.render.alignment
-                        region._direction = config.render.direction
+                    self._mark_context_failure(ctx, FileTranslationFailure("translation", e), stage='translation')
+                    ctx.text_regions = []
                 results.extend(batch)
             
             # ✅ 翻译批次完成后清理内存
@@ -4562,13 +4586,8 @@ class MangaTranslator:
                 logger.error(f"Error in concurrent translation for single image: {e}")
                 if not self.ignore_errors:
                     raise
-                # 错误时保持原文
-                if ctx.text_regions:
-                    for region in ctx.text_regions:
-                        region.translation = region.text
-                        region.target_lang = config.translator.target_lang
-                        region._alignment = config.render.alignment
-                        region._direction = config.render.direction
+                self._mark_context_failure(ctx, FileTranslationFailure("translation", e), stage='translation')
+                ctx.text_regions = []
                 return ctx, config
         
         # 创建并发任务，为每个任务添加页面索引和批次索引
@@ -4597,14 +4616,9 @@ class MangaTranslator:
                 logger.error(f"Image {i+1} concurrent translation failed: {result}")
                 if not self.ignore_errors:
                     raise result
-                # 创建失败的占位符
                 ctx, config = contexts_with_configs[i]
-                if ctx.text_regions:
-                    for region in ctx.text_regions:
-                        region.translation = region.text
-                        region.target_lang = config.translator.target_lang
-                        region._alignment = config.render.alignment
-                        region._direction = config.render.direction
+                self._mark_context_failure(ctx, FileTranslationFailure("translation", result), stage='translation')
+                ctx.text_regions = []
                 final_results.append((ctx, config))
             else:
                 final_results.append(result)
@@ -4923,11 +4937,11 @@ class MangaTranslator:
             await self._report_progress('mask-generation')
             try:
                 ctx.mask = await self._run_mask_refinement(config, ctx)
-            except Exception:
+            except Exception as e:
                 logger.error(f"Error during mask-generation:\n{traceback.format_exc()}")  
                 if not self.ignore_errors:  
                     raise 
-                ctx.mask = ctx.mask_raw if ctx.mask_raw is not None else np.zeros_like(ctx.img_rgb, dtype=np.uint8)[:,:,0]
+                raise FileTranslationFailure("mask-generation", e) from e
 
         if self.verbose and ctx.mask is not None:
             try:
@@ -4957,12 +4971,11 @@ class MangaTranslator:
                 # ✅ Inpainting完成后强制GC和GPU清理
                 self._cleanup_gpu_memory()
 
-            except Exception:
+            except Exception as e:
                 logger.error(f"Error during inpainting:\n{traceback.format_exc()}")
                 if not self.ignore_errors:
                     raise
-                else:
-                    ctx.img_inpainted = ctx.img_rgb
+                raise FileTranslationFailure("inpainting", e) from e
 
         if self.verbose:
             try:
@@ -4988,11 +5001,11 @@ class MangaTranslator:
 
         try:
             ctx.img_rendered = await self._run_text_rendering(config, ctx)
-        except Exception:
+        except Exception as e:
             logger.error(f"Error during rendering:\n{traceback.format_exc()}")
             if not self.ignore_errors:
                 raise
-            ctx.img_rendered = ctx.img_inpainted
+            raise FileTranslationFailure("rendering", e) from e
 
         await self._report_progress('finished', True)
         ctx.result = dump_image(ctx.input, ctx.img_rendered, ctx.img_alpha)
@@ -5294,7 +5307,8 @@ class MangaTranslator:
             if display_total <= 0:
                 return
             completed = min(global_offset + len(results), display_total)
-            await self._report_progress(f"batch:{completed}:{completed}:{display_total}")
+            failed_count = sum(1 for ctx in results if getattr(ctx, 'translation_error', None))
+            await self._report_progress(f"batch:{completed}:{completed}:{display_total}:{failed_count}")
 
         for batch_start in range(0, total_images, batch_size):
             # 检查是否被取消
@@ -5448,8 +5462,11 @@ class MangaTranslator:
                                 
                 except Exception as e:
                     logger.error(f"Error in high quality batch translation: {e}")
-                    # 重新抛出异常，终止翻译流程
-                    raise
+                    if not self.ignore_errors:
+                        raise
+                    for ctx, config in preprocessed_contexts:
+                        self._mark_context_failure(ctx, FileTranslationFailure("translation", e), stage='translation')
+                        ctx.text_regions = []
             # --- NEW: Handle Generate and Export for High-Quality Mode ---
             if self.generate_and_export:
                 logger.info("'Generate and Export' mode enabled. Skipping rendering.")
@@ -5520,8 +5537,11 @@ class MangaTranslator:
                     await report_completed_image_progress()
                 except Exception as e:
                     logger.error(f"Error rendering image: {e}")
-                    # 渲染失败时抛出异常，而不是继续处理
-                    raise RuntimeError(f"Rendering failed for {os.path.basename(ctx.image_name) if hasattr(ctx, 'image_name') else 'Unknown'}: {e}") from e
+                    if not self.ignore_errors:
+                        raise RuntimeError(f"Rendering failed for {os.path.basename(ctx.image_name) if hasattr(ctx, 'image_name') else 'Unknown'}: {e}") from e
+                    ctx = self._mark_context_failure(ctx, e, stage='rendering')
+                    results.append(ctx)
+                    await report_completed_image_progress()
             
             # ✅ 批次完成后立即清理内存（但保留翻译历史供下一批次使用）
 #             import gc

@@ -261,10 +261,6 @@ locales_dir = os.path.join(os.path.dirname(__file__), "../../desktop_qt_ui/local
 if os.path.exists(locales_dir):
     app.mount("/locales", StaticFiles(directory=locales_dir), name="locales")
 
-# Mount result folder
-if os.path.exists("../result"):
-    app.mount("/result", StaticFiles(directory="../result"), name="result")
-
 # Register route modules
 app.include_router(translation_router)
 app.include_router(admin_router)

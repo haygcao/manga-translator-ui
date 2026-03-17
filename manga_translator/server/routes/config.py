@@ -8,7 +8,7 @@ import json
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Depends, Header
 
 from manga_translator.server.core.config_manager import (
     AVAILABLE_WORKFLOWS,
@@ -16,7 +16,8 @@ from manga_translator.server.core.config_manager import (
     admin_settings,
     load_default_config_dict,
 )
-from manga_translator.server.core.middleware import get_services
+from manga_translator.server.core.middleware import get_services, require_auth
+from manga_translator.server.core.models import Session
 from manga_translator.utils import BASE_PATH
 
 router = APIRouter(tags=["config"])
@@ -305,81 +306,6 @@ async def get_config(
         return filtered_config
     
     return config_dict
-
-
-@router.get("/config/structure")
-async def get_config_structure(token: str = Header(alias="X-Admin-Token", default=None)):
-    """Get full configuration structure with metadata (admin only)"""
-    from manga_translator.config import Alignment, Direction, InpaintPrecision
-    from manga_translator.detection import Detector
-    from manga_translator.inpainting import Inpainter
-    from manga_translator.translators import Translator
-    from manga_translator.upscaling import Upscaler
-    
-    config_dict = load_default_config_dict()
-    config_dict = _filter_server_hidden_config(config_dict)
-    
-    # Get font list
-    fonts = []
-    if os.path.exists(FONTS_DIR):
-        fonts = sorted([f for f in os.listdir(FONTS_DIR) if f.lower().endswith(('.ttf', '.otf', '.ttc'))])
-    
-    # Get prompt list
-    prompts = []
-    prompts_dir = os.path.join(BASE_PATH, 'dict')
-    if os.path.exists(prompts_dir):
-        prompts = sorted([f for f in os.listdir(prompts_dir) 
-                         if f.lower().endswith(('.json', '.yaml', '.yml')) and os.path.splitext(f)[0] not in ('system_prompt_hq', 'system_prompt_hq_format', 'system_prompt_line_break', 'glossary_extraction_prompt')])
-    
-    # Define parameter options (enum types)
-    param_options = {
-        'renderer': _get_server_renderer_options(),
-        'alignment': [member.value for member in Alignment],
-        'direction': [member.value for member in Direction],
-        'upscaler': [member.value for member in Upscaler],
-        'translator': [member.value for member in Translator],
-        'detector': [member.value for member in Detector],
-        'colorizer': _get_server_colorizer_options(),
-        'inpainter': [member.value for member in Inpainter],
-        'inpainting_precision': [member.value for member in InpaintPrecision],
-        'ocr': _get_server_ocr_options(),
-        'secondary_ocr': _get_server_ocr_options(),
-        'upscale_ratio': ['不使用', '2', '3', '4'],
-        'realcugan_model': [
-            '2x-conservative', '2x-conservative-pro', '2x-no-denoise',
-            '2x-denoise1x', '2x-denoise2x', '2x-denoise3x', '2x-denoise3x-pro',
-            '3x-conservative', '3x-conservative-pro', '3x-no-denoise', '3x-no-denoise-pro',
-            '3x-denoise3x', '3x-denoise3x-pro',
-            '4x-conservative', '4x-no-denoise', '4x-denoise3x'
-        ],
-        'font_path': [f'fonts/{f}' for f in fonts],
-        'high_quality_prompt_path': [f'dict/{p}' for p in prompts],
-        'layout_mode': ['smart_scaling', 'strict', 'balloon_fill']
-    }
-    
-    # Build config structure, including metadata for each parameter
-    structure = {}
-    for section, content in config_dict.items():
-        if isinstance(content, dict):
-            structure[section] = {}
-            for key, value in content.items():
-                full_key = f"{section}.{key}"
-                structure[section][key] = {
-                    'value': value,
-                    'type': type(value).__name__,
-                    'full_key': full_key,
-                    'hidden': full_key in admin_settings.get('hidden_keys', []),
-                    'readonly': full_key in admin_settings.get('readonly_keys', []),
-                    'default_override': admin_settings.get('default_values', {}).get(full_key),
-                    'options': param_options.get(key)  # Add options list
-                }
-        else:
-            structure[section] = {
-                'value': content,
-                'type': type(content).__name__
-            }
-    
-    return structure
 
 
 @router.get("/config/options")
@@ -839,7 +765,7 @@ async def get_api_key_policy():
 
 
 @router.get("/env")
-async def get_user_env_vars():
+async def get_user_env_vars(session: Session = Depends(require_auth)):
     """Get environment variables for users (based on policy)"""
     from dotenv import dotenv_values
     
@@ -859,7 +785,7 @@ async def get_user_env_vars():
 
 
 @router.post("/env")
-async def save_user_env_vars(env_vars: dict):
+async def save_user_env_vars(env_vars: dict, session: Session = Depends(require_auth)):
     """Save user's environment variables"""
     from dotenv import load_dotenv
     from fastapi import HTTPException

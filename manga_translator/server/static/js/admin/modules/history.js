@@ -411,18 +411,12 @@ class HistoryModule {
         viewer.querySelector('.btn-secondary').onclick = async () => {
             const filePath = files[currentIndex];
             const filename = filePath.split('/').pop().split('\\').pop();
-            const resp = await fetch(`/api/history/${sessionToken}/file/${filename}`, {
-                headers: { 'X-Session-Token': this.app.sessionToken }
-            });
-            if (resp.ok) {
-                const blob = await resp.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                a.click();
-                URL.revokeObjectURL(url);
-            }
+            try {
+                const ticket = await this.requestDownloadTicket(
+                    `/api/history/${sessionToken}/file/${encodeURIComponent(filename)}/download-ticket`
+                );
+                this.triggerDownload(ticket.url, ticket.filename || filename);
+            } catch (e) {}
         };
         
         document.addEventListener('keydown', function handler(e) {
@@ -434,6 +428,40 @@ class HistoryModule {
             if (e.key === 'ArrowLeft') showImage((currentIndex - 1 + files.length) % files.length);
             if (e.key === 'ArrowRight') showImage((currentIndex + 1) % files.length);
         });
+    }
+
+    async requestDownloadTicket(path, body = null) {
+        const options = {
+            method: 'POST',
+            headers: { 'X-Session-Token': this.app.sessionToken }
+        };
+        if (body !== null) {
+            options.headers['Content-Type'] = 'application/json';
+            options.body = JSON.stringify(body);
+        }
+
+        const resp = await fetch(path, options);
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            throw new Error(data.detail || '获取下载链接失败');
+        }
+        return data;
+    }
+
+    triggerDownload(url, filename) {
+        const a = document.createElement('a');
+        a.href = url;
+        if (filename) {
+            a.download = filename;
+        }
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    buildZipFilename(zipName) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        return `${zipName}_${timestamp}.zip`;
     }
     
     // 下载单个历史项
@@ -455,16 +483,15 @@ class HistoryModule {
             
             if (session.files.length === 1) {
                 const filename = session.files[0].split('/').pop().split('\\').pop();
-                // 使用 URL 参数传递 token，支持 IDM 等下载器
-                const fileUrl = `/api/history/${sessionToken}/file/${filename}?token=${encodeURIComponent(this.app.sessionToken)}`;
-                const a = document.createElement('a');
-                a.href = fileUrl;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                const ticket = await this.requestDownloadTicket(
+                    `/api/history/${sessionToken}/file/${encodeURIComponent(filename)}/download-ticket`
+                );
+                this.triggerDownload(ticket.url, ticket.filename || filename);
             } else {
-                await this.downloadAsZip([sessionToken], `history_${sessionToken.substring(0, 8)}`);
+                const ticket = await this.requestDownloadTicket(
+                    `/api/history/${sessionToken}/download-ticket`
+                );
+                this.triggerDownload(ticket.url, ticket.filename);
             }
         } catch (e) {
             alert('下载失败');
@@ -486,54 +513,29 @@ class HistoryModule {
     
     // 打包下载
     async downloadAsZip(tokens, zipName) {
-        if (typeof JSZip === 'undefined') {
-            alert('JSZip 未加载');
-            return;
-        }
-        
-        const zip = new JSZip();
-        let successCount = 0;
         const info = document.getElementById('admin-gallery-selection-info');
-        
-        for (let i = 0; i < tokens.length; i++) {
-            if (info) info.textContent = `正在打包 ${i + 1}/${tokens.length}...`;
-            
-            try {
-                const detailResp = await fetch(`/api/history/${tokens[i]}`, {
-                    headers: { 'X-Session-Token': this.app.sessionToken }
-                });
-                if (!detailResp.ok) continue;
-                
-                const { session } = await detailResp.json();
-                if (!session?.files?.length) continue;
-                
-                for (const filePath of session.files) {
-                    const filename = filePath.split('/').pop().split('\\').pop();
-                    const fileResp = await fetch(`/api/history/${tokens[i]}/file/${filename}`, {
-                        headers: { 'X-Session-Token': this.app.sessionToken }
-                    });
-                    if (fileResp.ok) {
-                        zip.file(`${tokens[i].substring(0, 8)}/${filename}`, await fileResp.blob());
-                        successCount++;
-                    }
-                }
-            } catch (e) {}
-        }
-        
-        if (successCount === 0) {
-            alert('没有可下载的文件');
+        if (info) info.textContent = `正在准备 ${tokens.length} 个会话的下载...`;
+
+        try {
+            const ticket = await this.requestDownloadTicket('/api/history/batch-download-ticket', {
+                session_tokens: tokens,
+                filename: this.buildZipFilename(zipName)
+            });
+            this.triggerDownload(ticket.url, ticket.filename);
+            if (info) info.textContent = '下载已开始';
+        } catch (e) {
+            alert('下载失败');
             if (info) info.textContent = '';
             return;
         }
-        
-        const content = await zip.generateAsync({ type: 'blob' });
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(content);
-        a.download = `${zipName}_${timestamp}.zip`;
-        a.click();
-        
-        if (info) info.textContent = `已下载 ${successCount} 个文件`;
+
+        if (info) {
+            setTimeout(() => {
+                if (info.textContent === '下载已开始') {
+                    info.textContent = '';
+                }
+            }, 3000);
+        }
     }
     
     // 删除单个历史项

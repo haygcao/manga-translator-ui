@@ -2700,12 +2700,15 @@ class TranslationWorker(QObject):
         remaining_count: int,
         elapsed_seconds: float,
         skipped_count: int = 0,
+        failed_count: int = 0,
         detail: str = "",
     ) -> str:
         parts = [detail] if detail else []
         if completed_count <= 0:
             if skipped_count > 0:
                 parts.append(f"已跳过 {skipped_count} 张")
+            if failed_count > 0:
+                parts.append(f"已失败 {failed_count} 张")
             if remaining_count <= 0:
                 parts.append("无需处理")
                 return " | ".join(parts)
@@ -2717,6 +2720,8 @@ class TranslationWorker(QObject):
         parts.append(f"预计剩余 {self._format_eta_duration(average_seconds * max(remaining_count, 0))}")
         if skipped_count > 0:
             parts.append(f"已跳过 {skipped_count} 张")
+        if failed_count > 0:
+            parts.append(f"已失败 {failed_count} 张")
         return " | ".join(parts)
     
     def _calculate_output_path(self, image_path: str, save_info: dict) -> str:
@@ -2936,6 +2941,38 @@ class TranslationWorker(QObject):
             friendly_msg += "      - Grok: grok-4.2\n"
             friendly_msg += "      - 注意：DeepSeek模型不支持多模态\n\n"
         
+        # 检查是否是模型不存在/模型名错误
+        elif (
+            "code=20012" in real_error.lower()
+            or "model does not exist" in real_error.lower()
+            or ("does not exist" in real_error.lower() and "model" in real_error.lower())
+            or "model not found" in real_error.lower()
+            or "invalid model" in real_error.lower()
+            or "no such model" in real_error.lower()
+            or "模型不存在" in real_error
+            or "模型名称不存在" in real_error
+        ):
+            friendly_msg += "🔍 错误原因：模型不存在，或当前 API 站点不支持该模型\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   API 已经连通，但服务端找不到你填写的模型名称。\n"
+            friendly_msg += "   这通常是模型名拼写不对、大小写不一致、模型已下线，或当前中转/渠道并不提供这个模型。\n\n"
+            friendly_msg += "解决方案：\n"
+            friendly_msg += "   1. ⭐ 检查模型名称是否与服务商提供的名称完全一致（最常见）\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量 → MODEL\n"
+            friendly_msg += "      - 注意：模型名称通常区分大小写，不能省略前缀或版本号\n\n"
+            friendly_msg += "   2. 使用「测试连接」或模型列表功能确认当前站点实际支持哪些模型\n"
+            friendly_msg += "      - API管理 → 测试连接 / 获取模型列表\n"
+            friendly_msg += "      - 先确认该站点真的提供你要用的模型\n\n"
+            friendly_msg += "   3. 如果你用的是第三方 OpenAI 兼容站点（如中转、渠道、硅基流动等）\n"
+            friendly_msg += "      - 不要假设它支持 OpenAI 官方的全部模型名\n"
+            friendly_msg += "      - 需要改成该服务商自己的实际模型 ID\n\n"
+            friendly_msg += "   4. 检查 API 地址和翻译器类型是否匹配\n"
+            friendly_msg += "      - OpenAI 兼容接口应使用「OpenAI」或「OpenAI高质量」翻译器\n"
+            friendly_msg += "      - 若站点和翻译器类型不匹配，也可能导致模型判断异常\n\n"
+            friendly_msg += "   5. 若该模型最近改名、下线或迁移渠道\n"
+            friendly_msg += "      - 访问对应服务商的模型广场或官方文档\n"
+            friendly_msg += "      - 换成当前仍可用的模型名后再试\n\n"
+
         # 检查是否是404错误（API地址或模型配置错误）
         elif "API_404_ERROR" in real_error or "404" in real_error or "HTML错误页面" in real_error:
             friendly_msg += "🔍 错误原因：API返回404错误\n\n"
@@ -2975,11 +3012,18 @@ class TranslationWorker(QObject):
         # 检查是否是网络连接错误
         elif (
             "connection" in real_error.lower()
+            or "connect" in real_error.lower()
+            or "failed to connect" in real_error.lower()
+            or "could not connect to server" in real_error.lower()
+            or "connection timed out" in real_error.lower()
+            or "timed out after" in real_error.lower()
             or "连接" in real_error
             or "timeout" in real_error.lower()
             or "超时" in real_error
             or "network" in real_error.lower()
             or "网络" in real_error
+            or "curl: (7)" in real_error.lower()
+            or "curl: (28)" in real_error.lower()
             or "host" in real_error.lower()
             or "hostname" in real_error.lower()
             or "dns" in real_error.lower()
@@ -3259,6 +3303,7 @@ class TranslationWorker(QObject):
                 "use_backend_hook": True,
                 "batch_concurrent": False,
                 "detail": "处理中",
+                "failed_count": 0,
             }
 
             def emit_eta_progress(current: int, total: int, detail: str | None = None):
@@ -3274,6 +3319,7 @@ class TranslationWorker(QObject):
                     remaining_count=remaining_count,
                     elapsed_seconds=elapsed_seconds,
                     skipped_count=progress_context["offset"],
+                    failed_count=progress_context["failed_count"],
                     detail=detail if detail is not None else progress_context["detail"],
                 )
                 progress_signal.emit(current, total, message)
@@ -3283,11 +3329,18 @@ class TranslationWorker(QObject):
                     if not progress_context["use_backend_hook"]:
                         return
                     if state.startswith("batch:"):
-                        # 解析批次进度: "batch:start:end:total"
+                        # 解析批次进度: "batch:start:end:total[:failed]"
                         parts = state.split(":")
-                        if len(parts) == 4:
+                        if len(parts) >= 4:
                             batch_end = int(parts[2])
                             total = int(parts[3])
+                            failed_count = progress_context["failed_count"]
+                            if len(parts) >= 5:
+                                try:
+                                    failed_count = max(0, int(parts[4]))
+                                except (TypeError, ValueError):
+                                    failed_count = progress_context["failed_count"]
+                            progress_context["failed_count"] = failed_count
                             if progress_context["batch_concurrent"]:
                                 batch_end += progress_context["offset"]
                                 total = progress_context["overall_total"] or (total + progress_context["offset"])
@@ -3509,6 +3562,7 @@ class TranslationWorker(QObject):
             progress_context["offset"] = skipped_count
             progress_context["overall_total"] = total_original_count
             progress_context["batch_concurrent"] = batch_concurrent
+            progress_context["failed_count"] = 0
             if is_hq or (len(self.files) > 0 and batch_size > 1):
                 self._log_info(f"--- 开始批量处理 ({'高质量模式' if is_hq else '批量模式'})")
 
@@ -3694,12 +3748,14 @@ class TranslationWorker(QObject):
                             emit_eta_progress(current_num, total_original_count, f"刚完成: {os.path.basename(file_path)}")
                         else:
                             error_msg = getattr(ctx, 'translation_error', 'Translation returned no result') if ctx else 'Translation failed'
+                            progress_context["failed_count"] += 1
                             self.file_processed.emit({'success': False, 'original_path': file_path, 'error': error_msg})
                             self._log_warning(f"❌ [{current_num}/{total_files}] 失败：{os.path.basename(file_path)}")
                             emit_eta_progress(current_num, total_original_count, f"处理失败: {os.path.basename(file_path)}")
 
                     except Exception as e:
                         self._log_error(f"❌ [{current_num}/{total_files}] 错误：{os.path.basename(file_path)} - {e}")
+                        progress_context["failed_count"] += 1
                         self.file_processed.emit({'success': False, 'original_path': file_path, 'error': str(e)})
                         emit_eta_progress(current_num, total_original_count, f"处理失败: {os.path.basename(file_path)}")
                         # 抛出异常，终止整个翻译流程

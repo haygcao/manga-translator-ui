@@ -145,6 +145,7 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
     results = []
     
     display_total = global_total if global_total is not None else len(images_with_configs)
+    failed_count = 0
     
     for idx, (image, config) in enumerate(images_with_configs):
         # ✅ 检查停止标志
@@ -156,7 +157,6 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
         translated_image = None
         image_name = image if isinstance(image, str) else (image.name if hasattr(image, 'name') else f"image_{idx}")
         global_idx = global_offset + idx + 1
-        progress_state = f"batch:{global_idx}:{global_idx}:{display_total}"
         loaded_source_image = False
 
         if isinstance(image, str):
@@ -174,7 +174,8 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                 ctx.success = False
                 ctx.translation_error = str(e)
                 results.append(ctx)
-                await translator._report_progress(progress_state)
+                failed_count += 1
+                await translator._report_progress(f"batch:{global_idx}:{global_idx}:{display_total}:{failed_count}")
                 continue
         
         # 强制启用 AI断句 和 严格边框模式
@@ -203,7 +204,8 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                 ctx.text_regions = []
                 ctx.success = False
                 results.append(ctx)
-                await translator._report_progress(progress_state)
+                failed_count += 1
+                await translator._report_progress(f"batch:{global_idx}:{global_idx}:{display_total}:{failed_count}")
                 continue
             
             logger.info(f"  找到翻译图: {os.path.basename(translated_path)}")
@@ -643,7 +645,9 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                 raw_ctx.success = True
             
             results.append(raw_ctx)
-            await translator._report_progress(progress_state)
+            if not getattr(raw_ctx, 'success', False):
+                failed_count += 1
+            await translator._report_progress(f"batch:{global_idx}:{global_idx}:{display_total}:{failed_count}")
             
             # ✅ 每处理完一张图片后立即清理内存
             translator._cleanup_context_memory(raw_ctx, keep_result=True)
@@ -661,7 +665,8 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
             ctx.text_regions = []
             ctx.success = False
             results.append(ctx)
-            await translator._report_progress(progress_state)
+            failed_count += 1
+            await translator._report_progress(f"batch:{global_idx}:{global_idx}:{display_total}:{failed_count}")
         finally:
             if translated_image is not None and hasattr(translated_image, 'close'):
                 try:

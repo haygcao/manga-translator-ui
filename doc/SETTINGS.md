@@ -420,15 +420,19 @@
 ### OCR 设置
 
 - **OCR模型 (ocr)**：OCR 识别模型
+  - **32px**：旧版轻量模型，可作兼容性备选
   - **48px**：默认模型（推荐，平衡速度和准确率）
   - **48px_ctc**：CTC 变体模型（可作为备选对比，不代表一定更精确）
-  - **mocr**：Manga OCR 专用模型（专门针对漫画优化）
-  - **paddleocr**：PaddleOCR 引擎（支持多语言）
-  - **paddleocr_korean**：韩漫推荐
-  - **paddleocr_vl**：PaddleOCR-VL-For-Manga 模型（效果最好，最吃配置）
+  - **mocr**：Manga OCR 专用模型（专门针对漫画优化，日漫常用）
+  - **paddleocr**：通用多语言模型
+  - **paddleocr_korean**：韩文 / 韩漫推荐
+  - **paddleocr_latin**：拉丁字母文本推荐，英文建议优先使用
+  - **paddleocr_thai**：泰文推荐
+  - **paddleocr_vl**：PaddleOCR-VL-1.5 通用模型（效果最好，最吃配置），建议配合下方语言提示或自定义提示词使用
   - **openai_ocr**：调用 OpenAI 兼容多模态接口逐框 OCR，文字颜色仍由本地 `48px` 模型提取
   - **gemini_ocr**：调用 Gemini 多模态接口逐框 OCR，文字颜色仍由本地 `48px` 模型提取
-  - **推荐**：日漫推荐 `48px` 或 `mocr`，韩漫推荐 `paddleocr_korean`，英肉推荐原始 `paddleocr`
+  - **AI OCR 提醒**：通常效果最好，但与本地 OCR 的差距往往不大；由于是按文本框逐次请求，十分消耗请求次数，如果是按次收费的站点不建议使用
+  - **推荐**：日漫推荐 `48px` 或 `mocr`，韩漫推荐 `paddleocr_korean`，英文推荐 `paddleocr_latin`，泰文推荐 `paddleocr_thai`
 
 - **AI OCR 提示词**：OpenAI OCR / Gemini OCR 使用的固定提示词文件
   - Qt 界面中点击"编辑"即可修改

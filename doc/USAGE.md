@@ -238,11 +238,15 @@
 
 在"**选项**"标签页中选择 OCR 模型：
 
+- **32px**：旧版轻量模型，可作兼容性备选
 - **48px**（推荐）：默认模型，平衡速度和准确率
 - **48px_ctc**：CTC 变体模型，可作为备选对比，不代表一定更精确
 - **mocr**：Manga OCR 专用模型
-- **paddleocr**：PaddleOCR 引擎，支持多语言，英肉推荐
+- **paddleocr**：PaddleOCR 引擎，支持多语言
 - **paddleocr_korean**：韩漫推荐
+- **paddleocr_latin**：拉丁字母文本推荐，英文建议优先使用
+- **paddleocr_thai**：泰文推荐
+- **paddleocr_vl**：PaddleOCR-VL-1.5 通用模型，效果最好但最吃配置，建议配合语言提示或自定义提示词
 - **openai_ocr**：调用 OpenAI 兼容多模态接口做 OCR
 - **gemini_ocr**：调用 Gemini 多模态接口做 OCR
 - **日漫混合 OCR 推荐**：`48px + mocr`
@@ -251,6 +255,7 @@
 - 需要先在 `.env` 中配置对应 OCR API 变量，详见 [API 配置教程](API_CONFIG.md)
 - Qt 设置页中的"AI OCR 提示词"只有一个固定编辑入口，实际文件为 `dict/ai_ocr_prompt.yaml`
 - AI OCR 识别完文本后，颜色仍会使用本地 `48px` 模型提取
+- AI OCR 是按文本框逐次请求的，通常效果最好，但和本地 OCR 的差距往往不大；如果站点按请求次数收费，不建议使用
 
 ### AI 上色 / AI 渲染
 

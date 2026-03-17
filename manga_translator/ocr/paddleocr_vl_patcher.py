@@ -46,7 +46,8 @@ if 'transformers.models.ernie4_5_moe' not in sys.modules:
     if os.path.exists(modeling_file):
         with open(modeling_file, 'r', encoding='utf-8') as f:
             content = f.read()
-        
+        changed = False
+
         # 检查是否需要修补
         if '@check_model_inputs' in content and '# @check_model_inputs' not in content:
             # 替换 @check_model_inputs 为注释
@@ -54,7 +55,118 @@ if 'transformers.models.ernie4_5_moe' not in sys.modules:
                 '    @check_model_inputs',
                 '    # @check_model_inputs  # 注释掉此装饰器以避免参数检查问题'
             )
-            
+            changed = True
+
+        # transformers 4.57+ 的 create_causal_mask 参数名从 inputs_embeds 改为 input_embeds
+        legacy_mask_block = """        causal_mask = create_causal_mask(
+            config=self.config,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+            cache_position=cache_position,
+        )"""
+        patched_mask_block = """        causal_mask = create_causal_mask(
+            config=self.config,
+            input_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+            cache_position=cache_position,
+        )"""
+        if legacy_mask_block in content:
+            content = content.replace(legacy_mask_block, patched_mask_block)
+            changed = True
+
+        # 上面的兼容修补只应作用于 create_causal_mask，其他 forward / generation 调用仍需保留 inputs_embeds
+        accidental_replacements = (
+            (
+                """        outputs: BaseModelOutputWithPast = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            input_embeds=inputs_embeds,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            **kwargs,
+        )""",
+                """        outputs: BaseModelOutputWithPast = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            **kwargs,
+        )""",
+            ),
+            (
+                """        outputs = self.model(
+            input_ids=None,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            input_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            **kwargs,
+        )""",
+                """        outputs = self.model(
+            input_ids=None,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            **kwargs,
+        )""",
+            ),
+            (
+                """        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            input_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            pixel_values=pixel_values,
+            pixel_values_videos=pixel_values_videos,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            second_per_grid_ts=second_per_grid_ts,
+            use_cache=use_cache,
+            **kwargs,
+        )""",
+                """        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            pixel_values=pixel_values,
+            pixel_values_videos=pixel_values_videos,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            second_per_grid_ts=second_per_grid_ts,
+            use_cache=use_cache,
+            **kwargs,
+        )""",
+            ),
+        )
+        for bad_block, good_block in accidental_replacements:
+            if bad_block in content:
+                content = content.replace(bad_block, good_block)
+                changed = True
+
+        if changed:
             with open(modeling_file, 'w', encoding='utf-8') as f:
                 f.write(content)
 

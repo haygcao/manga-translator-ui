@@ -9,22 +9,6 @@
 from manga_translator.server.core.account_service import AccountService
 from manga_translator.server.core.audit_service import AuditService
 
-# 身份验证（旧版）
-from manga_translator.server.core.auth import (
-    add_admin_token,
-    admin_login,
-    change_admin_password,
-    check_user_access,
-    clear_admin_tokens,
-    generate_admin_token,
-    remove_admin_token,
-    require_admin_token,
-    setup_admin_password,
-    user_login,
-    valid_admin_tokens,
-    validate_admin_token,
-)
-
 # 配置管理
 from manga_translator.server.core.config_manager import (
     ADMIN_CONFIG_PATH,
@@ -158,19 +142,6 @@ __all__ = [
     'get_available_workflows',
     'temp_env_vars',
     'init_server_config_file',
-    # 身份验证（旧版）
-    'valid_admin_tokens',
-    'generate_admin_token',
-    'validate_admin_token',
-    'add_admin_token',
-    'remove_admin_token',
-    'clear_admin_tokens',
-    'require_admin_token',
-    'admin_login',
-    'setup_admin_password',
-    'change_admin_password',
-    'user_login',
-    'check_user_access',
     # 认证和授权中间件（新版）
     'init_middleware_services',
     'get_services',
