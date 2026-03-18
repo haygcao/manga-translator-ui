@@ -1972,6 +1972,9 @@ def maintenance_menu():
                 if not update_code_force(skip_confirm=True):
                     update_success = False
                     print("[错误] 代码更新失败，跳过依赖更新")
+                else:
+                    print("基于更新后的代码重新检查依赖...")
+                    _, deps_needs_update, _, _, req_file, missing_packages = check_all_updates()
             else:
                 print()
                 print("[1/2] 代码已是最新，跳过")
@@ -1979,12 +1982,7 @@ def maintenance_menu():
             if update_success and deps_needs_update:
                 print()
                 print("[2/2] 更新依赖...")
-                
-                # 代码更新后，重新检查依赖（使用最新的 requirements 文件）
-                if code_needs_update:
-                    print("重新读取更新后的依赖文件...")
-                    _, _, _, _, req_file, missing_packages = check_all_updates()
-                
+
                 if req_file:
                     args.requirements = req_file
                 # 如果有缺失包列表，只安装缺失的包
