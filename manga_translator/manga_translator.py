@@ -1061,8 +1061,16 @@ class MangaTranslator:
             # 收集需要处理的图片路径
             image_paths = []
             for image, config in images_with_configs:
+                image_path = None
                 if hasattr(image, 'name') and image.name:
-                    image_paths.append(image.name)
+                    image_path = image.name
+                elif isinstance(image, (str, os.PathLike)):
+                    image_path = os.fspath(image)
+
+                if image_path:
+                    image_paths.append(image_path)
+                else:
+                    continue
             
             if not image_paths:
                 return
