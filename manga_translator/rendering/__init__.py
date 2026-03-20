@@ -818,9 +818,31 @@ def _resolve_configured_min_font_size(config: Config) -> int:
     return 0
 
 
+def _resolve_configured_fixed_font_size(config: Config) -> int:
+    render_cfg = getattr(config, 'render', None) if config is not None else None
+    raw_font_size = getattr(render_cfg, 'font_size', None) if render_cfg is not None else None
+    if isinstance(raw_font_size, (int, float)) and raw_font_size > 0:
+        return max(int(raw_font_size), 1)
+    return 0
+
+
+def _resolve_initial_layout_font_size(region: TextBlock, img: np.ndarray, config: Config) -> int:
+    region_font_size = getattr(region, 'font_size', 0)
+    if isinstance(region_font_size, (int, float)) and region_font_size > 0:
+        return max(int(region_font_size), 1)
+
+    if img is not None and hasattr(img, 'shape') and len(img.shape) >= 2:
+        return max(round((img.shape[0] + img.shape[1]) / 200), 1)
+    return 24
+
+
 def _apply_final_font_constraints(layout_font_size: int, config: Config) -> int:
     final_font_size = max(int(layout_font_size), 1)
     render_cfg = getattr(config, 'render', None) if config is not None else None
+
+    configured_font_size = _resolve_configured_fixed_font_size(config)
+    if configured_font_size > 0:
+        final_font_size = configured_font_size
 
     font_size_offset = getattr(render_cfg, 'font_size_offset', 0) if render_cfg is not None else 0
     if isinstance(font_size_offset, (int, float)) and font_size_offset != 0:
@@ -1036,9 +1058,11 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                 region.original_font_size = original_region_font_size
 
             layout_min_font_size = 1
-            target_font_size = max(original_region_font_size, layout_min_font_size)
+            target_font_size = max(_resolve_initial_layout_font_size(region, img, config), layout_min_font_size)
 
-            # 保存布局算法的基础字号；最终字号会在后置约束中统一应用 offset/scale/min/max
+            # 入口只保留布局算法自身的参考字号：
+            # region.font_size > 图像估算值
+            # render.font_size 作为固定字号，在统一出口覆盖布局结果。
             region.layout_base_font_size = int(target_font_size)
 
         # --- Mode 5: balloon_fill (MUST BE FIRST to override other modes) ---
@@ -1240,6 +1264,9 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
 
                     preferred_font_size = _apply_final_font_constraints(layout_target_font_size, config)
                     preferred_font_size_for_debug = preferred_font_size
+                    configured_fixed_font_size = _resolve_configured_fixed_font_size(config)
+                    if configured_fixed_font_size > 0:
+                        min_font_size = max(min_font_size, preferred_font_size)
 
                     # 调试用途：记录“超出范围候选框”（较大字号候选但不满足蒙版约束）
                     preferred_dst_points = _calc_region_dst_points_for_font(

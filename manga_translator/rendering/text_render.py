@@ -1387,11 +1387,6 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
     return char_offset_y  
 
 def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tuple[int, int, int], bg: Optional[Tuple[int, int, int]], line_spacing: int, config=None, region_count: int = 1, stroke_width: float = None, letter_spacing: float = 1.0):
-
-    # 应用最大字体限制
-    if config and hasattr(config.render, 'max_font_size') and config.render.max_font_size > 0:
-        font_size = min(font_size, config.render.max_font_size)
-
     text = compact_special_symbols(text)
     # 在竖排文本中，将省略号替换为单个竖排省略号符号（两个小点竖排）
     text = text.replace('…', '︙')
@@ -2187,11 +2182,6 @@ def is_cjk_lang(lang: str):
 def put_text_horizontal(font_size: int, text: str, width: int, height: int, alignment: str,
                         reversed_direction: bool, fg: Tuple[int, int, int], bg: Tuple[int, int, int],
                         lang: str = 'en_US', hyphenate: bool = True, line_spacing: int = 0, config=None, region_count: int = 1, stroke_width: float = None, letter_spacing: float = 1.0):
-
-    # 应用最大字体限制
-    if config and hasattr(config.render, 'max_font_size') and config.render.max_font_size > 0:
-        font_size = min(font_size, config.render.max_font_size)
-
     text = compact_special_symbols(text)
     if not text :
         logger.warning("[RENDER SKIPPED] Horizontal text is empty after processing")

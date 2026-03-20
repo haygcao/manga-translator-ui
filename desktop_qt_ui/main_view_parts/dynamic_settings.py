@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 from utils.resource_helper import resource_path
 from utils.wheel_filter import NoWheelComboBox as QComboBox
+from widgets.hover_hint import set_hover_hint
 from widgets.toggle_switch import ToggleSwitch
 
 
@@ -420,11 +421,11 @@ def _finalize_settings_ui(self):
     self.add_preset_button = QPushButton("+")
     self.add_preset_button.setFixedWidth(36)
     self.add_preset_button.setProperty("chipButton", True)
-    self.add_preset_button.setToolTip(self._t("Add new preset"))
+    set_hover_hint(self.add_preset_button, self._t("Add new preset"))
 
     self.delete_preset_button = QPushButton(self._t("Delete"))
     self.delete_preset_button.setProperty("chipButton", True)
-    self.delete_preset_button.setToolTip(self._t("Delete selected preset"))
+    set_hover_hint(self.delete_preset_button, self._t("Delete selected preset"))
 
     self.env_preset_layout.addWidget(preset_label)
     self.env_preset_layout.addWidget(self.preset_combo)

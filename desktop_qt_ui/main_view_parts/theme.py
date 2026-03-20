@@ -11,7 +11,7 @@ This module owns:
 from __future__ import annotations
 
 from PyQt6.QtGui import QColor, QPalette
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QToolTip, QWidget
 from theme_registry import AVAILABLE_THEMES, DEFAULT_THEME, THEME_OPTIONS
 
 _ACCENT_BASES = {
@@ -909,6 +909,154 @@ def is_dark_theme(theme: str | None = None) -> bool:
     return active_theme in DARK_THEMES
 
 
+def build_tooltip_stylesheet(colors: dict) -> str:
+    return f"""
+        QToolTip {{
+            background-color: {colors["bg_dropdown"]};
+            color: {colors["text_accent"]};
+            border: 1px solid {colors["border_input"]};
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }}
+    """
+
+
+def build_shared_button_stylesheet(colors: dict) -> str:
+    return f"""
+        QPushButton,
+        QToolButton {{
+            background: {colors["btn_soft_bg"]};
+            border: 1px solid {colors["btn_soft_border"]};
+            border-radius: 10px;
+            color: {colors["btn_soft_text"]};
+            padding: 7px 12px;
+            font-weight: 700;
+        }}
+        QPushButton:hover,
+        QToolButton:hover {{
+            background: {colors["btn_soft_hover"]};
+            border-color: {colors["border_input_hover"]};
+        }}
+        QPushButton:pressed,
+        QToolButton:pressed {{
+            background: {colors["btn_soft_pressed"]};
+            border-color: {colors["btn_soft_checked_border"]};
+        }}
+        QPushButton:disabled,
+        QToolButton:disabled {{
+            background: {colors["btn_disabled_bg"]};
+            border-color: {colors["btn_disabled_border"]};
+            color: {colors["text_disabled"]};
+        }}
+        QPushButton:checked,
+        QToolButton:checked {{
+            background: {colors["btn_soft_checked_bg"]};
+            border-color: {colors["btn_soft_checked_border"]};
+            color: {colors["btn_soft_text"]};
+        }}
+
+        QPushButton[chipButton="true"],
+        QToolButton[chipButton="true"] {{
+            background: {colors["btn_soft_bg"]};
+            border: 1px solid {colors["btn_soft_border"]};
+            color: {colors["btn_soft_text"]};
+            padding: 6px 10px;
+            font-weight: 600;
+        }}
+        QPushButton[chipButton="true"]:hover,
+        QToolButton[chipButton="true"]:hover {{
+            background: {colors["btn_soft_hover"]};
+            border-color: {colors["border_input_hover"]};
+            color: {colors["btn_soft_text"]};
+        }}
+
+        QPushButton[variant="accent"],
+        QToolButton[variant="accent"] {{
+            background: {colors["btn_primary_bg"]};
+            border: 1px solid {colors["btn_primary_border"]};
+            color: {colors["btn_primary_text"]};
+            border-radius: 10px;
+            font-weight: 700;
+        }}
+        QPushButton[variant="accent"]:hover,
+        QToolButton[variant="accent"]:hover {{
+            background: {colors["btn_primary_hover"]};
+        }}
+        QPushButton[variant="accent"]:pressed,
+        QToolButton[variant="accent"]:pressed {{
+            background: {colors["btn_primary_pressed"]};
+        }}
+
+        QPushButton[variant="danger"],
+        QToolButton[variant="danger"] {{
+            background: {colors["danger_bg"]};
+            border: 1px solid {colors["danger_border"]};
+            color: {colors["danger_text"]};
+            font-weight: 700;
+        }}
+        QPushButton[variant="danger"]:hover,
+        QToolButton[variant="danger"]:hover {{
+            background: {colors["danger_hover"]};
+        }}
+    """
+
+
+def build_section_icon_button_stylesheet(colors: dict) -> str:
+    return f"""
+        QPushButton[sectionIconButton="true"],
+        QToolButton[sectionIconButton="true"] {{
+            min-width: 28px;
+            max-width: 28px;
+            min-height: 24px;
+            max-height: 24px;
+            padding: 0px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: {colors["text_muted"]};
+            font-size: 14px;
+            font-weight: 700;
+        }}
+        QPushButton[sectionIconButton="true"]:hover,
+        QToolButton[sectionIconButton="true"]:hover {{
+            background: {colors["btn_soft_hover"]};
+            color: {colors["text_bright"]};
+        }}
+        QPushButton[sectionIconButton="true"]:pressed,
+        QToolButton[sectionIconButton="true"]:pressed {{
+            background: {colors["btn_soft_pressed"]};
+            color: {colors["text_bright"]};
+        }}
+        QPushButton[sectionIconButton="true"]:disabled,
+        QToolButton[sectionIconButton="true"]:disabled {{
+            background: transparent;
+            color: {colors["text_disabled"]};
+        }}
+        QPushButton[sectionIconButton="true"][variant="danger"],
+        QToolButton[sectionIconButton="true"][variant="danger"] {{
+            background: transparent;
+            color: {colors["danger_bg"]};
+        }}
+        QPushButton[sectionIconButton="true"][variant="danger"]:hover,
+        QToolButton[sectionIconButton="true"][variant="danger"]:hover {{
+            background: {colors["danger_hover"]};
+            color: {colors["danger_text"]};
+        }}
+        QPushButton[sectionIconButton="true"][variant="danger"]:pressed,
+        QToolButton[sectionIconButton="true"][variant="danger"]:pressed {{
+            background: {colors["danger_bg"]};
+            color: {colors["danger_text"]};
+        }}
+        QPushButton[sectionIconButton="true"][variant="danger"]:disabled,
+        QToolButton[sectionIconButton="true"][variant="danger"]:disabled {{
+            background: transparent;
+            color: {colors["text_disabled"]};
+        }}
+    """
+
+
 def build_theme_palette(theme: str) -> QPalette:
     c = get_theme_colors(theme)
     palette = QPalette()
@@ -977,15 +1125,7 @@ def generate_application_stylesheet(theme: str) -> str:
             color: {c["text_disabled"]};
         }}
 
-        QToolTip {{
-            background-color: {c["bg_surface_raised"]};
-            color: {c["text_accent"]};
-            border: 1px solid {c["border_card"]};
-            border-radius: 10px;
-            padding: 8px 12px;
-            font-size: 12px;
-            font-weight: 600;
-        }}
+        {build_tooltip_stylesheet(c)}
 
         QMenu {{
             background: {c["bg_dropdown"]};
@@ -1269,81 +1409,7 @@ def generate_application_stylesheet(theme: str) -> str:
             color: {c["list_item_selected_text"]};
         }}
 
-        QPushButton,
-        QToolButton {{
-            background: {c["btn_soft_bg"]};
-            border: 1px solid {c["btn_soft_border"]};
-            border-radius: 10px;
-            color: {c["btn_soft_text"]};
-            padding: 7px 12px;
-            font-weight: 700;
-        }}
-        QPushButton:hover,
-        QToolButton:hover {{
-            background: {c["btn_soft_hover"]};
-            border-color: {c["border_input_hover"]};
-        }}
-        QPushButton:pressed,
-        QToolButton:pressed {{
-            background: {c["btn_soft_pressed"]};
-            border-color: {c["btn_soft_checked_border"]};
-        }}
-        QPushButton:disabled,
-        QToolButton:disabled {{
-            background: {c["btn_disabled_bg"]};
-            border-color: {c["btn_disabled_border"]};
-            color: {c["text_disabled"]};
-        }}
-        QPushButton:checked,
-        QToolButton:checked {{
-            background: {c["btn_soft_checked_bg"]};
-            border-color: {c["btn_soft_checked_border"]};
-            color: {c["btn_soft_text"]};
-        }}
-
-        QPushButton[chipButton="true"],
-        QToolButton[chipButton="true"] {{
-            background: {c["btn_soft_bg"]};
-            border: 1px solid {c["btn_soft_border"]};
-            color: {c["btn_soft_text"]};
-            padding: 6px 10px;
-            font-weight: 600;
-        }}
-        QPushButton[chipButton="true"]:hover,
-        QToolButton[chipButton="true"]:hover {{
-            background: {c["btn_soft_hover"]};
-            border-color: {c["border_input_hover"]};
-            color: {c["btn_soft_text"]};
-        }}
-
-        QPushButton[variant="accent"],
-        QToolButton[variant="accent"] {{
-            background: {c["btn_primary_bg"]};
-            border: 1px solid {c["btn_primary_border"]};
-            color: {c["btn_primary_text"]};
-            border-radius: 10px;
-            font-weight: 700;
-        }}
-        QPushButton[variant="accent"]:hover,
-        QToolButton[variant="accent"]:hover {{
-            background: {c["btn_primary_hover"]};
-        }}
-        QPushButton[variant="accent"]:pressed,
-        QToolButton[variant="accent"]:pressed {{
-            background: {c["btn_primary_pressed"]};
-        }}
-
-        QPushButton[variant="danger"],
-        QToolButton[variant="danger"] {{
-            background: {c["danger_bg"]};
-            border: 1px solid {c["danger_border"]};
-            color: {c["danger_text"]};
-            font-weight: 700;
-        }}
-        QPushButton[variant="danger"]:hover,
-        QToolButton[variant="danger"]:hover {{
-            background: {c["danger_hover"]};
-        }}
+        {build_shared_button_stylesheet(c)}
 
         QCheckBox {{
             spacing: 8px;
@@ -1604,3 +1670,5 @@ def apply_application_theme(theme: str, app: QApplication | None = None) -> None
     palette = build_theme_palette(resolved_theme)
     app.setPalette(palette)
     app.setStyleSheet(generate_application_stylesheet(resolved_theme))
+    QToolTip.setPalette(palette)
+    QToolTip.setFont(app.font())

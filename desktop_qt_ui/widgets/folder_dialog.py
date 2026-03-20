@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from services import get_i18n_manager
+from widgets.hover_hint import set_hover_hint
 
 
 def _folder_dialog_tokens() -> dict[str, str]:
@@ -657,7 +658,7 @@ class FolderDialog(QDialog):
         # 后退按钮
         self.back_button = QToolButton()
         self.back_button.setText("←")
-        self.back_button.setToolTip(self._t("Back"))
+        set_hover_hint(self.back_button, self._t("Back"))
         self.back_button.setFixedSize(34, 34)
         self.back_button.setEnabled(False)
         toolbar_layout.addWidget(self.back_button)
@@ -665,7 +666,7 @@ class FolderDialog(QDialog):
         # 前进按钮
         self.forward_button = QToolButton()
         self.forward_button.setText("→")
-        self.forward_button.setToolTip(self._t("Forward"))
+        set_hover_hint(self.forward_button, self._t("Forward"))
         self.forward_button.setFixedSize(34, 34)
         self.forward_button.setEnabled(False)
         toolbar_layout.addWidget(self.forward_button)
@@ -673,14 +674,14 @@ class FolderDialog(QDialog):
         # 上级目录按钮
         self.parent_button = QToolButton()
         self.parent_button.setText("↑")
-        self.parent_button.setToolTip(self._t("Parent Directory"))
+        set_hover_hint(self.parent_button, self._t("Parent Directory"))
         self.parent_button.setFixedSize(34, 34)
         toolbar_layout.addWidget(self.parent_button)
 
         # 刷新按钮
         self.refresh_button = QToolButton()
         self.refresh_button.setText("↻")
-        self.refresh_button.setToolTip(self._t("Refresh"))
+        set_hover_hint(self.refresh_button, self._t("Refresh"))
         self.refresh_button.setFixedSize(34, 34)
         toolbar_layout.addWidget(self.refresh_button)
 
@@ -746,7 +747,7 @@ class FolderDialog(QDialog):
         # 地址栏编辑按钮
         self.edit_path_button = QToolButton()
         self.edit_path_button.setText("/")
-        self.edit_path_button.setToolTip(self._t("Edit Path"))
+        set_hover_hint(self.edit_path_button, self._t("Edit Path"))
         self.edit_path_button.setStyleSheet(f"""
             QToolButton {{
                 background-color: {self._chip_bg_color};
