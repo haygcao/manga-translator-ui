@@ -53,13 +53,13 @@ class EnvVarsModule {
     
     async loadEnvVars() {
         try {
-            const resp = await fetch('/admin/env-vars?show_values=true', {
+            const resp = await fetch('/api/admin/config/server?show_values=true', {
                 headers: { 'X-Session-Token': this.app.sessionToken }
             });
             
             if (resp.ok) {
                 const data = await resp.json();
-                const vars = data.vars || data;
+                const vars = data.config || {};
                 
                 this.envKeys.forEach(key => {
                     const input = document.getElementById(`env-${key}`);
@@ -480,13 +480,13 @@ class EnvVarsModule {
         });
         
         try {
-            const resp = await fetch('/admin/env-vars', {
-                method: 'POST',
+            const resp = await fetch('/api/admin/config/server', {
+                method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-Session-Token': this.app.sessionToken
                 },
-                body: JSON.stringify(envVars)
+                body: JSON.stringify({ config: envVars })
             });
             
             if (resp.ok) {

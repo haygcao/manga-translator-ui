@@ -3,13 +3,13 @@
 统一管理编辑器的所有资源，包括图片、蒙版、区域等。
 """
 
-import gc
 import logging
 import os
 from typing import Dict, List, Optional
 
 import numpy as np
 from PIL import Image
+
 from manga_translator.utils import open_pil_image
 
 from .resources import ImageResource, MaskResource, RegionResource
@@ -53,71 +53,51 @@ class ResourceManager:
         self._temp_cache: Dict[str, any] = {}
     
     # ==================== 图片管理 ====================
-    
-    def load_image(self, image_path: str, json_data: Optional[Dict] = None) -> ImageResource:
-        """加载图片资源
-        
-        Args:
-            image_path: 图片路径
-            json_data: 关联的JSON数据
-        
-        Returns:
-            ImageResource: 图片资源
-        
-        Raises:
-            FileNotFoundError: 图片文件不存在
-            Exception: 加载失败
-        """
+
+    @staticmethod
+    def _resolve_image_path(image_path: str) -> str:
+        """规范化图片路径并校验存在性。"""
         from pathlib import Path
-        
-        # 使用 pathlib 处理路径，更好地支持中文和特殊字符
+
         path_obj = Path(image_path)
-        
-        # 检查文件是否存在
         if not path_obj.exists():
-            # 尝试使用原始路径再检查一次
             if not os.path.exists(image_path):
-                self.logger.error(f"Image file not found: {image_path}")
-                self.logger.error(f"Resolved path: {path_obj.resolve()}")
                 raise FileNotFoundError(f"Image file not found: {image_path}")
-        
-        # 获取绝对路径并规范化
-        image_path = str(path_obj.resolve())
-        
-        # 检查缓存
+
+        return str(path_obj.resolve())
+
+    def load_image(self, image_path: str) -> ImageResource:
+        """加载当前编辑底图资源，并更新 current_image。"""
+        image_path = self._resolve_image_path(image_path)
+
         if image_path in self._image_cache:
             self.logger.debug(f"Image loaded from cache: {image_path}")
             resource = self._image_cache[image_path]
             self._current_image = resource
             return resource
-        
-        # 加载图片
+
         try:
             self.logger.debug(f"Loading image: {image_path}")
-            # 使用 pathlib.Path 对象打开图片，更好地处理中文路径
-            image = open_pil_image(path_obj, eager=False)
-            
-            # 创建资源对象
+            image = open_pil_image(image_path, eager=False)
             resource = ImageResource(
                 path=image_path,
                 image=image,
                 width=image.width,
                 height=image.height,
-                json_data=json_data,
             )
-            
-            # 添加到缓存
             self._add_to_cache(image_path, resource)
-            
-            # 设置为当前图片
             self._current_image = resource
-            
             self.logger.debug(f"Image loaded successfully: {image_path} ({image.width}x{image.height})")
             return resource
-            
         except Exception as e:
             self.logger.error(f"Failed to load image {image_path}: {e}")
             raise
+
+    def load_detached_image(self, image_path: str) -> Image.Image:
+        """加载辅助图片，不写入 current_image，也不污染缓存。"""
+        image_path = self._resolve_image_path(image_path)
+        self.logger.debug(f"Loading detached image: {image_path}")
+        return open_pil_image(image_path, eager=False)
     
     def _add_to_cache(self, path: str, resource: ImageResource) -> None:
         """添加图片到缓存
@@ -204,14 +184,6 @@ class ResourceManager:
         """
         return self._current_image
     
-    def get_current_image_path(self) -> Optional[str]:
-        """获取当前图片路径
-        
-        Returns:
-            Optional[str]: 当前图片路径，如果没有加载返回None
-        """
-        return self._current_image.path if self._current_image else None
-    
     # ==================== 蒙版管理 ====================
     
     def set_mask(self, mask_type: MaskType, mask_data: np.ndarray) -> MaskResource:
@@ -283,47 +255,7 @@ class ResourceManager:
         self._regions[region_id] = resource
         self.logger.debug(f"Added region: {region_id}")
         return resource
-    
-    def update_region(self, region_id: int, updates: Dict) -> None:
-        """更新区域数据
-        
-        Args:
-            region_id: 区域ID
-            updates: 要更新的数据
-        
-        Raises:
-            KeyError: 区域不存在
-        """
-        if region_id not in self._regions:
-            self.logger.warning(f"Region {region_id} not found, skipping update")
-            return  # 静默失败，不抛出异常
-        
-        self._regions[region_id].data.update(updates)
-        import time
-        self._regions[region_id].update_time = time.time()
-        self.logger.debug(f"Updated region: {region_id}")
-    
-    def delete_region(self, region_id: int) -> None:
-        """删除区域
-        
-        Args:
-            region_id: 区域ID
-        """
-        if region_id in self._regions:
-            del self._regions[region_id]
-            self.logger.debug(f"Deleted region: {region_id}")
-    
-    def get_region(self, region_id: int) -> Optional[RegionResource]:
-        """获取区域
-        
-        Args:
-            region_id: 区域ID
-        
-        Returns:
-            Optional[RegionResource]: 区域资源，如果不存在返回None
-        """
-        return self._regions.get(region_id)
-    
+
     def get_all_regions(self) -> List[RegionResource]:
         """获取所有区域（按region_id排序）
         
@@ -423,27 +355,6 @@ class ResourceManager:
         _release_gpu_memory()
         
         self.logger.info("Memory released after export")
-    
-    def get_memory_usage_estimate(self) -> int:
-        """估算内存使用量（字节）
-        
-        Returns:
-            int: 估算的内存使用量
-        """
-        size = 0
-        
-        # 图片缓存
-        for resource in self._image_cache.values():
-            if resource.image:
-                # 估算：宽 × 高 × 通道数 × 每像素字节数
-                size += resource.width * resource.height * 4  # RGBA
-        
-        # 蒙版
-        for mask in self._masks.values():
-            if mask.data is not None:
-                size += mask.data.nbytes
-        
-        return size
     
     def __del__(self):
         """析构函数"""

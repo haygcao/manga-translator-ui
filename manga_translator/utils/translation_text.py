@@ -1,6 +1,5 @@
 import unicodedata
 
-
 _PERIOD_CHARS = ".。．"
 _TRAILING_CLOSERS = "\"'”’)]}）］】〉》」』"
 

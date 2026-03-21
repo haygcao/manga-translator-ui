@@ -3,7 +3,9 @@
 """
 import io
 import secrets
+
 from fastapi import HTTPException
+
 from manga_translator.server.to_json import to_translation
 
 

@@ -1,18 +1,20 @@
 import os
 import shutil
-import numpy as np
-import einops
-from typing import Union, Tuple
+from typing import Tuple, Union
+
 import cv2
+import einops
+import numpy as np
 import torch
 
+from ..utils import Quadrilateral, det_rearrange_forward
+from .common import OfflineDetector
 from .ctd_utils.basemodel import TextDetBase, TextDetBaseDNN
-from .ctd_utils.utils.yolov5_utils import non_max_suppression
+from .ctd_utils.textmask import refine_mask
 from .ctd_utils.utils.db_utils import SegDetectorRepresenter
 from .ctd_utils.utils.imgproc_utils import letterbox
-from .ctd_utils.textmask import REFINEMASK_INPAINT, refine_mask
-from .common import OfflineDetector
-from ..utils import Quadrilateral, det_rearrange_forward
+from .ctd_utils.utils.yolov5_utils import non_max_suppression
+
 
 def preprocess_img(img, input_size=(1024, 1024), device='cpu', bgr2rgb=True, half=False, to_tensor=True):
     if bgr2rgb:

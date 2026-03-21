@@ -1,17 +1,25 @@
-import os
-import re
-import cv2
-import numpy as np
-import freetype
 import functools
 import logging
+import os
+import re
 from pathlib import Path
-from typing import Tuple, Optional, List
+from typing import List, Optional, Tuple
+
+import cv2
+import freetype
+import numpy as np
 from hyphen import Hyphenator
 from hyphen.dictools import LANGUAGES as HYPHENATOR_LANGUAGES
 from langcodes import standardize_tag
 
-from ..utils import BASE_PATH, is_punctuation, is_whitespace, imwrite_unicode
+try:
+    import uharfbuzz as hb
+    HAS_UHARFBUZZ = True
+except ImportError:
+    hb = None
+    HAS_UHARFBUZZ = False
+
+from ..utils import BASE_PATH, imwrite_unicode
 
 try:
     HYPHENATOR_LANGUAGES.remove('fr')
@@ -21,10 +29,12 @@ except Exception:
 
 CJK_H2V = {
     "‥": "︰",
+    "─": "│",
+    "━": "┃",
+    "═": "║",
     "—": "︱",
     "―": "|",
     "–": "︲",
-    "_": "︳",
     "_": "︴",
     "(": "︵",
     ")": "︶",
@@ -73,15 +83,12 @@ CJK_H2V = {
     "⋯": "︙", 
     "⋰": "⋮",    
     "⋱": "⋮",           
-    "\"": "﹁",   
     "\"": "﹂",   
-    "'": "﹁",   
     "'": "﹂",   
     "″": "﹂",   
     "‴": "﹂",   
     "‶": "﹁",   
     "ⷷ": "﹁",   
-    "~": "︴",   
     "〜": "︴",   
     "～": "︴",   
     "~": "≀",
@@ -91,13 +98,13 @@ CJK_H2V = {
     "؟": "︖",    
     "¿": "︖",    
     "¡": "︕",    
-    ".": "︒",    
+    ".": "︒",
     "。": "︒",   
     ";": "︔",    
     "；": "︔",   
     ":": "︓",    
     "：": "︓",  
-    ",": "︐",    
+    ",": "︐",
     "，": "︐",   
     # "､": "︐",    
     "‚": "︐",    
@@ -117,14 +124,15 @@ logger.addHandler(logging.NullHandler())
 
 DEFAULT_FONT = os.path.join(BASE_PATH, 'fonts', 'Arial-Unicode-Regular.ttf')
 try:
-    FONT = freetype.Face(Path(DEFAULT_FONT).open('rb'))
+    _default_font_handle = Path(DEFAULT_FONT).open('rb')
+    FONT = freetype.Face(_default_font_handle)
 except Exception as e:
     logger.error(f"Failed to initialize default font: {e}")
     FONT = None  
 
 def CJK_Compatibility_Forms_translate(cdpt: str, direction: int):
     """direction: 0 - horizontal, 1 - vertical"""
-    
+
     if cdpt == 'ー' and direction == 1:
         return 'ー', 90
     if cdpt in CJK_V2H:
@@ -339,6 +347,16 @@ def _normalize_horizontal_block_content(content: str) -> str:
     content = content.replace('\r', '').replace('\n', '')
     return content
 
+
+def prepare_text_for_direction_rendering(text: str, is_horizontal: bool, auto_rotate_symbols: bool = False) -> str:
+    """Apply the same direction-specific text preprocessing used by render/layout."""
+    text = text or ""
+    if is_horizontal:
+        return re.sub(r'<H>(.*?)</H>', r'\1', text, flags=re.IGNORECASE | re.DOTALL)
+    if auto_rotate_symbols:
+        return auto_add_horizontal_tags(text)
+    return text
+
 def _convert_br_outside_h_tags(text: str) -> str:
     """Convert BR markers to '\\n' outside <H>, and split BR inside <H> into per-line <H> blocks."""
     parts = re.split(r'(<H>.*?</H>)', text, flags=re.IGNORECASE | re.DOTALL)
@@ -436,6 +454,12 @@ FALLBACK_FONTS = [
 FONT_SELECTION: List[freetype.Face] = []
 font_cache = {}
 _font_file_handles = {}  # 保存文件句柄，防止被垃圾回收
+_face_paths = {}
+_font_data_cache = {}
+
+if FONT is not None:
+    _font_file_handles[DEFAULT_FONT] = _default_font_handle
+    _face_paths[id(FONT)] = DEFAULT_FONT.replace('\\', '/')
 
 def get_cached_font(path: str) -> freetype.Face:
     path = path.replace('\\', '/')
@@ -443,7 +467,9 @@ def get_cached_font(path: str) -> freetype.Face:
         # 保存文件句柄引用，防止被关闭
         file_handle = Path(path).open('rb')
         _font_file_handles[path] = file_handle
-        font_cache[path] = freetype.Face(file_handle)
+        face = freetype.Face(file_handle)
+        font_cache[path] = face
+        _face_paths[id(face)] = path
     return font_cache[path]
 
 def update_font_selection():
@@ -499,6 +525,209 @@ def set_font(path: str):
             FONT = None
     update_font_selection()
     get_char_glyph.cache_clear()
+
+def is_thai_lang(lang: str):
+    lang = (lang or '').lower()
+    return lang in ['tha', 'th', 'th_th']
+
+def contains_thai_text(text: str) -> bool:
+    return any('\u0E00' <= ch <= '\u0E7F' for ch in text)
+
+def _get_face_path(face: freetype.Face) -> Optional[str]:
+    return _face_paths.get(id(face))
+
+def _get_font_data(path: str) -> bytes:
+    path = path.replace('\\', '/')
+    data = _font_data_cache.get(path)
+    if data is None:
+        data = Path(path).read_bytes()
+        _font_data_cache[path] = data
+    return data
+
+def _select_shaping_face(text: str) -> Optional[freetype.Face]:
+    visible_chars = [ch for ch in text if not ch.isspace()]
+    if not visible_chars:
+        return FONT_SELECTION[0] if FONT_SELECTION else FONT
+
+    best_face = None
+    best_score = -1
+    for face in FONT_SELECTION:
+        score = sum(1 for ch in visible_chars if face.get_char_index(ch) != 0)
+        if score > best_score:
+            best_face = face
+            best_score = score
+        if score == len(visible_chars):
+            return face
+    return best_face
+
+def _select_face_for_char(ch: str) -> Optional[freetype.Face]:
+    if ch.isspace():
+        return FONT_SELECTION[0] if FONT_SELECTION else FONT
+
+    for face in FONT_SELECTION:
+        if face.get_char_index(ch) != 0:
+            return face
+    return FONT_SELECTION[0] if FONT_SELECTION else FONT
+
+def _split_text_into_shaping_runs(text: str):
+    if not text:
+        return []
+
+    runs = []
+    current_face = None
+    current_chars = []
+
+    for ch in text:
+        face = _select_face_for_char(ch)
+        if face is None:
+            continue
+
+        # Keep spaces with the active run so spacing stays consistent across mixed-font text.
+        if ch.isspace() and current_chars:
+            current_chars.append(ch)
+            continue
+
+        if current_face is None or face == current_face:
+            current_face = face
+            current_chars.append(ch)
+            continue
+
+        runs.append((current_face, ''.join(current_chars)))
+        current_face = face
+        current_chars = [ch]
+
+    if current_chars and current_face is not None:
+        runs.append((current_face, ''.join(current_chars)))
+
+    return runs
+
+def _shape_run_hb(face: freetype.Face, text: str, font_size: int):
+    if not HAS_UHARFBUZZ or not text:
+        return None, None, None
+
+    face_path = _get_face_path(face)
+    if not face_path:
+        return None, None, None
+
+    blob = hb.Blob(_get_font_data(face_path))
+    hb_face = hb.Face(blob, 0)
+    hb_font = hb.Font(hb_face)
+    hb.ot_font_set_funcs(hb_font)
+    hb_font.scale = (font_size * 64, font_size * 64)
+
+    buf = hb.Buffer()
+    buf.add_str(text)
+    buf.direction = 'ltr'
+    buf.script = 'thai'
+    buf.language = 'th'
+    buf.guess_segment_properties()
+    hb.shape(hb_font, buf, {'kern': True, 'liga': True, 'clig': True, 'ccmp': True, 'mark': True, 'mkmk': True})
+    return face, buf.glyph_infos, buf.glyph_positions
+
+def _shape_text_hb(text: str, font_size: int):
+    if not HAS_UHARFBUZZ or not text:
+        return []
+
+    shaped_runs = []
+    for face, run_text in _split_text_into_shaping_runs(text):
+        shaped = _shape_run_hb(face, run_text, font_size)
+        if shaped[0] is not None and shaped[1]:
+            shaped_runs.append(shaped)
+    return shaped_runs
+
+def _get_glyph_border(face: freetype.Face, glyph_id: int, font_size: int):
+    face.set_pixel_sizes(0, font_size)
+    face.load_glyph(glyph_id, freetype.FT_LOAD_DEFAULT | freetype.FT_LOAD_NO_BITMAP)
+    return face.glyph.get_glyph()
+
+def _paste_bitmap(canvas: np.ndarray, bitmap_arr: np.ndarray, x: int, y: int, mode: str = 'max'):
+    rows, width = bitmap_arr.shape
+    paste_y_start = max(0, y)
+    paste_x_start = max(0, x)
+    paste_y_end = min(canvas.shape[0], y + rows)
+    paste_x_end = min(canvas.shape[1], x + width)
+    if paste_y_start >= paste_y_end or paste_x_start >= paste_x_end:
+        return
+    bitmap_slice = bitmap_arr[
+        paste_y_start - y: paste_y_end - y,
+        paste_x_start - x: paste_x_end - x
+    ]
+    target = canvas[paste_y_start:paste_y_end, paste_x_start:paste_x_end]
+    if mode == 'add':
+        canvas[paste_y_start:paste_y_end, paste_x_start:paste_x_end] = cv2.add(target, bitmap_slice)
+    else:
+        canvas[paste_y_start:paste_y_end, paste_x_start:paste_x_end] = np.maximum(target, bitmap_slice)
+
+def _render_thai_shaped_line(line_text: str, font_size: int, border_size: int, config=None, stroke_ratio: float = 0.07, letter_spacing: float = 1.0):
+    if not line_text or not HAS_UHARFBUZZ or not contains_thai_text(line_text):
+        return None
+
+    shaped_runs = _shape_text_hb(line_text, font_size)
+    if not shaped_runs:
+        return None
+
+    total_advance = 0
+    shaped_payload = []
+    for face, glyph_infos, glyph_positions in shaped_runs:
+        face.set_pixel_sizes(0, font_size)
+        advances = [_scale_advance(pos.x_advance >> 6, letter_spacing) for pos in glyph_positions]
+        shaped_payload.append((face, glyph_infos, glyph_positions, advances))
+        total_advance += sum(advances)
+
+    temp_w = max(font_size * 6, total_advance + (font_size + border_size) * 8)
+    temp_h = max(font_size * 6, (font_size + border_size) * 6)
+    canvas_text = np.zeros((temp_h, temp_w), dtype=np.uint8)
+    canvas_border = np.zeros((temp_h, temp_w), dtype=np.uint8)
+
+    origin_x = (font_size + border_size) * 2
+    baseline_y = (font_size + border_size) * 3
+    pen_x = origin_x
+
+    for face, glyph_infos, glyph_positions, advances in shaped_payload:
+        for info, pos, advance_x in zip(glyph_infos, glyph_positions, advances):
+            x_offset = pos.x_offset >> 6
+            y_offset = pos.y_offset >> 6
+            face.load_glyph(info.codepoint, freetype.FT_LOAD_RENDER)
+            slot = face.glyph
+            bitmap = slot.bitmap
+            if bitmap.rows * bitmap.width > 0 and len(bitmap.buffer) == bitmap.rows * bitmap.width:
+                bitmap_char = np.array(bitmap.buffer, dtype=np.uint8).reshape((bitmap.rows, bitmap.width))
+                glyph_x = pen_x + x_offset + slot.bitmap_left
+                glyph_y = baseline_y - slot.bitmap_top - y_offset
+                _paste_bitmap(canvas_text, bitmap_char, glyph_x, glyph_y, mode='max')
+
+            if border_size > 0:
+                glyph_border = _get_glyph_border(face, info.codepoint, font_size)
+                stroker = freetype.Stroker()
+                stroke_radius = 64 * max(int(stroke_ratio * font_size), 1)
+                stroker.set(stroke_radius, freetype.FT_STROKER_LINEJOIN_ROUND, freetype.FT_STROKER_LINECAP_ROUND, 0)
+                glyph_border.stroke(stroker, destroy=True)
+                blyph = glyph_border.to_bitmap(freetype.FT_RENDER_MODE_NORMAL, freetype.Vector(0, 0), True)
+                bitmap_b = blyph.bitmap
+                if bitmap_b.rows * bitmap_b.width > 0 and len(bitmap_b.buffer) == bitmap_b.rows * bitmap_b.width:
+                    bitmap_border = np.array(bitmap_b.buffer, dtype=np.uint8).reshape((bitmap_b.rows, bitmap_b.width))
+                    border_left = getattr(blyph, 'left', slot.bitmap_left)
+                    border_top = getattr(blyph, 'top', slot.bitmap_top)
+                    border_x = pen_x + x_offset + border_left
+                    border_y = baseline_y - border_top - y_offset
+                    _paste_bitmap(canvas_border, bitmap_border, border_x, border_y, mode='add')
+
+            pen_x += advance_x
+
+    combined = cv2.add(canvas_text, canvas_border)
+    x, y, w, h = cv2.boundingRect(combined)
+    if w == 0 or h == 0:
+        return None
+
+    return {
+        'text': canvas_text[y:y+h, x:x+w],
+        'border': canvas_border[y:y+h, x:x+w],
+        'left_rel': x - origin_x,
+        'right_rel': x - origin_x + w,
+        'top_rel': y - baseline_y,
+        'width': w,
+        'height': h,
+    }
 
 
 def _normalize_letter_spacing(letter_spacing: float) -> float:
@@ -562,7 +791,6 @@ class Glyph:
 
 @functools.lru_cache(maxsize = 1024, typed = True)
 def get_char_glyph(cdpt: str, font_size: int, direction: int) -> Glyph:
-    global FONT_SELECTION
     for i, face in enumerate(FONT_SELECTION):
         char_index = face.get_char_index(cdpt)
         if char_index != 0:
@@ -609,7 +837,6 @@ def get_char_glyph(cdpt: str, font_size: int, direction: int) -> Glyph:
 # 真正的优化在 _stroke_border_cache 中缓存最终的 bitmap 结果
 #@functools.lru_cache(maxsize = 1024, typed = True)
 def get_char_border(cdpt: str, font_size: int, direction: int):
-    global FONT_SELECTION
     for i, face in enumerate(FONT_SELECTION):
         if face.get_char_index(cdpt) == 0 and i != len(FONT_SELECTION) - 1:
             continue
@@ -829,6 +1056,18 @@ def _measure_horizontal_line_visual_extents(line_text: str, font_size: int, bord
     if not line_text:
         return 0, 0
 
+    if not reversed_direction and HAS_UHARFBUZZ and contains_thai_text(line_text):
+        shaped_line = _render_thai_shaped_line(
+            line_text,
+            font_size,
+            border_size=border_size,
+            config=config,
+            stroke_ratio=stroke_ratio,
+            letter_spacing=letter_spacing,
+        )
+        if shaped_line is not None:
+            return shaped_line['left_rel'], shaped_line['right_rel']
+
     total_advance = get_string_width(font_size, line_text, letter_spacing=letter_spacing)
     temp_w = max(font_size * 4, total_advance + (font_size + border_size) * 4)
     temp_h = max(font_size * 3, (font_size + border_size) * 4)
@@ -1019,7 +1258,6 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
         return _scale_advance(font_size, letter_spacing)
 
     pen = pen_l.copy()
-    _is_pun = is_punctuation(cdpt)
 
     cdpt, rot_degree = CJK_Compatibility_Forms_translate(cdpt, 1)
 
@@ -1056,8 +1294,6 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
         return char_offset_y
     bitmap_char = np.array(bitmap.buffer, dtype=np.uint8).reshape((char_bitmap_rows, char_bitmap_width))
 
-    # 保存原始尺寸用于位置补偿计算
-    _original_bitmap_rows = char_bitmap_rows
     original_bitmap_width = char_bitmap_width
     
     # 如果需要旋转90度
@@ -1151,11 +1387,6 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
     return char_offset_y  
 
 def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tuple[int, int, int], bg: Optional[Tuple[int, int, int]], line_spacing: int, config=None, region_count: int = 1, stroke_width: float = None, letter_spacing: float = 1.0):
-
-    # 应用最大字体限制
-    if config and hasattr(config.render, 'max_font_size') and config.render.max_font_size > 0:
-        font_size = min(font_size, config.render.max_font_size)
-
     text = compact_special_symbols(text)
     # 在竖排文本中，将省略号替换为单个竖排省略号符号（两个小点竖排）
     text = text.replace('…', '︙')
@@ -1357,13 +1588,8 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
 
                     # 智能边界调整：向中心方向移动而不是跳过
                     canvas_h, canvas_w = canvas_text.shape
-                    adjusted = False
                     if paste_y + rh > canvas_h or paste_x + rw > canvas_w or paste_x < 0 or paste_y < 0:
-                        _adjusted = True
                         # 向中心调整位置
-                        _center_x = canvas_w // 2
-                        _center_y = canvas_h // 2
-
                         # X 方向调整
                         if paste_x < 0:
                             paste_x = 0
@@ -1627,7 +1853,7 @@ def calc_horizontal(font_size: int, text: str, max_width: int, max_height: int, 
         if hyphenator and len(word) <= 100:
             try:
                 new_syls = hyphenator.syllables(word)
-            except Exception as _e:
+            except Exception:
                 new_syls = []
 
         if len(new_syls) == 0:
@@ -1945,7 +2171,7 @@ def put_char_horizontal(font_size: int, cdpt: str, pen_l: Tuple[int, int], canva
                         target_slice, bitmap_border_slice)
                 else:
                     print("[Error] Shape mismatch during border paste: "
-                         f"target={{target_slice.shape}}, source={{bitmap_border_slice.shape}}")
+                         f"target={target_slice.shape}, source={bitmap_border_slice.shape}")
     return char_offset_x
 
 def is_cjk_lang(lang: str):
@@ -1956,11 +2182,6 @@ def is_cjk_lang(lang: str):
 def put_text_horizontal(font_size: int, text: str, width: int, height: int, alignment: str,
                         reversed_direction: bool, fg: Tuple[int, int, int], bg: Tuple[int, int, int],
                         lang: str = 'en_US', hyphenate: bool = True, line_spacing: int = 0, config=None, region_count: int = 1, stroke_width: float = None, letter_spacing: float = 1.0):
-
-    # 应用最大字体限制
-    if config and hasattr(config.render, 'max_font_size') and config.render.max_font_size > 0:
-        font_size = min(font_size, config.render.max_font_size)
-
     text = compact_special_symbols(text)
     if not text :
         logger.warning("[RENDER SKIPPED] Horizontal text is empty after processing")
@@ -2046,13 +2267,32 @@ def put_text_horizontal(font_size: int, text: str, width: int, height: int, alig
             target_right = target_left + line_visual_width
             pen_line[0] = round(target_right - line_right)
 
-        for char_idx, c in enumerate(line_text):
-            if reversed_direction:
-                offset_x = get_char_offset_x(font_size, c, letter_spacing=letter_spacing)
-                pen_line[0] -= offset_x
-            offset_x = put_char_horizontal(font_size, c, pen_line, canvas_text, canvas_border, border_size=bg_size, config=config, stroke_width=stroke_ratio, letter_spacing=letter_spacing)
-            if not reversed_direction:
-                pen_line[0] += offset_x
+        if not reversed_direction and HAS_UHARFBUZZ and contains_thai_text(line_text):
+            shaped_line = _render_thai_shaped_line(
+                line_text,
+                font_size,
+                border_size=bg_size,
+                config=config,
+                stroke_ratio=stroke_ratio,
+                letter_spacing=letter_spacing,
+            )
+            if shaped_line is not None:
+                paste_x = pen_line[0] + shaped_line['left_rel']
+                paste_y = pen_line[1] + shaped_line['top_rel']
+                _paste_bitmap(canvas_text, shaped_line['text'], paste_x, paste_y, mode='max')
+                _paste_bitmap(canvas_border, shaped_line['border'], paste_x, paste_y, mode='add')
+            else:
+                for char_idx, c in enumerate(line_text):
+                    offset_x = put_char_horizontal(font_size, c, pen_line, canvas_text, canvas_border, border_size=bg_size, config=config, stroke_width=stroke_ratio, letter_spacing=letter_spacing)
+                    pen_line[0] += offset_x
+        else:
+            for char_idx, c in enumerate(line_text):
+                if reversed_direction:
+                    offset_x = get_char_offset_x(font_size, c, letter_spacing=letter_spacing)
+                    pen_line[0] -= offset_x
+                offset_x = put_char_horizontal(font_size, c, pen_line, canvas_text, canvas_border, border_size=bg_size, config=config, stroke_width=stroke_ratio, letter_spacing=letter_spacing)
+                if not reversed_direction:
+                    pen_line[0] += offset_x
         pen_orig[1] += spacing_y + font_size
 
     canvas_border = np.clip(canvas_border, 0, 255)

@@ -13,7 +13,6 @@ from manga_translator import Config
 from manga_translator.custom_api_params import migrate_legacy_custom_api_params_config
 from manga_translator.utils import BASE_PATH
 
-
 # 配置文件路径
 ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'admin_config.json')
 # 默认配置文件：优先使用 examples/config.json（相对于项目根目录）
@@ -51,6 +50,7 @@ DEFAULT_ADMIN_SETTINGS = {
         'cli.skip_no_text',
         'cli.save_text',
         'cli.load_text',
+        'cli.translate_json_only',
         'cli.template',
         # 'cli.attempts',  # 不再隐藏，让用户可以设置重试次数
         'cli.ignore_errors',
@@ -217,9 +217,6 @@ def load_default_config() -> Config:
 
 def parse_config(config_str: str) -> Config:
     """解析配置，如果为空则使用默认配置"""
-    import logging
-    _logger = logging.getLogger('manga_translator.server')
-    
     if not config_str or config_str.strip() in ('{}', ''):
         print("[INFO] No config provided, using default config from examples/config.json")
         return load_default_config()

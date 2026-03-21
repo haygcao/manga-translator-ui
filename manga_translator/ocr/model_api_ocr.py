@@ -7,25 +7,24 @@ from typing import List
 import cv2
 import einops
 import numpy as np
-from PIL import Image
 import torch
+from PIL import Image
 
-from .common import OfflineOCR
 from ..config import OcrConfig
-from ..utils import Quadrilateral
 from ..custom_api_params import (
     load_enabled_custom_api_params,
     merge_openai_request_params,
     split_gemini_request_params,
 )
+from ..utils import Quadrilateral
 from ..utils.generic import AvgMeter
 from ..utils.retry import run_with_retry
+from .common import OfflineOCR
 from .prompt_loader import (
     DEFAULT_AI_OCR_PROMPT,
     ensure_ai_ocr_prompt_file,
     load_ai_ocr_prompt_file,
 )
-
 
 OPENAI_BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",

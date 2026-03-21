@@ -11,7 +11,6 @@
   world_to_local:  dx, dy = world - center;  lx = dx*cos + dy*sin;  ly = -dx*sin + dy*cos
   local_to_world:  wx = cx + lx*cos - ly*sin;  wy = cy + lx*sin + ly*cos
 """
-import copy
 import math
 from typing import List, Optional, Tuple
 
@@ -78,13 +77,6 @@ class RegionGeometryState:
         cos_a, sin_a = self._angle_trig()
         return (self.center[0] + lx * cos_a - ly * sin_a,
                 self.center[1] + lx * sin_a + ly * cos_a)
-
-    def white_frame_center_world(self) -> Optional[Tuple[float, float]]:
-        """白框中心的世界坐标，供外部文字定位使用。"""
-        if self._white_frame_local is None:
-            return None
-        left, top, right, bottom = self._white_frame_local
-        return self.local_to_world((left + right) / 2.0, (top + bottom) / 2.0)
 
     # ------------------------------------------------------------------
     # 工厂
@@ -183,17 +175,6 @@ class RegionGeometryState:
         """用户拖白框时调用 — 标记 has_custom_white_frame = True。"""
         self._white_frame_local = list(rect_local)
         self.has_custom_white_frame = True
-
-    def get_white_frame_model_for_drag_start(self) -> Optional[List[float]]:
-        """当前白框的模型坐标 (left, top, right, bottom)，用作拖动起点。
-
-        局部坐标 + center = 模型坐标（注意：这是未旋转的"建模坐标"，不是世界坐标）。
-        """
-        if self._white_frame_local is None:
-            return None
-        cx, cy = self.center
-        left, top, right, bottom = self._white_frame_local
-        return [left + cx, top + cy, right + cx, bottom + cy]
 
     def to_region_data_patch(self) -> dict:
         """序列化白框状态为可合并到 region_data 的补丁字典。"""

@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 # 使用绝对路径避免 importlib.invalidate_caches() 时的 KeyError
 _current_dir = os.path.dirname(os.path.abspath(__file__))

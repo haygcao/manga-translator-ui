@@ -6,14 +6,16 @@
 """
 
 import logging
-from datetime import datetime, UTC
-from typing import Optional, Dict, List
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Dict, List, Optional
 
-from manga_translator.server.repositories.quota_repository import QuotaRepository
-from manga_translator.server.repositories.permission_repository import PermissionRepository
-from manga_translator.server.models.quota_models import QuotaLimit, QuotaStats
 from manga_translator.server.core.group_service import GroupService
+from manga_translator.server.models.quota_models import QuotaLimit, QuotaStats
+from manga_translator.server.repositories.permission_repository import (
+    PermissionRepository,
+)
+from manga_translator.server.repositories.quota_repository import QuotaRepository
 
 logger = logging.getLogger(__name__)
 

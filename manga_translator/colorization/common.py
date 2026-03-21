@@ -1,7 +1,9 @@
-from PIL import Image
 from abc import abstractmethod
 
+from PIL import Image
+
 from ..utils import InfererModule, ModelWrapper
+
 
 class CommonColorizer(InfererModule):
     _VALID_UPSCALE_RATIOS = None

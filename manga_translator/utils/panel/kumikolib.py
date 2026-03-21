@@ -1,15 +1,17 @@
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
-import shutil
-import cv2 as cv
-# import numpy as np
-import requests
-import subprocess
 from urllib.parse import urlparse
 
-from .lib.page import Page, NotAnImageException
+import cv2 as cv
+
+# import numpy as np
+import requests
+
 from .lib.debug import Debug
+from .lib.page import NotAnImageException, Page
 
 
 class Kumiko:

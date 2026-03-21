@@ -1,20 +1,21 @@
 import math
-from typing import List
-from collections import defaultdict
 import os
 import shutil
-import cv2
-import numpy as np
-import einops
+from collections import defaultdict
+from typing import List
 
+import cv2
+import einops
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from manga_translator.config import OcrConfig
+
+from ..utils import Quadrilateral, TextBlock, chunks, imwrite_unicode
 from .common import OfflineOCR
-from ..utils import TextBlock, Quadrilateral, chunks, imwrite_unicode
-from ..utils.bubble import is_ignore
+
 
 class Model32pxOCR(OfflineOCR):
     _MODEL_MAPPING = {
@@ -712,13 +713,9 @@ class OCR(nn.Module):
         return run(final_tokens, char_only = False), beams[0].logprobs.mean().exp().item()
 
 def test():
-    with open('../SynthText/alphabet-all-v2.txt', 'r') as fp:
-        _dictionary = [s[:-1] for s in fp.readlines()]
     img = torch.randn(4, 3, 32, 1224)
-    _idx = torch.zeros(4, 32).long()
-    _mask = torch.zeros(4, 32).bool()
     model = ResNet_FeatureExtractor(3, 256)
-    _out = model(img)
+    model(img)
 
 def test_inference():
     with torch.no_grad():

@@ -10,14 +10,16 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from core.config_models import AppSettings
 from dotenv import dotenv_values, load_dotenv
 
-from core.config_models import AppSettings
 from manga_translator.colorization.prompt_loader import ensure_ai_colorizer_prompt_file
-from manga_translator.custom_api_params import ensure_custom_api_params_file, migrate_legacy_custom_api_params_config
+from manga_translator.custom_api_params import (
+    ensure_custom_api_params_file,
+    migrate_legacy_custom_api_params_config,
+)
 from manga_translator.ocr.prompt_loader import ensure_ai_ocr_prompt_file
 from manga_translator.rendering.prompt_loader import ensure_ai_renderer_prompt_file
-
 
 PRESET_SPECIAL_ENV_VARS = [
     "OCR_OPENAI_API_KEY",
@@ -392,7 +394,7 @@ class ConfigService(QObject):
                         with open(save_path, 'r', encoding='utf-8') as f:
                             existing_config = json.load(f)
                             existing_favorites = existing_config.get('app', {}).get('favorite_folders')
-                    except:
+                    except Exception:
                         pass
                 
                 # 只有保存到模板配置时才重置临时状态（仅开发环境）
@@ -403,7 +405,7 @@ class ConfigService(QObject):
                         try:
                             with open(save_path, 'r', encoding='utf-8') as f:
                                 json.load(f)
-                        except:
+                        except Exception:
                             pass
                     
                     # 重置临时UI状态为默认值

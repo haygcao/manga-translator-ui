@@ -1,10 +1,8 @@
+from main_view_parts.theme import get_current_theme, get_theme_colors
 from PIL.ImageQt import ImageQt
-from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPixmap, QTransform
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
-
-from main_view_parts.theme import get_current_theme
-from main_view_parts.theme import get_theme_colors
 
 
 class OriginalCompareView(QGraphicsView):
@@ -18,6 +16,7 @@ class OriginalCompareView(QGraphicsView):
         self._image_item: QGraphicsPixmapItem | None = None
         self._q_image_ref = None
         self._last_center_scene: QPointF | None = None
+        self._last_scene_rect: QRectF | None = None
         self._last_transform = QTransform()
 
         self._setup_view()
@@ -58,6 +57,7 @@ class OriginalCompareView(QGraphicsView):
         self._q_image_ref = ImageQt(image)
         pixmap = QPixmap.fromImage(self._q_image_ref)
         self._image_item = self.scene.addPixmap(pixmap)
+        self.scene.setSceneRect(self._image_item.sceneBoundingRect())
 
         if self._last_center_scene is not None:
             self.sync_view_state(self._last_transform, self._last_center_scene)
@@ -70,13 +70,36 @@ class OriginalCompareView(QGraphicsView):
 
         self._last_transform = QTransform(transform)
         self._last_center_scene = QPointF(center_scene)
+        self._last_scene_rect = self._resolve_source_scene_rect()
 
         if self._image_item is None:
             return
 
+        scene_rect = self._last_scene_rect or self._image_item.sceneBoundingRect()
+        if scene_rect.isValid() and not scene_rect.isNull():
+            self.scene.setSceneRect(scene_rect)
         self.setTransform(QTransform(transform))
         self.centerOn(center_scene)
         self.viewport().update()
+
+    def _resolve_source_scene_rect(self) -> QRectF | None:
+        parent = self.parent()
+        graphics_view = getattr(parent, "graphics_view", None)
+        if graphics_view is None:
+            return None
+
+        source_scene = getattr(graphics_view, "scene", None)
+        if source_scene is None:
+            return None
+
+        rect = source_scene.itemsBoundingRect()
+        if (not rect.isValid() or rect.isNull()) and getattr(graphics_view, "_image_item", None) is not None:
+            rect = graphics_view._image_item.sceneBoundingRect()
+        if not rect.isValid() or rect.isNull():
+            rect = source_scene.sceneRect()
+        if rect.isValid() and not rect.isNull():
+            return QRectF(rect)
+        return None
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

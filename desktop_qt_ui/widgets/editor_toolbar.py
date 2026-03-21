@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (
     QToolButton,
     QWidget,
 )
-
 from services import get_i18n_manager
+from widgets.hover_hint import set_hover_hint
 
 
 class EditorToolbar(QWidget):
@@ -48,13 +48,13 @@ class EditorToolbar(QWidget):
         # --- File Actions ---
         self.back_button = QToolButton()
         self.back_button.setText(self._t("Back"))
-        self.back_button.setToolTip(self._t("Back to Main"))
+        set_hover_hint(self.back_button, self._t("Back to Main"))
         self.back_button.setObjectName("editor_back_button")
         layout.addWidget(self.back_button)
 
         self.export_button = QToolButton()
         self.export_button.setText(self._t("Export Image"))
-        self.export_button.setToolTip(self._t("Export current rendered image") + " (Ctrl+Q)")
+        set_hover_hint(self.export_button, self._t("Export current rendered image") + " (Ctrl+Q)")
         self.export_button.setObjectName("editor_export_button")
         layout.addWidget(self.export_button)
 
@@ -64,14 +64,14 @@ class EditorToolbar(QWidget):
         self.undo_button = QToolButton()
         self.undo_button.setText(self._t("Undo"))
         self.undo_button.setEnabled(False)
-        self.undo_button.setToolTip(self._t("Undo last operation") + " (Ctrl+Z)")
+        set_hover_hint(self.undo_button, self._t("Undo last operation") + " (Ctrl+Z)")
         self.undo_button.setObjectName("editor_undo_button")
         layout.addWidget(self.undo_button)
 
         self.redo_button = QToolButton()
         self.redo_button.setText(self._t("Redo"))
         self.redo_button.setEnabled(False)
-        self.redo_button.setToolTip(self._t("Redo last undone operation") + " (Ctrl+Y)")
+        set_hover_hint(self.redo_button, self._t("Redo last undone operation") + " (Ctrl+Y)")
         self.redo_button.setObjectName("editor_redo_button")
         layout.addWidget(self.redo_button)
 
@@ -215,13 +215,13 @@ class EditorToolbar(QWidget):
         """刷新所有UI文本（用于语言切换）"""
         # 刷新按钮文本
         self.back_button.setText(self._t("Back"))
-        self.back_button.setToolTip(self._t("Back to Main"))
+        set_hover_hint(self.back_button, self._t("Back to Main"))
         self.export_button.setText(self._t("Export Image"))
-        self.export_button.setToolTip(self._t("Export current rendered image") + " (Ctrl+Q)")
+        set_hover_hint(self.export_button, self._t("Export current rendered image") + " (Ctrl+Q)")
         self.undo_button.setText(self._t("Undo"))
-        self.undo_button.setToolTip(self._t("Undo last operation") + " (Ctrl+Z)")
+        set_hover_hint(self.undo_button, self._t("Undo last operation") + " (Ctrl+Z)")
         self.redo_button.setText(self._t("Redo"))
-        self.redo_button.setToolTip(self._t("Redo last undone operation") + " (Ctrl+Y)")
+        set_hover_hint(self.redo_button, self._t("Redo last undone operation") + " (Ctrl+Y)")
         self.zoom_out_button.setText(self._t("Zoom Out (-)"))
         self.zoom_in_button.setText(self._t("Zoom In (+)"))
         self.fit_window_button.setText(self._t("Fit to Window"))

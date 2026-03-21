@@ -1,19 +1,19 @@
-import torch
-import numpy as np
-import cv2
 import os
+
+import cv2
 import einops
+import numpy as np
 import safetensors
 import safetensors.torch
-from PIL import Image
+import torch
 from omegaconf import OmegaConf
+from PIL import Image
 
-from .common import OfflineInpainter
 from ..utils import resize_keep_aspect
-
 from .booru_tagger import Tagger
-from .sd_hack import hack_everything
+from .common import OfflineInpainter
 from .ldm.util import instantiate_from_config
+from .sd_hack import hack_everything
 
 
 def get_state_dict(d):
@@ -135,11 +135,6 @@ class StableDiffusionInpainter(OfflineInpainter):
         
         # ✅ Inpainting完成后立即清理GPU内存和numpy数组（不删除输入参数）
         del img, img_inpainted, img_original, mask_original
-        if self.device.startswith('cuda') and torch.cuda.is_available():
-            pass
-            pass
-        import gc
-        pass
         return ans
 
 

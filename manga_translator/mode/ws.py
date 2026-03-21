@@ -7,8 +7,13 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from manga_translator import logger, Context, MangaTranslator, Config
-from manga_translator.utils import PriorityLock, Throttler, imwrite_unicode, open_pil_image
+from manga_translator import Config, Context, MangaTranslator, logger
+from manga_translator.utils import (
+    PriorityLock,
+    Throttler,
+    imwrite_unicode,
+    open_pil_image,
+)
 
 
 class MangaTranslatorWS(MangaTranslator):
@@ -22,12 +27,14 @@ class MangaTranslatorWS(MangaTranslator):
         self._websocket = None
 
     async def listen(self, translation_params: dict = None):
-        from threading import Thread
         import io
         import sys
+        from threading import Thread
+
         import aioshutil
-        from aiofiles import os
         import websockets
+        from aiofiles import os
+
         from ..server import ws_pb2
 
         # 在Windows上的工作线程中，需要手动初始化Windows Socket
@@ -39,7 +46,7 @@ class MangaTranslatorWS(MangaTranslator):
                 wsa_data = ctypes.create_string_buffer(WSADATA_SIZE)
                 ws2_32 = ctypes.WinDLL('ws2_32')
                 ws2_32.WSAStartup(0x0202, wsa_data)
-            except:
+            except Exception:
                 pass
             
             asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -233,7 +240,7 @@ class MangaTranslatorWS(MangaTranslator):
                     wsa_data = ctypes.create_string_buffer(WSADATA_SIZE)
                     ws2_32 = ctypes.WinDLL('ws2_32')
                     ws2_32.WSAStartup(0x0202, wsa_data)
-                except:
+                except Exception:
                     pass
                 
                 asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())

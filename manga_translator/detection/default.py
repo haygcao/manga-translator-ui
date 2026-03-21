@@ -1,20 +1,18 @@
 import os
 import shutil
-import numpy as np
-import torch
+
 import cv2
 import einops
-from typing import List, Tuple
+import numpy as np
+import torch
 
-from .default_utils.DBNet_resnet34 import TextDetection as TextDetectionDefault
-from .default_utils import imgproc, dbnet_utils, craft_utils
+from ..utils import Quadrilateral, det_rearrange_forward
 from .common import OfflineDetector
-from ..utils import TextBlock, Quadrilateral, det_rearrange_forward, imwrite_unicode
-from ..utils.generic import BASE_PATH
+from .default_utils import craft_utils, dbnet_utils, imgproc
+from .default_utils.DBNet_resnet34 import TextDetection as TextDetectionDefault
 
 MODEL = None
 def det_batch_forward_default(batch: np.ndarray, device: str):
-    global MODEL
     if isinstance(batch, list):
         batch = np.array(batch)
     batch = einops.rearrange(batch.astype(np.float32) / 127.5 - 1.0, 'n h w c -> n c h w')

@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.init as init
 from torchvision import models
 
+
 def init_weights(modules):
     for m in modules:
         if isinstance(m, nn.Conv2d):

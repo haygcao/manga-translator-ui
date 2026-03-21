@@ -1,10 +1,11 @@
 import os
+import shutil
 import subprocess
 import tempfile
 from sys import platform
 from typing import List
+
 from PIL import Image
-import shutil
 
 from .common import OfflineUpscaler
 

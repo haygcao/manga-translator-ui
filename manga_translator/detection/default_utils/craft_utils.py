@@ -4,9 +4,10 @@ MIT License
 """
 
 # -*- coding: utf-8 -*-
-import numpy as np
-import cv2
 import math
+
+import cv2
+import numpy as np
 
 """ auxiliary functions """
 # unwarp corodinates
@@ -92,7 +93,8 @@ def getPoly_core(boxes, labels, mapper, linkmap):
         # size filter for small instance
         w, h = int(np.linalg.norm(box[0] - box[1]) + 1), int(np.linalg.norm(box[1] - box[2]) + 1)
         if w < 10 or h < 10:
-            polys.append(None); continue
+            polys.append(None)
+            continue
 
         # warp image
         tar = np.float32([[0,0],[w,0],[w,h],[0,h]])
@@ -101,7 +103,8 @@ def getPoly_core(boxes, labels, mapper, linkmap):
         try:
             Minv = np.linalg.inv(M)
         except Exception:
-            polys.append(None); continue
+            polys.append(None)
+            continue
 
         # binarization for selected label
         cur_label = mapper[k]
@@ -121,7 +124,8 @@ def getPoly_core(boxes, labels, mapper, linkmap):
 
         # pass if max_len is similar to h
         if h * max_len_ratio < max_len:
-            polys.append(None); continue
+            polys.append(None)
+            continue
 
         # get pivot points with fixed length
         tot_seg = num_cp * 2 + 1
@@ -163,7 +167,8 @@ def getPoly_core(boxes, labels, mapper, linkmap):
 
         # pass if num of pivots is not sufficient or segment widh is smaller than character height 
         if None in pp or seg_w < np.max(seg_height) * 0.25:
-            polys.append(None); continue
+            polys.append(None)
+            continue
 
         # calc median maximum of pivot points
         half_char_h = np.median(seg_height) * expand_ratio / 2
@@ -207,7 +212,8 @@ def getPoly_core(boxes, labels, mapper, linkmap):
 
         # pass if boundary of polygon is not found
         if not (isSppFound and isEppFound):
-            polys.append(None); continue
+            polys.append(None)
+            continue
 
         # make final polygon
         poly = []

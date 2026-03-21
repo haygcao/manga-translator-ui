@@ -1,14 +1,23 @@
-import cv2
-import numpy as np
-from typing import List, Tuple
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from shapely.geometry import Polygon, MultiPoint
-from functools import cached_property
 # import copy
 import re
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from functools import cached_property
+from typing import List, Tuple
+
+import cv2
+import numpy as np
 import py3langid as langid
+from shapely.geometry import MultiPoint, Polygon
+
+from .generic import (
+    color_difference,
+    fg_bg_compare,
+    is_right_to_left_char,
+    is_valuable_char,
+)
 from .panel import get_panels_from_array
-from .generic import color_difference, fg_bg_compare, is_right_to_left_char, is_valuable_char
+
 # from ..detection.ctd_utils.utils.imgproc_utils import union_area, xywh2xyxypoly
 
 # LANG_LIST = ['eng', 'ja', 'unknown']
@@ -32,6 +41,7 @@ LANGUAGE_ORIENTATION_PRESETS = {
     'ROM': 'h',
     'RUS': 'h',
     'ESP': 'h',
+    'THA': 'h',
     'TRK': 'h',
     'UKR': 'h',
     'VIN': 'h',

@@ -1,5 +1,5 @@
 """文字渲染管线 — 构建 TextBlock、render_params、执行渲染。"""
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import QPointF
@@ -46,7 +46,7 @@ def build_text_block_from_region(region_data: dict, font_size_override=None, log
 
     try:
         return TextBlock(**args)
-    except Exception as e:
+    except Exception:
         return None
 
 

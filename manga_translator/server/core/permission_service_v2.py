@@ -6,10 +6,12 @@
 """
 
 import logging
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
-from manga_translator.server.repositories.permission_repository import PermissionRepository
 from manga_translator.server.models.permission_models import UserPermission
+from manga_translator.server.repositories.permission_repository import (
+    PermissionRepository,
+)
 
 logger = logging.getLogger(__name__)
 

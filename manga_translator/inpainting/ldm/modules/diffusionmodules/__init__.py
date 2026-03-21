@@ -1,15 +1,15 @@
-import torch
-import pytorch_lightning as pl
-import torch.nn.functional as F
 from contextlib import contextmanager
+
 import numpy as np
-from packaging import version
-
-from ldm.modules.diffusionmodules.model import Encoder, Decoder
+import pytorch_lightning as pl
+import torch
+import torch.nn.functional as F
+from ldm.modules.diffusionmodules.model import Decoder, Encoder
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
-
-from ldm.util import instantiate_from_config
 from ldm.modules.ema import LitEma
+from ldm.util import instantiate_from_config
+
+from packaging import version
 
 try:
     from ldm.modules.vqvae.quantize import VectorQuantizer
@@ -50,7 +50,7 @@ class VQModel(pl.LightningModule):
         self.quant_conv = torch.nn.Conv2d(ddconfig["z_channels"], embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         if colorize_nlabels is not None:
-            assert type(colorize_nlabels)==int
+            assert isinstance(colorize_nlabels, int)
             self.register_buffer("colorize", torch.randn(3, colorize_nlabels, 1, 1))
         if monitor is not None:
             self.monitor = monitor
@@ -172,7 +172,7 @@ class VQModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         log_dict = self._validation_step(batch, batch_idx)
         with self.ema_scope():
-            _log_dict_ema = self._validation_step(batch, batch_idx, suffix="_ema")
+            self._validation_step(batch, batch_idx, suffix="_ema")
         return log_dict
 
     def _validation_step(self, batch, batch_idx, suffix=""):
@@ -314,7 +314,7 @@ class AutoencoderKL(pl.LightningModule):
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         self.embed_dim = embed_dim
         if colorize_nlabels is not None:
-            assert type(colorize_nlabels)==int
+            assert isinstance(colorize_nlabels, int)
             self.register_buffer("colorize", torch.randn(3, colorize_nlabels, 1, 1))
         if monitor is not None:
             self.monitor = monitor
@@ -410,7 +410,7 @@ class AutoencoderKL(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         log_dict = self._validation_step(batch, batch_idx)
         with self.ema_scope():
-            _log_dict_ema = self._validation_step(batch, batch_idx, postfix="_ema")
+            self._validation_step(batch, batch_idx, postfix="_ema")
         return log_dict
 
     def _validation_step(self, batch, batch_idx, postfix=""):

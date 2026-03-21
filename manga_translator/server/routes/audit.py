@@ -5,15 +5,16 @@ This module contains all /audit/* endpoints for audit log management.
 """
 
 import logging
-from typing import List, Optional
 from datetime import datetime
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from manga_translator.server.core.models import Session
-from manga_translator.server.core.middleware import require_admin
 from manga_translator.server.core.audit_service import AuditService
+from manga_translator.server.core.middleware import require_admin
+from manga_translator.server.core.models import Session
 
 logger = logging.getLogger('manga_translator.server')
 

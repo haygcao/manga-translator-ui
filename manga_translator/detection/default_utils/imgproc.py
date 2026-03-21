@@ -4,9 +4,10 @@ MIT License
 """
 
 # -*- coding: utf-8 -*-
+import cv2
 import numpy as np
 from skimage import io
-import cv2
+
 
 def loadImage(img_file):
     img = io.imread(img_file)           # RGB order

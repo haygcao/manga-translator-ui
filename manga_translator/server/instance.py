@@ -5,7 +5,12 @@ from PIL import Image
 from pydantic import BaseModel
 
 from manga_translator import Config
-from manga_translator.server.sent_data_internal import fetch_data_stream, NotifyType, fetch_data
+from manga_translator.server.sent_data_internal import (
+    NotifyType,
+    fetch_data,
+    fetch_data_stream,
+)
+
 
 class ExecutorInstance(BaseModel):
     ip: str
@@ -45,7 +50,7 @@ class Executors:
 
     async def _find_instance(self):
         while True:
-            instance = next((x for x in self.list if x.busy == False), None)
+            instance = next((x for x in self.list if not x.busy), None)
             if instance is not None:
                 return instance
             #todo: cricial error: warn should never happen

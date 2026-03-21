@@ -6,7 +6,6 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
-
 CUSTOM_API_PARAM_SECTIONS = ("common", "translator", "ocr", "render", "colorizer")
 _SECTION_ALIASES = {
     "common": "common",

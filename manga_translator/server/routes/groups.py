@@ -5,13 +5,16 @@ This module contains all /groups/* endpoints for user group management.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from manga_translator.server.core.models import Session
+from manga_translator.server.core.group_management_service import (
+    get_group_management_service,
+)
 from manga_translator.server.core.middleware import require_admin
-from manga_translator.server.core.group_management_service import get_group_management_service
+from manga_translator.server.core.models import Session
 
 logger = logging.getLogger('manga_translator.server')
 

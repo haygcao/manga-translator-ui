@@ -2,6 +2,7 @@ from typing import List
 
 from .common import CommonTranslator
 
+
 class OriginalTranslator(CommonTranslator):
     
     def supports_languages(self, from_lang: str, to_lang: str, fatal: bool = False) -> bool:

@@ -37,6 +37,7 @@ const hiddenKeys = [
     // 通过其他UI控制的参数
     'upscale.realcugan_model',  // 通过 upscale_ratio 动态控制
     'cli.load_text',  // 通过工作流模式下拉框控制
+    'cli.translate_json_only',  // 通过工作流模式下拉框控制
     'cli.template',  // 通过工作流模式下拉框控制
     'cli.generate_and_export',  // 通过工作流模式下拉框控制
     'cli.colorize_only',  // 通过工作流模式下拉框控制
@@ -328,7 +329,7 @@ async function init() {
 async function checkUserAccess() {
     try {
         // 首先检查管理员是否已设置密码
-        const setupRes = await fetch('/admin/need-setup');
+        const setupRes = await fetch('/auth/status');
         const setupData = await setupRes.json();
         
         if (setupData.need_setup) {
@@ -414,7 +415,7 @@ async function userLogin() {
                 window.userLoginResolve();
             }
         } else {
-            errorEl.textContent = '密码错误，请重试';
+            errorEl.textContent = data.detail || data.message || '密码错误，请重试';
         }
     } catch (e) {
         errorEl.textContent = '登录失败：' + e.message;
@@ -829,8 +830,9 @@ async function loadUserSettings() {
         
         // 根据设置显示/隐藏 API Keys 标签
         const apikeysTab = document.getElementById('apikeys-tab');
+        const hasSessionToken = Boolean(sessionToken);
         if (apikeysTab) {
-            apikeysTab.style.display = userSettings.show_env_editor ? 'block' : 'none';
+            apikeysTab.style.display = userSettings.show_env_editor && hasSessionToken ? 'block' : 'none';
         }
         
         // 根据权限显示/隐藏上传区域
@@ -1187,11 +1189,8 @@ function generateConfigUI(config) {
                 
                 // 排版模式的翻译映射
                 const layoutModeMap = {
-                    'default': t('layout_mode_default'),
                     'smart_scaling': t('layout_mode_smart_scaling'),
                     'strict': t('layout_mode_strict'),
-                    'fixed_font': t('layout_mode_fixed_font'),
-                    'disable_all': t('layout_mode_disable_all'),
                     'balloon_fill': t('layout_mode_balloon_fill')
                 };
                 
@@ -1204,9 +1203,13 @@ function generateConfigUI(config) {
                     } else if (key === 'translator') {
                         // 如果是翻译器，使用翻译
                         option.textContent = t(`translator_${opt}`, opt);
-                    } else if (key === 'target_lang') {
+                    } else if (key === 'target_lang' || key === 'keep_lang') {
                         // 如果是目标语言，使用翻译
-                        option.textContent = t(`lang_${opt}`, opt);
+                        if (key === 'keep_lang' && opt === 'none') {
+                            option.textContent = t('lang_filter_disabled', 'No Filter');
+                        } else {
+                            option.textContent = t(`lang_${opt}`, opt);
+                        }
                     } else if (key === 'ocr_vl_language_hint') {
                         // OCR 语言提示显示翻译后的全称
                         const langKey = `ocr_lang_${String(opt).toLowerCase().replace(/\s+/g, '_')}`;
@@ -1319,6 +1322,24 @@ function populateDropdowns() {
     
     if (langs.length > 0) {
         replaceWithSelectTranslated('translator.target_lang', langs);
+    }
+
+    const keepLangOptions = (configOptions['keep_lang'] || []).map(lang => {
+        if (lang === 'none') {
+            return {
+                value: lang,
+                label: t('lang_filter_disabled', 'No Filter')
+            };
+        }
+        const langKey = `lang_${lang}`;
+        return {
+            value: lang,
+            label: t(langKey, lang)
+        };
+    });
+
+    if (keepLangOptions.length > 0) {
+        replaceWithSelectTranslated('translator.keep_lang', keepLangOptions);
     }
     
     // 设置超分模型联动
@@ -1578,6 +1599,12 @@ async function updateEnvInputs(translator) {
         console.log('API Keys editor is hidden by admin settings');
         return;
     }
+
+    const sessionToken = localStorage.getItem('session_token');
+    if (!sessionToken) {
+        container.innerHTML = `<p class="env-hint">${t('login_required_for_api_keys', '登录后可查看和保存 API 密钥')}</p>`;
+        return;
+    }
     
     try {
         // 获取翻译器配置
@@ -1607,7 +1634,9 @@ async function updateEnvInputs(translator) {
         // 根据设置决定是否加载服务器的环境变量值
         let serverEnvVars = {};
         if (userSettings.allow_server_keys) {
-            const envRes = await fetch('/env');
+            const envRes = await fetch('/env', {
+                headers: { 'X-Session-Token': sessionToken }
+            });
             serverEnvVars = await envRes.json();
         }
         
@@ -1678,6 +1707,12 @@ async function updateEnvInputs(translator) {
 async function saveAllEnvVars() {
     const container = document.getElementById('env-inputs-container');
     if (!container) return;
+
+    const sessionToken = localStorage.getItem('session_token');
+    if (!sessionToken) {
+        log(t('login_required_for_api_keys', '登录后可查看和保存 API 密钥'), 'error');
+        return;
+    }
     
     const inputs = container.querySelectorAll('input[data-env-key]');
     const envVars = {};
@@ -1706,7 +1741,10 @@ async function saveAllEnvVars() {
     try {
         const result = await fetch('/env', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Session-Token': sessionToken
+            },
             body: JSON.stringify(envVars)
         });
         
@@ -1741,13 +1779,22 @@ async function saveEnvVar(key, value) {
 async function _oldSaveEnvVar(key, value) {
     // 更新内存中的值（用于本次翻译）
     currentEnvVars[key] = value;
+
+    const sessionToken = localStorage.getItem('session_token');
+    if (!sessionToken) {
+        log(t('login_required_for_api_keys', '登录后可查看和保存 API 密钥'), 'error');
+        return;
+    }
     
     // 根据管理员设置决定是否保存到服务器
     // 注意：多用户场景下建议关闭 save_user_keys_to_server，避免互相覆盖
     try {
         const result = await fetch('/env', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Session-Token': sessionToken
+            },
             body: JSON.stringify({ [key]: value })
         });
         const data = await result.json();

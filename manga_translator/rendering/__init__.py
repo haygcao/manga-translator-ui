@@ -1,33 +1,35 @@
+import copy
 import math
 import os
 import re
-import copy
+from typing import List, Optional, Tuple
+
 import cv2
+
 # import logging
 import numpy as np
-from typing import List, Optional, Tuple
 from shapely import affinity
 from shapely.geometry import Polygon
 from tqdm import tqdm
 
-from . import text_render
-from . import text_render_hq
-from .auto_linebreak import solve_no_br_layout
-from .text_render_eng import render_textblock_list_eng
-from .text_render_pillow_eng import render_textblock_list_eng as render_textblock_list_eng_pillow
+from ..config import Config, Renderer
 
 # 只使用 freetype 渲染器（稳定可靠）
 from ..utils import (
     BASE_PATH,
     TextBlock,
     build_bubble_mask_from_mangalens_result,
-    color_difference,
     fg_bg_compare,
     get_cached_bubbles_with_mangalens,
     get_logger,
     rotate_polygons,
 )
-from ..config import Config, Renderer
+from . import text_render, text_render_hq
+from .auto_linebreak import solve_no_br_layout
+from .text_render_eng import render_textblock_list_eng
+from .text_render_pillow_eng import (
+    render_textblock_list_eng as render_textblock_list_eng_pillow,
+)
 
 logger = get_logger('render')
 
@@ -113,6 +115,14 @@ def calc_text_block_dimensions(text: str, is_horizontal: bool, line_spacing: flo
     # 处理 BR 标记
     text_for_calc = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
 
+    text_for_calc = text_render.prepare_text_for_direction_rendering(
+        text_for_calc,
+        is_horizontal=is_horizontal,
+        auto_rotate_symbols=bool(
+            config and hasattr(config, 'render') and getattr(config.render, 'auto_rotate_symbols', False)
+        ),
+    )
+
     if is_horizontal:
         lines, widths = text_render.calc_horizontal(
             base_font, text_for_calc,
@@ -121,16 +131,12 @@ def calc_text_block_dimensions(text: str, is_horizontal: bool, line_spacing: flo
             letter_spacing=letter_spacing
         )
         if widths:
-            spacing_y = int(base_font * 0.01 * line_spacing)
+            spacing_y = text_render.calc_horizontal_line_spacing_px(base_font, line_spacing)
             # 和后端渲染一致：最大行宽 + 行间距
             base_width = max(widths)
             base_height = base_font * len(lines) + spacing_y * max(0, len(lines) - 1)
             return base_width, base_height, len(lines)
     else:
-        # 竖排：应用自动旋转符号
-        if config and hasattr(config, 'render') and config.render.auto_rotate_symbols:
-            text_for_calc = text_render.auto_add_horizontal_tags(text_for_calc)
-
         lines, heights = text_render.calc_vertical(
             base_font, text_for_calc,
             max_height=99999, config=config, letter_spacing=letter_spacing
@@ -663,9 +669,6 @@ def optimize_line_breaks_for_region(region: TextBlock, config: Config, target_fo
     original_br_count = len(re.findall(br_pattern, original_translation, flags=re.IGNORECASE))
     optimized_br_count = len(re.findall(br_pattern, best_text, flags=re.IGNORECASE))
     
-    # 标准化原文以便比较（只用于判断是否真的有改变）
-    _original_normalized = re.sub(r'\s*(<br>|【BR】)\s*', '[BR]', original_translation, flags=re.IGNORECASE)
-    
     # 只有当BR数量真的改变时才应用优化
     if optimized_br_count != original_br_count:
         br_change = optimized_br_count - original_br_count
@@ -815,9 +818,31 @@ def _resolve_configured_min_font_size(config: Config) -> int:
     return 0
 
 
+def _resolve_configured_fixed_font_size(config: Config) -> int:
+    render_cfg = getattr(config, 'render', None) if config is not None else None
+    raw_font_size = getattr(render_cfg, 'font_size', None) if render_cfg is not None else None
+    if isinstance(raw_font_size, (int, float)) and raw_font_size > 0:
+        return max(int(raw_font_size), 1)
+    return 0
+
+
+def _resolve_initial_layout_font_size(region: TextBlock, img: np.ndarray, config: Config) -> int:
+    region_font_size = getattr(region, 'font_size', 0)
+    if isinstance(region_font_size, (int, float)) and region_font_size > 0:
+        return max(int(region_font_size), 1)
+
+    if img is not None and hasattr(img, 'shape') and len(img.shape) >= 2:
+        return max(round((img.shape[0] + img.shape[1]) / 200), 1)
+    return 24
+
+
 def _apply_final_font_constraints(layout_font_size: int, config: Config) -> int:
     final_font_size = max(int(layout_font_size), 1)
     render_cfg = getattr(config, 'render', None) if config is not None else None
+
+    configured_font_size = _resolve_configured_fixed_font_size(config)
+    if configured_font_size > 0:
+        final_font_size = configured_font_size
 
     font_size_offset = getattr(render_cfg, 'font_size_offset', 0) if render_cfg is not None else 0
     if isinstance(font_size_offset, (int, float)) and font_size_offset != 0:
@@ -1033,9 +1058,11 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                 region.original_font_size = original_region_font_size
 
             layout_min_font_size = 1
-            target_font_size = max(original_region_font_size, layout_min_font_size)
+            target_font_size = max(_resolve_initial_layout_font_size(region, img, config), layout_min_font_size)
 
-            # 保存布局算法的基础字号；最终字号会在后置约束中统一应用 offset/scale/min/max
+            # 入口只保留布局算法自身的参考字号：
+            # region.font_size > 图像估算值
+            # render.font_size 作为固定字号，在统一出口覆盖布局结果。
             region.layout_base_font_size = int(target_font_size)
 
         # --- Mode 5: balloon_fill (MUST BE FIRST to override other modes) ---
@@ -1237,6 +1264,9 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
 
                     preferred_font_size = _apply_final_font_constraints(layout_target_font_size, config)
                     preferred_font_size_for_debug = preferred_font_size
+                    configured_fixed_font_size = _resolve_configured_fixed_font_size(config)
+                    if configured_fixed_font_size > 0:
+                        min_font_size = max(min_font_size, preferred_font_size)
 
                     # 调试用途：记录“超出范围候选框”（较大字号候选但不满足蒙版约束）
                     preferred_dst_points = _calc_region_dst_points_for_font(
@@ -1361,14 +1391,15 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                 )
                 region.translation = optimized_text
                 logger.debug(f"[OPTIMIZE] Optimized text: {region.translation}")
-            
+
             font_size = target_font_size
             min_shrink_font_size = 8
+            line_spacing_multiplier = _resolve_line_spacing_multiplier(region, config)
             letter_spacing_multiplier = _resolve_letter_spacing_multiplier(region, config)
             render_horizontally = _resolve_region_render_horizontal(region)
 
             # AI 断句适配：如果开启了 AI 断句且有 BR 标记，使用无限宽度/高度
-            
+
             # 检测是否为替换翻译模式
             is_replace_mode = config.cli.replace_translation if (config and hasattr(config, 'cli')) else False
             
@@ -1376,9 +1407,46 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
             # 强制使用无限宽度（不换行），以复刻原图的单行结构
             is_single_line = len(region.lines) == 1
             force_single_line_no_wrap = is_replace_mode and is_single_line
-            
+
             use_ai_break = (config.render.disable_auto_wrap and has_br) or force_single_line_no_wrap
-            
+
+            if not has_br:
+                bubble_width, bubble_height = region.unrotated_size
+                seed_segments = max(1, len(region.texts))
+                no_br_result = solve_no_br_layout(
+                    text=region.translation,
+                    horizontal=render_horizontally,
+                    seed_segments=seed_segments,
+                    seed_font_size=target_font_size,
+                    bubble_width=bubble_width,
+                    bubble_height=bubble_height,
+                    min_font_size=layout_min_font_size,
+                    max_font_size=target_font_size,
+                    line_spacing_multiplier=line_spacing_multiplier,
+                    target_lang=region.target_lang,
+                    config=config,
+                    letter_spacing_multiplier=letter_spacing_multiplier,
+                )
+                region.translation = no_br_result.text_with_br
+
+                layout_font_size = max(no_br_result.font_size, min_shrink_font_size)
+                final_font_size = _apply_final_font_constraints(layout_font_size, config)
+                total_font_scale = final_font_size / max(layout_font_size, 1)
+
+                dst_points = region.min_rect
+                if total_font_scale != 1.0:
+                    try:
+                        poly = Polygon(region.unrotated_min_rect[0])
+                        scaled_poly = affinity.scale(poly, xfact=total_font_scale, yfact=total_font_scale, origin='center')
+                        scaled_points = np.array(scaled_poly.exterior.coords[:4])
+                        dst_points = rotate_polygons(region.center, scaled_points.reshape(1, -1), -region.angle, to_int=False).reshape(-1, 4, 2)
+                    except Exception as e:
+                        logger.warning(f"Failed to scale strict no-br region for font_scale_ratio: {e}")
+
+                region.font_size = final_font_size
+                dst_points_list.append(dst_points)
+                continue
+
             if use_ai_break:
                 calc_max_width = 99999
                 calc_max_height = 99999
@@ -1827,27 +1895,12 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
             dst_points_list.append(dst_points)
             continue
 
-        # --- Fallback for any other modes (e.g., 'fixed_font') ---
+        # --- Unsupported layout modes ---
         else:
-            # Apply final post-layout constraints: offset, scale ratio, and min/max clamps.
-            layout_font_size = max(int(min(target_font_size, 512)), 1)
-            final_font_size = _apply_final_font_constraints(layout_font_size, config)
-            total_font_scale = final_font_size / layout_font_size
-
-            # Scale region to match final font size
-            dst_points = region.min_rect
-            if total_font_scale != 1.0:
-                try:
-                    poly = Polygon(region.unrotated_min_rect[0])
-                    scaled_poly = affinity.scale(poly, xfact=total_font_scale, yfact=total_font_scale, origin='center')
-                    scaled_points = np.array(scaled_poly.exterior.coords[:4])
-                    dst_points = rotate_polygons(region.center, scaled_points.reshape(1, -1), -region.angle, to_int=False).reshape(-1, 4, 2)
-                except Exception as e:
-                    logger.warning(f"Failed to scale region for font_scale_ratio: {e}")
-
-            region.font_size = final_font_size
-            dst_points_list.append(dst_points)
-            continue
+            raise ValueError(
+                f"Unsupported render.layout_mode: {mode!r}. "
+                "Supported values: balloon_fill, smart_scaling, strict"
+            )
         
     # Add legend to debug image
     if return_debug_img and debug_img is not None:
@@ -1958,7 +2011,7 @@ def render(
         # Last resort: Use the method2
         else:
             fg, _ = region.get_font_colors()
-    except Exception as _e:
+    except Exception:
         # If anything fails, fg remains black
         pass
 
@@ -1984,8 +2037,7 @@ def render(
     # Centralized text preprocessing
     # 检查是否有富文本，并标记给渲染器
     has_rich_text = hasattr(region, 'rich_text') and region.rich_text
-    _rich_text_html = region.rich_text if has_rich_text else None
-    
+
     if has_rich_text:
         # 有富文本，从 HTML 中提取纯文本（用于非 Qt 渲染器）
         from html import unescape
@@ -2021,11 +2073,6 @@ def render(
         if has_br_in_text:
             text_to_render = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text_to_render, flags=re.IGNORECASE)
 
-        # Automatically add horizontal tags for vertical text
-        render_horizontally = _resolve_region_render_horizontal(region)
-        if not render_horizontally and config.render.auto_rotate_symbols:
-            text_to_render = text_render.auto_add_horizontal_tags(text_to_render)
-
     if disable_font_border :
         bg = None
 
@@ -2035,10 +2082,11 @@ def render(
     r_orig = np.mean(norm_h / norm_v)
 
     render_horizontally = _resolve_region_render_horizontal(region)
-
-    # 如果最终判断为横排,删除所有 <H> 标签,防止打印出来
-    if render_horizontally:
-        text_to_render = re.sub(r'<H>(.*?)</H>', r'\1', text_to_render, flags=re.IGNORECASE | re.DOTALL)
+    text_to_render = text_render.prepare_text_for_direction_rendering(
+        text_to_render,
+        is_horizontal=render_horizontally,
+        auto_rotate_symbols=bool(getattr(config.render, 'auto_rotate_symbols', False)),
+    )
 
     letter_spacing = _resolve_letter_spacing_multiplier(region, config)
 

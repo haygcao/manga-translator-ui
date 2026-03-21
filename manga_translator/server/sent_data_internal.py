@@ -1,9 +1,9 @@
 import pickle
-from typing import Mapping, Optional, Callable
+from typing import Callable, Mapping, Optional
 
 import aiohttp
-from PIL.Image import Image
 from fastapi import HTTPException
+from PIL.Image import Image
 
 from manga_translator import Config
 

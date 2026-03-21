@@ -5,9 +5,9 @@
 
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QObject, QEvent, Qt
-from PyQt6.QtGui import QKeySequence, QShortcut, QKeyEvent
-from PyQt6.QtWidgets import QLineEdit, QTextEdit, QWidget, QApplication
+from PyQt6.QtCore import QEvent, QObject, Qt
+from PyQt6.QtGui import QKeyEvent, QKeySequence, QShortcut
+from PyQt6.QtWidgets import QApplication, QLineEdit, QTextEdit, QWidget
 
 
 class ShortcutManager(QObject):
@@ -59,35 +59,6 @@ class ShortcutManager(QObject):
         
         self.shortcuts[name] = shortcut
         return shortcut
-    
-    def unregister_shortcut(self, name: str) -> bool:
-        """
-        注销一个快捷键
-        
-        Args:
-            name: 快捷键名称
-            
-        Returns:
-            是否成功注销
-        """
-        if name in self.shortcuts:
-            shortcut = self.shortcuts[name]
-            shortcut.setEnabled(False)
-            shortcut.deleteLater()
-            del self.shortcuts[name]
-            return True
-        return False
-    
-    def enable_shortcut(self, name: str, enabled: bool = True):
-        """
-        启用或禁用快捷键
-        
-        Args:
-            name: 快捷键名称
-            enabled: 是否启用
-        """
-        if name in self.shortcuts:
-            self.shortcuts[name].setEnabled(enabled)
     
     def get_shortcut(self, name: str) -> Optional[QShortcut]:
         """

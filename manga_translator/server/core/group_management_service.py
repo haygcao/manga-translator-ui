@@ -4,13 +4,13 @@ User Group Management Service
 实现用户组的创建、重命名、删除和配置管理功能。
 """
 
-import logging
 import json
-from typing import Dict, List, Optional, Any
+import logging
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from manga_translator.server.repositories.group_repository import GroupRepository
 from manga_translator.server.models.group_models import UserGroup
+from manga_translator.server.repositories.group_repository import GroupRepository
 
 logger = logging.getLogger(__name__)
 

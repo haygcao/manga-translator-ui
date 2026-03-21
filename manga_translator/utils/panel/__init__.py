@@ -1,6 +1,9 @@
-from .kumikolib import Kumiko
-import tempfile, cv2, os
+import os
+import tempfile
+
 from ..generic import imwrite_unicode
+from .kumikolib import Kumiko
+
 
 def get_panels_from_array(img_rgb, rtl=True, logger=None):
 

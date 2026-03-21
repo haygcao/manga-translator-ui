@@ -1,19 +1,17 @@
 import os
-import pandas as pd
-import numpy as np
-from typing import Tuple, List, Dict
-from io import BytesIO
-from PIL import Image
+from typing import Dict
 
 import cv2
-from pathlib import Path
+import numpy as np
+import pandas as pd
+from PIL import Image
 
-from tqdm import tqdm
 from ..utils.onnx_runtime import (
     create_inference_session,
     create_session_options,
     import_onnxruntime,
 )
+
 
 def make_square(img, target_size):
     old_size = img.shape[:2]
@@ -83,9 +81,6 @@ class Tagger :
         tags = self.tags[:][['name']]
         tags['confidents'] = confidents[0]
 
-        # first 4 items are for rating (general, sensitive, questionable, explicit)
-        _ratings = dict(tags[:4].values)
-
         # rest are regular tags
         tags = dict(tags[4:].values)
 
@@ -106,9 +101,6 @@ class Tagger :
 
         tags = self.tags[:][['name']]
         tags['confidents'] = confidents[0]
-
-        # first 4 items are for rating (general, sensitive, questionable, explicit)
-        _ratings = dict(tags[:4].values)
 
         # rest are regular tags
         tags = dict(tags[4:].values)

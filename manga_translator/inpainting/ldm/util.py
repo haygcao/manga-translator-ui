@@ -1,11 +1,10 @@
 import importlib
-
-import torch
-from torch import optim
-import numpy as np
-
 from inspect import isfunction
+
+import numpy as np
+import torch
 from PIL import Image, ImageDraw, ImageFont
+from torch import optim
 
 
 def log_txt_as_img(wh, xc, size=10):
@@ -70,7 +69,7 @@ def count_params(model, verbose=False):
 
 
 def instantiate_from_config(config):
-    if not "target" in config:
+    if "target" not in config:
         if config == '__is_first_stage__':
             return None
         elif config == "__is_unconditional__":
@@ -133,7 +132,6 @@ class AdamWwithEMAandWings(optim.Optimizer):
             exp_avgs = []
             exp_avg_sqs = []
             ema_params_with_grad = []
-            _state_sums = []
             max_exp_avg_sqs = []
             state_steps = []
             amsgrad = group['amsgrad']

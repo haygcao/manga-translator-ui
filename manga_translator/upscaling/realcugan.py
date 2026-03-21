@@ -8,16 +8,16 @@ Using external tile-based processing to reduce VRAM usage
 
 import os
 import shutil
-import torch
+from typing import List
+
 # import torch.nn.functional as F
 import numpy as np
-from typing import List
+import torch
 from PIL import Image
 
-from .common import OfflineUpscaler
-from .tile_utils import split_image_into_tiles, merge_tiles_into_image
 from ..utils import get_logger
-
+from .common import OfflineUpscaler
+from .tile_utils import merge_tiles_into_image, split_image_into_tiles
 
 logger = get_logger('RealCUGANUpscaler')
 

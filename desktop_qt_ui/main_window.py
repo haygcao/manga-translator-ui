@@ -1,10 +1,15 @@
-from PyQt6.QtCore import QLibraryInfo, QLocale, QTimer, Qt, QTranslator, pyqtSlot
-from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget
-
 from app_logic import MainAppLogic
 from main_view import MainView
-from services import ServiceManager, get_config_service, get_logger, get_state_manager, get_i18n_manager
+from PyQt6.QtCore import QLibraryInfo, QLocale, Qt, QTimer, QTranslator, pyqtSlot
+from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget
+from services import (
+    ServiceManager,
+    get_config_service,
+    get_i18n_manager,
+    get_logger,
+    get_state_manager,
+)
 from theme_registry import THEME_OPTIONS
 from widgets.themed_message_box import show_error_dialog
 
@@ -127,7 +132,6 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.editor_view)
 
         self.app_logic.config_loaded.connect(self.editor_view.property_panel.repopulate_options)
-        self.app_logic.render_setting_changed.connect(self.editor_logic.on_global_render_setting_changed)
         self.editor_view.back_to_main_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.main_view))
 
         self.editor_view._apply_editor_style(self.current_applied_theme)
@@ -195,75 +199,9 @@ class MainWindow(QMainWindow):
 
     def _apply_native_title_bar_theme(self, theme: str):
         """同步 Windows 原生标题栏颜色，避免深色内容区配浅色系统标题栏。"""
-        import sys
+        from main_view_parts.theme import apply_native_title_bar_theme
 
-        if sys.platform != "win32":
-            return
-
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            from PyQt6.QtGui import QColor
-
-            from main_view_parts.theme import get_theme_colors, is_dark_theme
-
-            hwnd = int(self.winId())
-            if not hwnd:
-                return
-
-            colors = get_theme_colors(theme)
-            dwmapi = ctypes.windll.dwmapi
-            user32 = ctypes.windll.user32
-
-            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-            DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19
-            DWMWA_BORDER_COLOR = 34
-            DWMWA_CAPTION_COLOR = 35
-            DWMWA_TEXT_COLOR = 36
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            SWP_FRAMECHANGED = 0x0020
-
-            def _to_colorref(value: str):
-                color = QColor(value)
-                return wintypes.DWORD(color.red() | (color.green() << 8) | (color.blue() << 16))
-
-            def _set_dwm_attr(attribute: int, data):
-                return dwmapi.DwmSetWindowAttribute(
-                    wintypes.HWND(hwnd),
-                    ctypes.c_uint(attribute),
-                    ctypes.byref(data),
-                    ctypes.sizeof(data),
-                )
-
-            is_dark_caption = is_dark_theme(theme)
-            dark_mode = ctypes.c_int(1 if is_dark_caption else 0)
-            result = _set_dwm_attr(DWMWA_USE_IMMERSIVE_DARK_MODE, dark_mode)
-            if result != 0:
-                _set_dwm_attr(DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, dark_mode)
-
-            caption_color = _to_colorref(colors["bg_window_shell"])
-            border_color = _to_colorref(colors["border_sidebar"])
-            text_color = _to_colorref(colors["text_bright"] if is_dark_caption else colors["text_accent"])
-
-            _set_dwm_attr(DWMWA_CAPTION_COLOR, caption_color)
-            _set_dwm_attr(DWMWA_BORDER_COLOR, border_color)
-            _set_dwm_attr(DWMWA_TEXT_COLOR, text_color)
-
-            user32.SetWindowPos(
-                wintypes.HWND(hwnd),
-                wintypes.HWND(0),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-            )
-        except Exception as exc:
-            self.logger.debug(f"应用原生标题栏主题失败: {exc}")
+        apply_native_title_bar_theme(self, theme, logger=self.logger)
     
     def _detect_windows_theme(self) -> str:
         """检测Windows系统主题（深色/浅色）
@@ -278,7 +216,7 @@ class MainWindow(QMainWindow):
             value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
             winreg.CloseKey(key)
             return "light" if value == 1 else "dark"
-        except Exception as e:
+        except Exception:
             # 默认返回浅色（或记录日志）
             # self.logger.warning(f"无法检测系统主题: {e}")
             return "light"
@@ -527,6 +465,9 @@ class MainWindow(QMainWindow):
             if not saved_files:
                 return
 
+            if not self._should_prompt_open_results_in_editor():
+                return
+
             from PyQt6.QtWidgets import QMessageBox
 
             reply = show_error_dialog(
@@ -545,6 +486,33 @@ class MainWindow(QMainWindow):
             self.logger.error(f"on_task_completed 发生异常: {e}", exc_info=True)
             import traceback
             traceback.print_exc()
+
+    def _should_prompt_open_results_in_editor(self) -> bool:
+        """Only prompt for workflows that produce editor-meaningful results."""
+        try:
+            config = self.config_service.get_config()
+            cli = getattr(config, 'cli', None)
+            if cli is None:
+                return True
+
+            if getattr(cli, 'replace_translation', False):
+                return True
+
+            if getattr(cli, 'load_text', False):
+                return True
+
+            incompatible_modes = (
+                getattr(cli, 'translate_json_only', False),
+                getattr(cli, 'template', False),
+                getattr(cli, 'generate_and_export', False),
+                getattr(cli, 'colorize_only', False),
+                getattr(cli, 'upscale_only', False),
+                getattr(cli, 'inpaint_only', False),
+            )
+            return not any(incompatible_modes)
+        except Exception as e:
+            self.logger.warning(f"判断是否显示编辑器提示框失败，回退为显示提示框: {e}")
+            return True
 
     @pyqtSlot(str)
     def _show_error_dialog(self, error_message: str):
@@ -571,10 +539,8 @@ class MainWindow(QMainWindow):
         """
         Switches to the editor view and loads the necessary files.
         file_to_load: 单个文件路径（双击文件时使用）
-        files_to_load: 翻译后的文件列表（从翻译完成进入时使用）
+        files_to_load: 保存结果列表（从翻译完成进入时使用，用于定位要打开的原图）
         """
-        import os
-
         try:
             self._ensure_editor_initialized()
 
@@ -583,45 +549,17 @@ class MainWindow(QMainWindow):
             expanded_files = tree_structure['files']
             folder_tree = tree_structure['tree']
 
-            # 传递翻译后的图片列表给编辑器
-            # 从file_to_folder_map获取翻译后的图片路径
-            translated_files = []
-            translated_folder_map = {}  # 翻译后文件的文件夹映射
-            config = self.app_logic.config_service.get_config()
-            output_folder = config.app.last_output_path
-            output_format = config.cli.format
-            if not output_format or output_format == "不指定":
-                output_format = None
-            save_info = {
-                'output_folder': output_folder,
-                'format': output_format,
-                'save_to_source_dir': config.cli.save_to_source_dir,
-            }
-            
-            for source_file in expanded_files:
-                # 根据源文件路径构造翻译后的图片路径
-                translated_file = self.app_logic._calculate_output_path(source_file, save_info)
-                if os.path.exists(translated_file):
-                    translated_files.append(translated_file)
-                    translated_folder_map[translated_file] = os.path.dirname(translated_file)
-
             # 判断是否从翻译完成进入（有 files_to_load 参数）
             if files_to_load and len(files_to_load) > 0:
-                # 从翻译完成进入：仍然显示源文件列表，具体加载时再解析到可编辑底图
                 self.editor_logic.load_file_lists(
                     source_files=expanded_files,
-                    translated_files=translated_files,
                     folder_tree=folder_tree,
-                    show_translated=False
                 )
-                
-                # 传入翻译结果路径，编辑器会自动解析到可编辑底图
                 self.editor_logic.load_image_into_editor(files_to_load[0])
             else:
                 # 手动打开编辑器：显示源文件列表
                 self.editor_logic.load_file_lists(
-                    source_files=expanded_files, 
-                    translated_files=translated_files,
+                    source_files=expanded_files,
                     folder_tree=folder_tree
                 )
                 # 如果指定了要加载的文件
@@ -629,8 +567,6 @@ class MainWindow(QMainWindow):
                     self.editor_logic.load_image_into_editor(file_to_load)
                 elif expanded_files:
                     self.editor_logic.load_image_into_editor(expanded_files[0])
-                elif translated_files:
-                    self.editor_logic.load_image_into_editor(translated_files[0])
 
             self.stacked_widget.setCurrentWidget(self.editor_view)
         except Exception as e:

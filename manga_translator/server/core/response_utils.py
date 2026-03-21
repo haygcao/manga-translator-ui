@@ -6,10 +6,11 @@
 
 import io
 import json
+
 from fastapi import HTTPException
 
-from manga_translator.server.to_json import to_translation
 from manga_translator import Config
+from manga_translator.server.to_json import to_translation
 
 
 def transform_to_image(ctx):
@@ -199,7 +200,9 @@ async def get_user_preset_env_vars(username: str) -> dict:
     logger = logging.getLogger('manga_translator.server')
     
     try:
-        from manga_translator.server.core.config_management_service import ConfigManagementService
+        from manga_translator.server.core.config_management_service import (
+            ConfigManagementService,
+        )
         
         config_service = ConfigManagementService()
         

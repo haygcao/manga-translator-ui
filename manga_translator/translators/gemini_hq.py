@@ -1,16 +1,29 @@
-import os
 # import re
 import asyncio
-# import base64
-import json
-from io import BytesIO
-from typing import List, Dict, Any
-from PIL import Image
-from google.genai import types
+import os
 
-from .common import CommonTranslator, VALID_LANGUAGES, draw_text_boxes_on_image, parse_json_or_text_response, parse_hq_response, get_glossary_extraction_prompt, merge_glossary_to_file, validate_gemini_response, AsyncGeminiCurlCffi, extract_gemini_response_diagnostics, format_gemini_response_diagnostics, gemini_diagnostics_indicate_safety, gemini_diagnostics_should_disable_images, gemini_error_message_indicates_safety
+# import base64
+from io import BytesIO
+from typing import Any, Dict, List
+
+from google.genai import types
+from PIL import Image
+
+from .common import (
+    VALID_LANGUAGES,
+    AsyncGeminiCurlCffi,
+    CommonTranslator,
+    draw_text_boxes_on_image,
+    extract_gemini_response_diagnostics,
+    format_gemini_response_diagnostics,
+    gemini_diagnostics_indicate_safety,
+    gemini_diagnostics_should_disable_images,
+    gemini_error_message_indicates_safety,
+    merge_glossary_to_file,
+    parse_hq_response,
+    validate_gemini_response,
+)
 from .keys import GEMINI_API_KEY
-from ..utils import Context
 
 # 浏览器风格的请求头，避免被 CF 拦截
 BROWSER_HEADERS = {

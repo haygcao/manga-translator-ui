@@ -16,6 +16,7 @@ if not getattr(sys, 'frozen', False):
 try:
     from manga_translator.config import Translator, TranslatorChain, TranslatorConfig
     from manga_translator.translators import dispatch as dispatch_translator
+    from manga_translator.translators.common import KEEP_LANGUAGES
     from manga_translator.utils import Context, TextBlock
     TRANSLATOR_AVAILABLE = True
 except ImportError as e:
@@ -40,7 +41,10 @@ class TranslationResult:
 class TranslationService:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        from . import get_config_service, get_i18n_manager  # Lazy import to avoid circular dependency
+        from . import (  # Lazy import to avoid circular dependency
+            get_config_service,
+            get_i18n_manager,
+        )
         self.config_service = get_config_service()
         self.i18n = get_i18n_manager()
         
@@ -93,6 +97,15 @@ class TranslationService:
             'THA': self._t('lang_THA'),
             'IND': self._t('lang_IND'),
             'FIL': self._t('lang_FIL')
+        }
+
+    def get_keep_languages(self) -> Dict[str, str]:
+        """获取合并后保留语言过滤可选项（支持国际化）"""
+        if not TRANSLATOR_AVAILABLE:
+            return {}
+        return {
+            code: self._t(f'lang_{code}')
+            for code in KEEP_LANGUAGES.keys()
         }
 
     async def translate_text(self, text: str, 

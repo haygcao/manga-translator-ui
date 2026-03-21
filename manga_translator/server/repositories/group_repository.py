@@ -2,8 +2,9 @@
 Repository for user group management.
 """
 
-from typing import Optional, Dict
 from datetime import datetime, timezone
+from typing import Dict, Optional
+
 from manga_translator.server.repositories.base_repository import BaseJSONRepository
 
 

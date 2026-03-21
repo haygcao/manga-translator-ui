@@ -1,21 +1,32 @@
 
-from functools import partial
 import shutil
+from functools import partial
 from typing import Callable, Optional, Tuple, Union
+
 import cv2
+
+# import torch.nn.functional as F
+# import torch.nn.init as init
+import einops
 import numpy as np
 import torch
 import torch.nn as nn
-# import torch.nn.functional as F
-# import torch.nn.init as init
 
-from torchvision.models import resnet34
-
-import einops
 # import math
+from timm.layers import (
+	AvgPool2dSame,
+	DropPath,
+	GlobalResponseNormMlp,
+	LayerNorm,
+	LayerNorm2d,
+	Mlp,
+	create_conv2d,
+	get_act_layer,
+	make_divisible,
+	to_ntuple,
+	trunc_normal_,
+)
 
-from timm.layers import trunc_normal_, AvgPool2dSame, DropPath, Mlp, GlobalResponseNormMlp, \
-	LayerNorm2d, LayerNorm, create_conv2d, get_act_layer, make_divisible, to_ntuple
 
 class Downsample(nn.Module):
 
@@ -42,8 +53,8 @@ class Downsample(nn.Module):
 class ConvNeXtBlock(nn.Module):
 	""" ConvNeXt Block
 	There are two equivalent implementations:
-	  (1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
-	  (2) DwConv -> Permute to (N, H, W, C); LayerNorm (channels_last) -> Linear -> GELU -> Linear; Permute back
+	(1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
+	(2) DwConv -> Permute to (N, H, W, C); LayerNorm (channels_last) -> Linear -> GELU -> Linear; Permute back
 
 	Unlike the official impl, this one allows choice of 1 or 2, 1x1 conv can be faster with appropriate
 	choice of LayerNorm impl, however as model size increases the tradeoffs appear to change and nn.Linear
@@ -491,13 +502,13 @@ class DBNetConvNext(nn.Module) :
 		return self.conv_db(up8), self.conv_mask(up4)
 
 import os
-from .default_utils import imgproc, dbnet_utils, craft_utils
+
+from ..utils import Quadrilateral, det_rearrange_forward
 from .common import OfflineDetector
-from ..utils import TextBlock, Quadrilateral, det_rearrange_forward
+from .default_utils import craft_utils, dbnet_utils, imgproc
 
 MODEL = None
 def det_batch_forward_default(batch: np.ndarray, device: str):
-    global MODEL
     if isinstance(batch, list):
         batch = np.array(batch)
     batch = einops.rearrange(batch.astype(np.float32) / 127.5 - 1.0, 'n h w c -> n c h w')

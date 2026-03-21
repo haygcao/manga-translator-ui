@@ -9,16 +9,46 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QDir, QModelIndex, pyqtSignal, QSize, QSortFilterProxyModel, QRect, QPoint
-from PyQt6.QtGui import QIcon, QFileSystemModel, QStandardItemModel, QStandardItem, QFont, QPainter, QColor, QPen
-from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTreeView,
-    QListView, QSplitter, QLineEdit, QLabel, QWidget, QFileIconProvider,
-    QMessageBox, QAbstractItemView, QScrollArea, QToolButton, QStyle, QStyledItemDelegate, QHeaderView, QMenu
-)
-
 from main_view_parts.theme import apply_widget_stylesheet, get_current_theme_colors
+from PyQt6.QtCore import (
+    QDir,
+    QModelIndex,
+    QPoint,
+    QRect,
+    QSortFilterProxyModel,
+    Qt,
+)
+from PyQt6.QtGui import (
+    QColor,
+    QFileSystemModel,
+    QIcon,
+    QPainter,
+    QPen,
+    QStandardItem,
+    QStandardItemModel,
+)
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QDialog,
+    QFileIconProvider,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QStyle,
+    QStyledItemDelegate,
+    QToolButton,
+    QTreeView,
+    QVBoxLayout,
+    QWidget,
+)
 from services import get_i18n_manager
+from widgets.hover_hint import set_hover_hint
 
 
 def _folder_dialog_tokens() -> dict[str, str]:
@@ -173,7 +203,7 @@ class FavoriteDelegate(QStyledItemDelegate):
     
     def draw_star(self, painter: QPainter, rect: QRect):
         """绘制五角星"""
-        from math import cos, sin, pi
+        from math import cos, pi, sin
         
         center_x = rect.center().x()
         center_y = rect.center().y()
@@ -286,7 +316,7 @@ class ShortcutFavoriteDelegate(QStyledItemDelegate):
     
     def draw_star(self, painter: QPainter, rect: QRect):
         """绘制五角星"""
-        from math import cos, sin, pi
+        from math import cos, pi, sin
         
         center_x = rect.center().x()
         center_y = rect.center().y()
@@ -366,7 +396,6 @@ class FolderDialog(QDialog):
         self.resize(1000, 650)
         
         # 设置对话框使用系统调色板背景
-        from PyQt6.QtGui import QPalette
         palette = self.palette()
         self.setAutoFillBackground(True)
         self.setPalette(palette)
@@ -629,7 +658,7 @@ class FolderDialog(QDialog):
         # 后退按钮
         self.back_button = QToolButton()
         self.back_button.setText("←")
-        self.back_button.setToolTip(self._t("Back"))
+        set_hover_hint(self.back_button, self._t("Back"))
         self.back_button.setFixedSize(34, 34)
         self.back_button.setEnabled(False)
         toolbar_layout.addWidget(self.back_button)
@@ -637,7 +666,7 @@ class FolderDialog(QDialog):
         # 前进按钮
         self.forward_button = QToolButton()
         self.forward_button.setText("→")
-        self.forward_button.setToolTip(self._t("Forward"))
+        set_hover_hint(self.forward_button, self._t("Forward"))
         self.forward_button.setFixedSize(34, 34)
         self.forward_button.setEnabled(False)
         toolbar_layout.addWidget(self.forward_button)
@@ -645,14 +674,14 @@ class FolderDialog(QDialog):
         # 上级目录按钮
         self.parent_button = QToolButton()
         self.parent_button.setText("↑")
-        self.parent_button.setToolTip(self._t("Parent Directory"))
+        set_hover_hint(self.parent_button, self._t("Parent Directory"))
         self.parent_button.setFixedSize(34, 34)
         toolbar_layout.addWidget(self.parent_button)
 
         # 刷新按钮
         self.refresh_button = QToolButton()
         self.refresh_button.setText("↻")
-        self.refresh_button.setToolTip(self._t("Refresh"))
+        set_hover_hint(self.refresh_button, self._t("Refresh"))
         self.refresh_button.setFixedSize(34, 34)
         toolbar_layout.addWidget(self.refresh_button)
 
@@ -718,7 +747,7 @@ class FolderDialog(QDialog):
         # 地址栏编辑按钮
         self.edit_path_button = QToolButton()
         self.edit_path_button.setText("/")
-        self.edit_path_button.setToolTip(self._t("Edit Path"))
+        set_hover_hint(self.edit_path_button, self._t("Edit Path"))
         self.edit_path_button.setStyleSheet(f"""
             QToolButton {{
                 background-color: {self._chip_bg_color};
@@ -1166,7 +1195,7 @@ class FolderDialog(QDialog):
                         display_name = f"{volume_name} ({drive_path})"
                     else:
                         display_name = f"{self._t('Local Disk')} ({drive_path})"
-                except:
+                except Exception:
                     display_name = f"{self._t('Local Disk')} ({drive_path})"
 
                 drives_list.append((display_name, str(drive_path)))
@@ -1206,12 +1235,12 @@ class FolderDialog(QDialog):
                     expanded_path = os.path.expandvars(path_value)
                     if os.path.exists(expanded_path):
                         quick_access.append((display_name, expanded_path))
-                except:
+                except Exception:
                     pass
 
             winreg.CloseKey(key)
 
-        except Exception as e:
+        except Exception:
             # 如果读取注册表失败，使用默认路径
             home = Path.home()
             default_folders = [
@@ -1256,7 +1285,7 @@ class FolderDialog(QDialog):
                     quick_access.append(("☁️ OneDrive", str(onedrive_path)))
                     break
 
-        except Exception as e:
+        except Exception:
             pass
 
         return quick_access
@@ -1541,7 +1570,6 @@ class FolderDialog(QDialog):
     def eventFilter(self, obj, event):
         """事件过滤器：处理 Esc 键取消路径编辑和点击外部区域"""
         from PyQt6.QtCore import QEvent
-        from PyQt6.QtGui import QKeyEvent, QMouseEvent
         
         if obj == self.path_edit:
             if event.type() == QEvent.Type.KeyPress:
@@ -1668,7 +1696,7 @@ class FolderDialog(QDialog):
                     try:
                         with open(config_path, 'r', encoding='utf-8') as f:
                             config_dict = json.load(f)
-                    except:
+                    except Exception:
                         config_dict = {}
                 
                 # 确保 app 键存在

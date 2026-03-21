@@ -1,15 +1,16 @@
 import os
 import shutil
-import torch
-import numpy as np
-import einops
-from PIL import Image
 from typing import List
 
+import einops
+import numpy as np
+import torch
+from PIL import Image
+
+from ..utils import get_logger
 from .common import OfflineUpscaler
 from .esrgan_pytorch import RRDBNet, infer_params
-from .tile_utils import split_image_into_tiles, merge_tiles_into_image
-from ..utils import get_logger
+from .tile_utils import merge_tiles_into_image, split_image_into_tiles
 
 logger = get_logger('MangaJaNaiUpscaler')
 
@@ -393,7 +394,7 @@ class MangaJaNaiUpscaler(OfflineUpscaler):
                             min_diff = diff
                             best_model = m
                         break
-            except:
+            except Exception:
                 continue
         
         logger.info(f"检测到黑白图片 (分辨率 {res}p)，使用 MangaJaNai 模型: {best_model}")

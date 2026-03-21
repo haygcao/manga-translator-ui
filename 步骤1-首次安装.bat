@@ -2,6 +2,20 @@
 chcp 936 >nul
 setlocal EnableDelayedExpansion
 
+if /I "%~1"=="__run" goto :__main
+cmd /v:on /c ""%~f0" __run"
+set "SCRIPT_EXIT=%ERRORLEVEL%"
+if not "%SCRIPT_EXIT%"=="0" (
+    echo.
+    echo [ERROR] 安装脚本已停止，退出码: %SCRIPT_EXIT%
+    echo 请检查上面的错误信息后重试
+    echo.
+    pause
+)
+exit /b %SCRIPT_EXIT%
+
+:__main
+
 REM 设置 PYTHONUTF8=1 避免conda编码错误
 set "PYTHONUTF8=1"
 
@@ -31,8 +45,12 @@ echo.
 echo [1/5] 检查 Miniconda (Python环境管理)...
 echo ========================================
 
-REM 检查是否已有本地Miniconda安装
-set MINICONDA_ROOT=%SCRIPT_DIR%\Miniconda3
+REM 默认安装位置（不代表已检测到 Conda）
+set "MINICONDA_ROOT="
+set "DEFAULT_MINICONDA_ROOT=%SCRIPT_DIR%\Miniconda3"
+set "ALT_MINICONDA_ROOT=%~d0\Miniconda3"
+set "CONDA_REGISTRY_FOUND=0"
+set "CONDA_VALID=0"
 set CONDA_INSTALLED=0
 set PATH_HAS_CHINESE=0
 set ALT_INSTALL_PATH=
@@ -43,68 +61,65 @@ set "TEMP_CHECK_PATH=%SCRIPT_DIR%"
 powershell -Command "$path = '%TEMP_CHECK_PATH%'; if ($path -match '[^\x00-\x7F]') { exit 1 } else { exit 0 }" >nul 2>&1
 if errorlevel 1 (
     REM 路径包含中文，使用磁盘根目录
-    set MINICONDA_ROOT=%~d0\Miniconda3
+    set "DEFAULT_MINICONDA_ROOT=%ALT_MINICONDA_ROOT%"
     set PATH_HAS_CHINESE=1
 )
 
-REM 先检查系统是否已有conda（全局安装）
-where conda >nul 2>&1
-if %ERRORLEVEL% neq 0 goto :check_local_conda
+call :detect_conda_registry
 
-:found_system_conda
-echo [OK] 检测到系统已安装 Conda
-echo.
-
-REM 方法1: 从CONDA_EXE环境变量获取（最可靠）
+REM 先检查系统是否已有可用 Conda
 if defined CONDA_EXE (
-    REM CONDA_EXE通常指向 D:\Miniconda3\Scripts\conda.exe
-    REM 需要向上两级获取根目录
-    for %%p in ("%CONDA_EXE%\..\..") do set "MINICONDA_ROOT=%%~fp"
-)
-
-REM 方法2: 从CONDA_PREFIX环境变量获取
-if "!MINICONDA_ROOT!"=="" (
-    if defined CONDA_PREFIX (
-        set "MINICONDA_ROOT=%CONDA_PREFIX%"
-    )
-)
-
-REM 方法3: 使用 conda info --base（可能失败）
-if "!MINICONDA_ROOT!"=="" (
-    for /f "delims=" %%i in ('conda info --base 2^>nul') do (
-        REM 检查返回值是否是有效路径
-        set "TEMP_PATH=%%i"
-        if exist "!TEMP_PATH!\Scripts\conda.exe" (
+    for /f "delims=" %%i in ('"%CONDA_EXE%" info --base 2^>nul') do (
+        if exist "%%i\Scripts\conda.exe" (
             set "MINICONDA_ROOT=%%i"
         )
     )
 )
 
-REM 方法4: 从 where conda 解析路径
-if "!MINICONDA_ROOT!"=="" (
+if not defined MINICONDA_ROOT (
+    for /f "delims=" %%i in ('conda info --base 2^>nul') do (
+        if exist "%%i\Scripts\conda.exe" (
+            set "MINICONDA_ROOT=%%i"
+        )
+    )
+)
+
+if not defined MINICONDA_ROOT (
     for /f "delims=" %%i in ('where conda 2^>nul') do (
-        REM 只取第一个找到的conda.exe（Scripts目录下的）
-        if "!MINICONDA_ROOT!"=="" (
-            if "%%~xi"==".exe" (
-                for %%p in ("%%~dpi..") do set "MINICONDA_ROOT=%%~fp"
-            ) else if "%%~xi"==".bat" (
-                REM 如果是.bat文件，向上两级
-                for %%p in ("%%~dpi..\..") do set "MINICONDA_ROOT=%%~fp"
+        if not defined MINICONDA_ROOT (
+            if /I "%%~nxi"=="conda.exe" (
+                for %%p in ("%%~dpi..") do if exist "%%~fp\Scripts\conda.exe" set "MINICONDA_ROOT=%%~fp"
+            ) else if /I "%%~nxi"=="conda.bat" (
+                for %%p in ("%%~dpi..") do if exist "%%~fp\Scripts\conda.exe" set "MINICONDA_ROOT=%%~fp"
             )
         )
     )
 )
 
-REM 显示conda信息（添加错误处理避免闪退）
-if not "!MINICONDA_ROOT!"=="" (
-    echo 位置: !MINICONDA_ROOT!
-    call conda --version 2>nul
-    if !ERRORLEVEL! neq 0 (
-        echo [WARNING] 无法获取conda版本信息
-    )
+if defined MINICONDA_ROOT (
+    call :report_conda_registry_status
+    call :validate_conda_root
+    if "!CONDA_VALID!"=="1" goto :found_system_conda
+    echo [WARNING] 检测到 Conda，但校验失败: !MINICONDA_ROOT!
+    set "MINICONDA_ROOT="
+)
+goto :check_local_conda
+
+:found_system_conda
+echo [OK] 检测到系统已安装 Conda
+echo.
+echo 位置: !MINICONDA_ROOT!
+echo [OK] Conda 校验通过
+if exist "!MINICONDA_ROOT!\condabin\conda.bat" (
+    set "PATH=!MINICONDA_ROOT!\condabin;!MINICONDA_ROOT!\Scripts;%PATH%"
+)
+if exist "!MINICONDA_ROOT!\Scripts\conda.exe" (
+    call "!MINICONDA_ROOT!\Scripts\conda.exe" --version 2>nul
 ) else (
-    echo [WARNING] 无法确定conda安装路径
-    echo 将使用系统conda命令
+    call conda --version 2>nul
+)
+if !ERRORLEVEL! neq 0 (
+    echo [WARNING] 无法获取conda版本信息
 )
 
 echo.
@@ -114,12 +129,33 @@ goto :check_git
 
 :check_local_conda
 REM 检查本地Miniconda
-if exist "%MINICONDA_ROOT%\Scripts\conda.exe" goto :found_local_conda
+if exist "%DEFAULT_MINICONDA_ROOT%\Scripts\conda.exe" (
+    set "MINICONDA_ROOT=%DEFAULT_MINICONDA_ROOT%"
+    call :report_conda_registry_status
+    call :validate_conda_root
+    if "!CONDA_VALID!"=="1" goto :found_local_conda
+    echo [WARNING] 检测到本地 Conda，但校验失败: %DEFAULT_MINICONDA_ROOT%
+    set "MINICONDA_ROOT="
+)
+if /I not "%ALT_MINICONDA_ROOT%"=="%DEFAULT_MINICONDA_ROOT%" (
+    if exist "%ALT_MINICONDA_ROOT%\Scripts\conda.exe" (
+        set "MINICONDA_ROOT=%ALT_MINICONDA_ROOT%"
+        call :report_conda_registry_status
+        call :validate_conda_root
+        if "!CONDA_VALID!"=="1" goto :found_local_conda
+        echo [WARNING] 检测到本地 Conda，但校验失败: %ALT_MINICONDA_ROOT%
+        set "MINICONDA_ROOT="
+    )
+)
 goto :install_conda
 
 :found_local_conda
 echo [OK] 检测到本地 Miniconda 已安装
 echo 位置: %MINICONDA_ROOT%
+echo [OK] Conda 校验通过
+if exist "%MINICONDA_ROOT%\condabin\conda.bat" (
+    set "PATH=%MINICONDA_ROOT%\condabin;%MINICONDA_ROOT%\Scripts;%PATH%"
+)
 call "%MINICONDA_ROOT%\Scripts\conda.exe" --version
 goto :check_git
 
@@ -127,6 +163,7 @@ goto :check_git
 
 REM 提示：需要安装本地Miniconda
 echo [INFO] 未检测到本地 Miniconda
+set "MINICONDA_ROOT=%DEFAULT_MINICONDA_ROOT%"
 echo ========================================
 echo.
 echo 本项目需要 Python 3.12 环境
@@ -544,15 +581,17 @@ if exist ".git" (
     
     REM 清理前确认
     echo ========================================
-    echo ??????  警告：即将删除文件  ??????
+    echo ??????  警告：即将删除当前目录中的文件  ??????
     echo ========================================
     echo.
     echo ╔════════════════════════════════════════╗
-    echo ║  ??  危险操作：将删除大量文件！  ??   ║
+    echo ║  ??  危险操作：仅删除当前目录内容！ ??  ║
     echo ╚════════════════════════════════════════╝
     echo.
     echo 【删除范围】
-    echo   除保留文件外的全部文件和文件夹都将被删除！
+    echo   当前目录: %SCRIPT_DIR%
+    echo   只会删除当前目录下除保留文件外的文件和文件夹
+    echo   不会删除当前目录之外的其他位置
     echo.
     echo 【仅保留以下内容】
     echo   ? venv / conda_env (Python环境)
@@ -561,7 +600,7 @@ if exist ".git" (
     echo   ? 安装脚本（步骤1-首次安装.bat）
     echo.
     echo ╔════════════════════════════════════════╗
-    echo ║  其他所有文件和文件夹都将被永久删除！ ║
+    echo ║ 当前目录内其他文件和文件夹都将被永久删除！║
     echo ╚════════════════════════════════════════╝
     echo.
     echo 是否继续?
@@ -737,26 +776,59 @@ echo ========================================
 echo.
 
 REM 重新检测 Conda 路径（确保变量可用）
-if not defined MINICONDA_ROOT (
-    set MINICONDA_ROOT=%SCRIPT_DIR%\Miniconda3
+if not defined DEFAULT_MINICONDA_ROOT (
+    set "DEFAULT_MINICONDA_ROOT=%SCRIPT_DIR%\Miniconda3"
+    set "ALT_MINICONDA_ROOT=%~d0\Miniconda3"
     REM 检测路径是否包含中文
     powershell -Command "$path = '%SCRIPT_DIR%'; if ($path -match '[^\x00-\x7F]') { exit 1 } else { exit 0 }" >nul 2>&1
     if errorlevel 1 (
-        set MINICONDA_ROOT=%~d0\Miniconda3
+        set "DEFAULT_MINICONDA_ROOT=%ALT_MINICONDA_ROOT%"
     )
 )
 
-REM 尝试从系统获取 Conda 路径
-if defined CONDA_EXE (
-    for %%p in ("%CONDA_EXE%\..\..") do set "MINICONDA_ROOT=%%~fp"
+if not defined MINICONDA_ROOT (
+    if exist "%DEFAULT_MINICONDA_ROOT%\Scripts\conda.exe" (
+        set "MINICONDA_ROOT=%DEFAULT_MINICONDA_ROOT%"
+    )
 )
 if not defined MINICONDA_ROOT (
-    for /f "delims=" %%i in ('conda info --base 2^>nul') do set "MINICONDA_ROOT=%%i"
+    if /I not "%ALT_MINICONDA_ROOT%"=="%DEFAULT_MINICONDA_ROOT%" (
+        if exist "%ALT_MINICONDA_ROOT%\Scripts\conda.exe" (
+            set "MINICONDA_ROOT=%ALT_MINICONDA_ROOT%"
+        )
+    )
+)
+if not defined MINICONDA_ROOT (
+    if defined CONDA_EXE (
+        for /f "delims=" %%i in ('"%CONDA_EXE%" info --base 2^>nul') do (
+            if exist "%%i\Scripts\conda.exe" set "MINICONDA_ROOT=%%i"
+        )
+    )
+)
+if not defined MINICONDA_ROOT (
+    for /f "delims=" %%i in ('conda info --base 2^>nul') do (
+        if exist "%%i\Scripts\conda.exe" set "MINICONDA_ROOT=%%i"
+    )
+)
+if not defined MINICONDA_ROOT (
+    for /f "delims=" %%i in ('where conda 2^>nul') do (
+        if not defined MINICONDA_ROOT (
+            if /I "%%~nxi"=="conda.exe" (
+                for %%p in ("%%~dpi..") do if exist "%%~fp\Scripts\conda.exe" set "MINICONDA_ROOT=%%~fp"
+            ) else if /I "%%~nxi"=="conda.bat" (
+                for %%p in ("%%~dpi..") do if exist "%%~fp\Scripts\conda.exe" set "MINICONDA_ROOT=%%~fp"
+            )
+        )
+    )
 )
 
 REM 初始化 Conda（确保 conda 命令可用）
 echo 正在初始化 Conda...
-if exist "%MINICONDA_ROOT%\Scripts\activate.bat" (
+if exist "%MINICONDA_ROOT%\condabin\conda.bat" (
+    set "PATH=%MINICONDA_ROOT%\condabin;%MINICONDA_ROOT%\Scripts;%PATH%"
+    echo [OK] Conda 已初始化
+    echo 位置: %MINICONDA_ROOT%
+) else if exist "%MINICONDA_ROOT%\Scripts\activate.bat" (
     call "%MINICONDA_ROOT%\Scripts\activate.bat"
     echo [OK] Conda 已初始化
     echo 位置: %MINICONDA_ROOT%
@@ -778,6 +850,10 @@ echo.
 REM 使用命名环境（避免中文路径问题）
 set CONDA_ENV_NAME=manga-env
 set CONDA_ENV_EXISTS=0
+set "CONDA_BASE="
+set "ENV_PATH="
+set "ENV_PYTHON="
+set "USE_DIRECT_ENV_PYTHON=0"
 
 REM 预先接受Conda服务条款（避免交互式提示卡住）
 call conda config --set channel_priority flexible >nul 2>&1
@@ -834,6 +910,7 @@ call conda env remove -n "%CONDA_ENV_NAME%" -y >nul 2>&1
 REM 清理可能存在的损坏环境目录（环境存在但未注册的情况）
 REM 获取conda的envs目录
 for /f "delims=" %%i in ('conda info --base 2^>nul') do set "CONDA_BASE=%%i"
+if not defined CONDA_BASE set "CONDA_BASE=%MINICONDA_ROOT%"
 if exist "%CONDA_BASE%\envs\%CONDA_ENV_NAME%" (
     echo 发现未注册的环境目录，正在清理...
     rmdir /s /q "%CONDA_BASE%\envs\%CONDA_ENV_NAME%" 2>nul
@@ -899,39 +976,43 @@ exit /b 1
 echo.
 echo 正在激活环境...
 
-REM 先确保 conda 已初始化
-if not exist "%MINICONDA_ROOT%\Scripts\activate.bat" goto :try_activate_s1
-call "%MINICONDA_ROOT%\Scripts\activate.bat"
+call :resolve_env_path_s1
+if not defined ENV_PATH goto :activate_failed_s1
+if not exist "!ENV_PATH!\python.exe" goto :activate_failed_s1
+set "ENV_PYTHON=!ENV_PATH!\python.exe"
+set "USE_DIRECT_ENV_PYTHON=0"
 
-:try_activate_s1
-REM 方法1: conda activate 命名环境
-call conda activate "%CONDA_ENV_NAME%" 2>nul && echo [OK] 已激活命名环境: %CONDA_ENV_NAME% && goto :env_activated
+REM 方法1: 优先使用 conda activate
+call conda activate "%CONDA_ENV_NAME%" 2>nul && (
+    echo [OK] 已激活命名环境: %CONDA_ENV_NAME%
+    goto :env_activated
+)
 
 REM 方法2: activate.bat 激活命名环境
 echo [INFO] 尝试备用激活方式...
-if not exist "%MINICONDA_ROOT%\Scripts\activate.bat" goto :try_manual_path_s1
-call "%MINICONDA_ROOT%\Scripts\activate.bat" "%CONDA_ENV_NAME%" 2>nul && echo [OK] 已激活命名环境: %CONDA_ENV_NAME% && goto :env_activated
+if exist "%MINICONDA_ROOT%\Scripts\activate.bat" (
+    call "%MINICONDA_ROOT%\Scripts\activate.bat" "%CONDA_ENV_NAME%" 2>nul && (
+        echo [OK] 已激活命名环境: %CONDA_ENV_NAME%
+        goto :env_activated
+    )
+)
 
-:try_manual_path_s1
-REM 方法3: 获取环境路径并手动设置PATH
-for /f "tokens=2" %%i in ('conda info --envs 2^>nul ^| findstr /B /C:"%CONDA_ENV_NAME%"') do set "ENV_PATH=%%i"
-if not defined ENV_PATH goto :activate_failed_s1
-if not exist "!ENV_PATH!\python.exe" goto :activate_failed_s1
-echo [INFO] 使用手动PATH激活方式...
-set "PATH=!ENV_PATH!;!ENV_PATH!\Library\mingw-w64\bin;!ENV_PATH!\Library\usr\bin;!ENV_PATH!\Library\bin;!ENV_PATH!\Scripts;!ENV_PATH!\bin;%PATH%"
+REM 回退: 不再中断安装，直接使用环境 Python
+echo [WARNING] 环境激活失败，回退到直接调用环境 Python
+echo [INFO] 环境路径: !ENV_PATH!
+set "USE_DIRECT_ENV_PYTHON=1"
 set "CONDA_PREFIX=!ENV_PATH!"
 set "CONDA_DEFAULT_ENV=%CONDA_ENV_NAME%"
-echo [OK] 已激活环境: %CONDA_ENV_NAME%
 goto :env_activated
 
 :activate_failed_s1
-REM 所有激活方式都失败，询问用户
+REM 无法解析环境路径，说明环境本身不完整
 echo.
-echo [WARNING] 无法激活环境: %CONDA_ENV_NAME%
+echo [WARNING] 无法定位环境: %CONDA_ENV_NAME%
 echo.
 echo 可能原因:
-echo   1. Conda 未正确初始化
-echo   2. 环境已损坏
+echo   1. 环境未创建完整
+echo   2. Conda 环境列表异常
 echo.
 echo 请选择:
 echo [1] 重新创建环境（删除现有环境）
@@ -969,14 +1050,37 @@ echo 请关闭所有相关程序后重试
 pause
 exit /b 1
 
+:resolve_env_path_s1
+set "ENV_PATH="
+if defined CONDA_BASE if exist "%CONDA_BASE%\envs\%CONDA_ENV_NAME%\python.exe" set "ENV_PATH=%CONDA_BASE%\envs\%CONDA_ENV_NAME%"
+if not defined ENV_PATH (
+    for /f "tokens=1,2,3" %%a in ('conda info --envs 2^>nul ^| findstr /B /C:"%CONDA_ENV_NAME%"') do (
+        if "%%b"=="*" (
+            set "ENV_PATH=%%c"
+        ) else (
+            set "ENV_PATH=%%b"
+        )
+    )
+)
+if not defined ENV_PATH if exist "%MINICONDA_ROOT%\envs\%CONDA_ENV_NAME%\python.exe" set "ENV_PATH=%MINICONDA_ROOT%\envs\%CONDA_ENV_NAME%"
+exit /b 0
+
+:run_env_python
+if "%USE_DIRECT_ENV_PYTHON%"=="1" (
+    call "!ENV_PYTHON!" %*
+) else (
+    call python %*
+)
+exit /b %ERRORLEVEL%
+
 :env_activated
 
 echo 正在升级 pip...
-python -m pip install --upgrade pip >nul 2>&1
+call :run_env_python -m pip install --upgrade pip >nul 2>&1
 
 echo 正在安装基础依赖...
-python -m pip install packaging setuptools wheel >nul 2>&1
-if %ERRORLEVEL% neq 0 (
+call :run_env_python -m pip install packaging setuptools wheel >nul 2>&1
+if !ERRORLEVEL! neq 0 (
     echo [WARNING] 基础依赖安装失败,继续尝试...
 )
 
@@ -984,9 +1088,9 @@ echo 正在检测 GPU 支持...
 echo.
 
 REM 调用项目的 launch.py 进行依赖安装
-python packaging\launch.py --install-deps-only
+call :run_env_python packaging\launch.py --install-deps-only
 
-if %ERRORLEVEL% neq 0 (
+if !ERRORLEVEL! neq 0 (
     echo.
     echo [ERROR] 依赖安装失败
     echo.
@@ -1031,7 +1135,7 @@ set /p clean_cache="是否清理 pip 缓存? (y/n, 默认n): "
 if /i "%clean_cache%"=="y" (
     echo.
     echo 正在清理 pip 缓存...
-    python -m pip cache purge >nul 2>&1
+    call :run_env_python -m pip cache purge >nul 2>&1
     if errorlevel 1 (
         echo [WARNING] 缓存清理失败，可能权限不足
     ) else (
@@ -1053,6 +1157,57 @@ if /i "%run_now%"=="y" (
 echo.
 echo 安装流程已结束
 pause
+goto :eof
+
+:detect_conda_registry
+set "CONDA_REGISTRY_FOUND=0"
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall" /f "Miniconda" /s >nul 2>&1 && set "CONDA_REGISTRY_FOUND=1"
+if "!CONDA_REGISTRY_FOUND!"=="0" reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall" /f "Miniconda" /s >nul 2>&1 && set "CONDA_REGISTRY_FOUND=1"
+if "!CONDA_REGISTRY_FOUND!"=="0" reg query "HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" /f "Miniconda" /s >nul 2>&1 && set "CONDA_REGISTRY_FOUND=1"
+if "!CONDA_REGISTRY_FOUND!"=="0" reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall" /f "Anaconda" /s >nul 2>&1 && set "CONDA_REGISTRY_FOUND=1"
+if "!CONDA_REGISTRY_FOUND!"=="0" reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall" /f "Anaconda" /s >nul 2>&1 && set "CONDA_REGISTRY_FOUND=1"
+if "!CONDA_REGISTRY_FOUND!"=="0" reg query "HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" /f "Anaconda" /s >nul 2>&1 && set "CONDA_REGISTRY_FOUND=1"
+if "!CONDA_REGISTRY_FOUND!"=="0" reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun 2>nul | findstr /I "conda" >nul 2>&1 && set "CONDA_REGISTRY_FOUND=1"
+if "!CONDA_REGISTRY_FOUND!"=="0" reg query "HKLM\Software\Microsoft\Command Processor" /v AutoRun 2>nul | findstr /I "conda" >nul 2>&1 && set "CONDA_REGISTRY_FOUND=1"
+goto :eof
+
+:report_conda_registry_status
+if "!CONDA_REGISTRY_FOUND!"=="1" (
+    echo [INFO] 检测到注册表安装信息
+) else (
+    if defined MINICONDA_ROOT (
+        echo [INFO] 未检测到注册表信息，但已检测到可用 Conda
+    ) else (
+        echo [INFO] 未检测到注册表安装信息
+    )
+)
+goto :eof
+
+:validate_conda_root
+set "CONDA_VALID=0"
+set "CONDA_VALID_BASE="
+if not defined MINICONDA_ROOT goto :eof
+if exist "%MINICONDA_ROOT%\condabin\conda.bat" (
+    set "PATH=%MINICONDA_ROOT%\condabin;%MINICONDA_ROOT%\Scripts;%PATH%"
+) else if exist "%MINICONDA_ROOT%\Scripts\conda.exe" (
+    set "PATH=%MINICONDA_ROOT%\Scripts;%PATH%"
+) else (
+    goto :eof
+)
+if exist "%MINICONDA_ROOT%\Scripts\conda.exe" (
+    call "%MINICONDA_ROOT%\Scripts\conda.exe" --version >nul 2>&1
+    if errorlevel 1 goto :eof
+    for /f "delims=" %%i in ('"%MINICONDA_ROOT%\Scripts\conda.exe" info --base 2^>nul') do set "CONDA_VALID_BASE=%%i"
+) else (
+    call conda --version >nul 2>&1
+    if errorlevel 1 goto :eof
+    for /f "delims=" %%i in ('conda info --base 2^>nul') do set "CONDA_VALID_BASE=%%i"
+)
+if not defined CONDA_VALID_BASE goto :eof
+if not exist "!CONDA_VALID_BASE!\Scripts\conda.exe" goto :eof
+set "MINICONDA_ROOT=!CONDA_VALID_BASE!"
+set "CONDA_VALID=1"
+goto :eof
 
 :install_cancelled
 echo.

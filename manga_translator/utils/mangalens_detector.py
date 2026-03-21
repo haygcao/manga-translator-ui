@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import os
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
@@ -12,7 +12,12 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
-from .generic import BASE_PATH
+from .generic import (
+    BASE_PATH,
+    build_det_rearrange_plan,
+    det_collect_plan_patches,
+    det_rearrange_patch_spans,
+)
 from .inference import ModelWrapper
 from .log import get_logger
 
@@ -479,18 +484,29 @@ class MangaLensBubbleDetector(ModelWrapper):
         conf_thres: float,
         iou_thres: float,
         verbose: bool = False,
+        rearrange_plan: Optional[dict] = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
-        transpose = False
-        work_img = img
-        if work_img.shape[0] < work_img.shape[1]:
-            transpose = True
-            work_img = np.transpose(work_img, (1, 0, 2)).copy()
+        if rearrange_plan is None:
+            rearrange_plan = build_det_rearrange_plan(img, tgt_size=target_size)
+        if rearrange_plan is None:
+            return self._infer_single(
+                img=img,
+                target_size=target_size,
+                conf_thres=conf_thres,
+                iou_thres=iou_thres,
+            )
 
-        work_h, work_w = work_img.shape[:2]
-        pw_num = max(int(np.floor(2 * target_size / max(work_w, 1))), 2)
-        patch_h = min(work_h, max(work_w, pw_num * work_w))
-        patch_num = int(np.ceil(work_h / max(patch_h, 1)))
-        patch_step = int((work_h - patch_h) / (patch_num - 1)) if patch_num > 1 else 0
+        transpose = bool(rearrange_plan["transpose"])
+        work_h = int(rearrange_plan["h"])
+        work_w = int(rearrange_plan["w"])
+        patch_h = int(rearrange_plan["patch_size"])
+        patch_num = int(rearrange_plan["ph_num"])
+        patch_spans = det_rearrange_patch_spans(rearrange_plan)
+        patch_list = det_collect_plan_patches(img, rearrange_plan)[:patch_num]
+
+        patch_step = 0
+        if len(patch_spans) > 1:
+            patch_step = int(patch_spans[1][0] - patch_spans[0][0])
 
         self.logger.info(
             "MangaLens long-image slicing enabled: "
@@ -503,10 +519,7 @@ class MangaLensBubbleDetector(ModelWrapper):
         all_cls: list[np.ndarray] = []
         all_masks: list[Optional[np.ndarray]] = []
 
-        for patch_idx in range(patch_num):
-            top = patch_idx * patch_step if patch_num > 1 else 0
-            bottom = min(work_h, top + patch_h)
-            patch = work_img[top:bottom, :]
+        for patch_idx, ((top, bottom), patch) in enumerate(zip(patch_spans, patch_list)):
             if patch.size == 0 or patch.shape[0] == 0 or patch.shape[1] == 0:
                 continue
 
@@ -623,14 +636,15 @@ class MangaLensBubbleDetector(ModelWrapper):
         conf_thres = float(conf if conf is not None else self.default_conf)
         iou_thres = float(iou if iou is not None else self.default_iou)
 
-        use_long_rearrange = self._requires_long_rearrange((orig_h, orig_w), target_size)
-        if use_long_rearrange:
+        rearrange_plan = build_det_rearrange_plan(img, tgt_size=target_size)
+        if rearrange_plan is not None:
             boxes_xyxy, scores, cls_ids, mask_data = self._infer_long_image(
                 img=img,
                 target_size=target_size,
                 conf_thres=conf_thres,
                 iou_thres=iou_thres,
                 verbose=verbose,
+                rearrange_plan=rearrange_plan,
             )
         else:
             boxes_xyxy, scores, cls_ids, mask_data = self._infer_single(

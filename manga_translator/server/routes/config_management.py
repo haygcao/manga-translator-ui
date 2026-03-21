@@ -4,11 +4,14 @@ Configuration Management API Routes
 Provides endpoints for managing .env configurations, presets, and user configs.
 """
 
-from typing import Optional, Dict, List
-from fastapi import APIRouter, HTTPException, Depends
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from manga_translator.server.core.config_management_service import ConfigManagementService
+from manga_translator.server.core.config_management_service import (
+    ConfigManagementService,
+)
 from manga_translator.server.core.middleware import require_admin, require_auth
 
 router = APIRouter(prefix="/api", tags=["config-management"])

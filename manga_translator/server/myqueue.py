@@ -2,14 +2,15 @@ import asyncio
 import os
 from typing import List, Optional
 
-from PIL import Image
 from fastapi import HTTPException
 from fastapi.requests import Request
+from PIL import Image
 
 from manga_translator import Config
-from manga_translator.utils import open_pil_image
 from manga_translator.server.instance import executor_instances
 from manga_translator.server.sent_data_internal import NotifyType
+from manga_translator.utils import open_pil_image
+
 
 class QueueElement:
     req: Request

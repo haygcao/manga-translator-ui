@@ -8,21 +8,24 @@ import numpy as np
 from PIL import Image
 
 from ..config import Renderer
-from ..translators.common import draw_text_boxes_on_image
-from ..utils.ai_image_preprocess import normalize_ai_image, prepare_square_ai_image, restore_square_ai_image
-from ..utils.openai_image_interface import request_openai_image_with_fallback
 from ..custom_api_params import (
     load_enabled_custom_api_params,
     split_gemini_request_params,
 )
+from ..translators.common import draw_text_boxes_on_image
 from ..utils import TextBlock, get_logger
+from ..utils.ai_image_preprocess import (
+    normalize_ai_image,
+    prepare_square_ai_image,
+    restore_square_ai_image,
+)
+from ..utils.openai_image_interface import request_openai_image_with_fallback
 from ..utils.retry import run_with_retry
 from .prompt_loader import (
     DEFAULT_AI_RENDERER_PROMPT,
     ensure_ai_renderer_prompt_file,
     load_ai_renderer_prompt_file,
 )
-
 
 OPENAI_BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",

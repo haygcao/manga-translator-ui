@@ -2,17 +2,17 @@
 # original implementation https://github.com/DQiaole/ZITS_inpainting.git
 # paper https://arxiv.org/pdf/2203.00867.pdf
 
+import os
+import shutil
+from typing import Tuple
+
+import cv2
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import cv2
-import os
-import shutil
 from torch import Tensor
-from typing import Tuple
 
-from .common import OfflineInpainter
 from ..config import InpainterConfig
 from ..utils import resize_keep_aspect
 from ..utils.onnx_runtime import (
@@ -20,7 +20,7 @@ from ..utils.onnx_runtime import (
     create_session_options,
     import_onnxruntime,
 )
-
+from .common import OfflineInpainter
 
 TORCH_DTYPE_MAP = {
     'fp32': torch.float32,
@@ -831,7 +831,6 @@ class FourierUnit(nn.Module):
             orig_size = x.shape[-2:]
             x = F.interpolate(x, scale_factor=self.spatial_scale_factor, mode=self.spatial_scale_mode, align_corners=False)
 
-        _r_size = x.size()
         # (batch, c, h, w/2+1, 2)
         fft_dim = (-3, -2, -1) if self.ffc3d else (-2, -1)
 

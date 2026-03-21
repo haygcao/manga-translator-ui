@@ -5,13 +5,13 @@
 """
 
 import json
+import logging
 import os
 import shutil
 import tempfile
-from pathlib import Path
-from typing import Dict, Any, Optional
 from datetime import datetime
-import logging
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def atomic_write_json(file_path: str, data: Dict[str, Any], create_backup: bool 
             # 清理临时文件
             try:
                 os.unlink(temp_path)
-            except:
+            except Exception:
                 pass
             raise e
             

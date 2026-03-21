@@ -214,7 +214,10 @@ class PermissionEditor {
             return this.t(`translator_${value}`, value);
         }
         // 语言选项
-        if (key === 'target_lang') {
+        if (key === 'target_lang' || key === 'keep_lang') {
+            if (key === 'keep_lang' && value === 'none') {
+                return this.t('lang_filter_disabled', value);
+            }
             return this.t(`lang_${value}`, value);
         }
         // 对齐方式
@@ -416,6 +419,7 @@ class PermissionEditor {
                 <h3>${this.t('label_translator', '翻译器')}</h3>
                 ${this.createFormRow(this.t('label_translator', '翻译器'), this.createSelect('translator', 'translator', opts.translator), '', 'translator', 'translator')}
                 ${this.createFormRow(this.t('label_target_lang', '目标语言'), this.createSelect('translator', 'target_lang', opts.target_lang), '', 'translator', 'target_lang')}
+                ${this.createFormRow(this.t('label_keep_lang', '保留源语言'), this.createSelect('translator', 'keep_lang', opts.keep_lang), this.t('desc_translator_keep_lang', '合并文本框后、翻译前只保留指定源语言的区域。设为不过滤则禁用。'), 'translator', 'keep_lang')}
                 ${this.createFormRow(this.t('label_high_quality_prompt_path', '自定义提示词'), this.createSelect('translator', 'high_quality_prompt_path', opts.high_quality_prompt_path), '', 'translator', 'high_quality_prompt_path')}
                 ${this.createFormRow(this.t('label_extract_glossary', '自动提取新术语'), this.createCheckbox('translator', 'extract_glossary'), '自动从翻译中提取新术语并保存到提示词文件', 'translator', 'extract_glossary')}
                 ${this.createFormRow(this.t('label_enable_streaming', '启用流式传输'), this.createCheckbox('translator', 'enable_streaming'), this.t('desc_translator_enable_streaming', '启用后优先使用流式传输；关闭后始终使用普通非流式请求。'), 'translator', 'enable_streaming')}

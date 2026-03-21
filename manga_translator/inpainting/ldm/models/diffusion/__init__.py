@@ -1,8 +1,7 @@
 """SAMPLING ONLY."""
 import torch
 
-from .dpm_solver import NoiseScheduleVP, model_wrapper, DPM_Solver
-
+from .dpm_solver import DPM_Solver, NoiseScheduleVP, model_wrapper
 
 MODEL_TYPES = {
     "eps": "noise",
@@ -14,11 +13,13 @@ class DPMSolverSampler(object):
     def __init__(self, model, **kwargs):
         super().__init__()
         self.model = model
-        to_torch = lambda x: x.clone().detach().to(torch.float32).to(model.device)
+        def to_torch(value):
+            return value.clone().detach().to(torch.float32).to(model.device)
+
         self.register_buffer('alphas_cumprod', to_torch(model.alphas_cumprod))
 
     def register_buffer(self, name, attr):
-        if type(attr) == torch.Tensor:
+        if isinstance(attr, torch.Tensor):
             if attr.device != torch.device("cuda"):
                 attr = attr.to(torch.device("cuda"))
         setattr(self, name, attr)

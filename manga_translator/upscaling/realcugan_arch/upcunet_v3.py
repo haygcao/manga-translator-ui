@@ -4,11 +4,14 @@ cache_mode:
 1:使用cache缓存必要参数，对cache进行8bit量化节省显存，带来小许延时增长
 2:不使用cache，耗时约为mode0的2倍，但是显存不受输入图像分辨率限制，tile_mode填得够大，1.5G显存可超任意比例
 '''
-import torch,pdb
+import os
+import sys
+
+import numpy as np
+import torch
 from torch import nn as nn
 from torch.nn import functional as F
-import os,sys
-import numpy as np
+
 # 使用模块所在目录的绝对路径，避免依赖当前工作目录
 root_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if root_path not in sys.path:
@@ -23,10 +26,10 @@ def q(inp,cache_mode):
         return ((inp-minn)/delta*255).round().byte(),delta,minn,inp.device#不用CPU转移
 def dq(inp,if_half,cache_mode,delta,minn,device):
     if(cache_mode==2):
-        if(if_half==True):return inp.to(device).half()/255*delta+minn
+        if(if_half is True):return inp.to(device).half()/255*delta+minn
         else:return inp.to(device).float()/255*delta+minn
     elif(cache_mode==1):
-        if(if_half==True):return inp.half()/255*delta+minn#不用CPU转移
+        if(if_half is True):return inp.half()/255*delta+minn#不用CPU转移
         else:return inp.float()/255*delta+minn
 class SEBlock(nn.Module):
     def __init__(self, in_channels, reduction=8, bias=False):
@@ -1265,7 +1268,7 @@ class RealWaifuUpScaler(object):
         self.pro="pro"in weight
         if(self.pro):del weight["pro"]
         self.model=eval("UpCunet%sx"%scale)()
-        if(half==True):self.model=self.model.half().to(device)
+        if(half is True):self.model=self.model.half().to(device)
         else:self.model=self.model.to(device)
         self.model.load_state_dict(weight, strict=True)
         self.model.eval()
@@ -1274,10 +1277,10 @@ class RealWaifuUpScaler(object):
 
     def np2tensor(self,np_frame):
         if(self.pro):
-            if (self.half == False):return torch.from_numpy(np.transpose(np_frame, (2, 0, 1))).unsqueeze(0).to(self.device).float() / (255/0.7)+0.15
+            if (self.half is False):return torch.from_numpy(np.transpose(np_frame, (2, 0, 1))).unsqueeze(0).to(self.device).float() / (255/0.7)+0.15
             else:return torch.from_numpy(np.transpose(np_frame, (2, 0, 1))).unsqueeze(0).to(self.device).half() / (255/0.7)+0.15
         else:
-            if (self.half == False):return torch.from_numpy(np.transpose(np_frame, (2, 0, 1))).unsqueeze(0).to(self.device).float() / 255
+            if (self.half is False):return torch.from_numpy(np.transpose(np_frame, (2, 0, 1))).unsqueeze(0).to(self.device).float() / 255
             else:return torch.from_numpy(np.transpose(np_frame, (2, 0, 1))).unsqueeze(0).to(self.device).half() / 255
 
     def tensor2np(self,tensor):
@@ -1296,8 +1299,11 @@ class RealWaifuUpScaler(object):
 
 if __name__ == "__main__":
     ###########inference_img
-    import time, cv2,sys,pdb
+    import sys
+    import time
     from time import time as ttime
+
+    import cv2
     for weight_path, scale in [("weights_v3/up2x-latest-denoise3x.pth", 2),("weights_v3/up3x-latest-denoise3x.pth", 3),("weights_v3/up4x-latest-denoise3x.pth", 4),("weights_pro/pro-denoise3x-up2x.pth", 2),("weights_pro/pro-denoise3x-up3x.pth", 3),]:
         for tile_mode in [0,5]:
             for cache_mode in [0,1,2,3]:
@@ -1329,7 +1335,7 @@ if __name__ == "__main__":
                         while (1):
                             if (n == 0):suffix = "_%sx_tile%s_cache%s_alpha%s_%s.png" % (scale, tile_mode, cache_mode, alpha,weight_name)
                             else:suffix = "_%sx_tile%s_cache%s_alpha%s_%s_%s.png" % (scale, tile_mode, cache_mode, alpha, weight_name,n)
-                            if (os.path.exists(os.path.join(output_dir, prefix + suffix)) == False):break
+                            if not os.path.exists(os.path.join(output_dir, prefix + suffix)):break
                             else:n += 1
                         final_opt_path=os.path.join(output_dir, prefix + suffix)
                         os.rename(tmp_opt_path,final_opt_path)

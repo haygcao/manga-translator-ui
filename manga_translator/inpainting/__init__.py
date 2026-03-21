@@ -3,12 +3,12 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from ..config import Inpainter, InpainterConfig
 from .common import CommonInpainter, OfflineInpainter
 from .inpainting_aot import AotInpainter
-from .inpainting_lama_mpe import LamaMPEInpainter, LamaLargeInpainter
+from .inpainting_lama_mpe import LamaLargeInpainter, LamaMPEInpainter
 from .none import NoneInpainter
 from .original import OriginalInpainter
-from ..config import Inpainter, InpainterConfig
 
 _SD_IMPORT_ERROR = None
 try:
@@ -20,13 +20,13 @@ except Exception as e:
         async def _load(self, device: str):
             raise RuntimeError(
                 "Stable Diffusion inpainter is unavailable because optional dependencies are missing. "
-                f"Original import error: {e!r}"
+                f"Original import error: {_SD_IMPORT_ERROR!r}"
             )
 
         async def _infer(self, image: np.ndarray, mask: np.ndarray, inpainting_size: int = 1024, verbose: bool = False) -> np.ndarray:
             raise RuntimeError(
                 "Stable Diffusion inpainter is unavailable because optional dependencies are missing. "
-                f"Original import error: {e!r}"
+                f"Original import error: {_SD_IMPORT_ERROR!r}"
             )
 
 INPAINTERS = {
@@ -87,6 +87,33 @@ def _inpaint_handle_alpha_channel(original_alpha: np.ndarray, mask: np.ndarray) 
 
     return result_alpha
 
+
+def _build_inpaint_split_ranges(long_side: int, short_side: int) -> tuple[list[tuple[int, int]], int, int]:
+    """
+    Build overlapped 1D split ranges for extreme-aspect-ratio inpainting.
+    The computed tile size uses ceil division so the last tile always reaches the image edge.
+    """
+    long_side = max(int(long_side), 0)
+    short_side = max(int(short_side), 1)
+    if long_side <= 0:
+        return [], 0, 0
+
+    num_splits = max(int(np.ceil(long_side / (short_side * INPAINT_SPLIT_RATIO))), 1)
+    overlap = max(int(short_side * 0.1), 0)
+    tile_size = max(1, (long_side + overlap * (num_splits - 1) + num_splits - 1) // num_splits)
+
+    ranges = []
+    step = max(tile_size - overlap, 1)
+    for ii in range(num_splits):
+        start = min(ii * step, max(long_side - tile_size, 0))
+        end = min(long_side, start + tile_size)
+        ranges.append((start, end))
+
+    if ranges:
+        ranges[-1] = (max(long_side - tile_size, 0), long_side)
+
+    return ranges, overlap, tile_size
+
 async def dispatch(inpainter_key: Inpainter, image: np.ndarray, mask: np.ndarray, config: Optional[InpainterConfig], inpainting_size: int = 1024, device: str = 'cpu', verbose: bool = False) -> np.ndarray:
     inpainter = get_inpainter(inpainter_key)
     config = config or InpainterConfig()
@@ -143,9 +170,8 @@ async def _dispatch_with_split(
     long_side = h if is_vertical else w
     short_side = w if is_vertical else h
 
-    num_splits = int(np.ceil(long_side / (short_side * INPAINT_SPLIT_RATIO)))
-    overlap = int(short_side * 0.1)
-    tile_size = (long_side + overlap * (num_splits - 1)) // num_splits
+    split_ranges, overlap, tile_size = _build_inpaint_split_ranges(long_side, short_side)
+    num_splits = len(split_ranges)
 
     if verbose:
         print(f"[Inpainting Split] image={w}x{h}, aspect_ratio={max(w / h, h / w):.2f}")
@@ -153,9 +179,7 @@ async def _dispatch_with_split(
         print(f"[Inpainting Split] tile_size={tile_size}, overlap={overlap}")
 
     tiles = []
-    for ii in range(num_splits):
-        start = max(0, ii * tile_size - ii * overlap)
-        end = min(long_side, start + tile_size)
+    for ii, (start, end) in enumerate(split_ranges):
 
         if is_vertical:
             tile_img = image[start:end, :, :].copy()

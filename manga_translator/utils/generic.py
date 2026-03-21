@@ -1,10 +1,11 @@
-import os
-from typing import List, Callable, Tuple, Optional
-import numpy as np
-import cv2
 import functools
-from PIL import Image, ImageOps
+import os
+from typing import Callable, List, Optional, Tuple
+
+import cv2
+import numpy as np
 import tqdm
+from PIL import Image, ImageOps
 
 # 解除 PIL 图片大小限制（防止 DecompressionBombWarning）
 # 可通过环境变量 PIL_MAX_IMAGE_PIXELS 自定义，设为 0 表示无限制
@@ -18,15 +19,16 @@ try:
 except ImportError:
     pass  # pillow-heif 未安装时静默跳过
 
-import requests
-import sys
 import hashlib
-import re
-import einops
-import unicodedata
 import json
+import re
+import sys
+import unicodedata
+
+import einops
+import requests
 from shapely import affinity
-from shapely.geometry import Polygon, MultiPoint
+from shapely.geometry import MultiPoint, Polygon
 
 try:
     functools.cached_property
@@ -200,7 +202,6 @@ def get_digest(file_path: str) -> str:
 def get_image_md5(image) -> str:
     """计算PIL Image对象的MD5哈希值，确保相同图片内容产生相同的哈希值"""
     import io
-    from PIL import Image
 
     try:
         # 将PIL Image转换为字节数据进行MD5计算
@@ -215,7 +216,7 @@ def get_image_md5(image) -> str:
         h = hashlib.md5()
         h.update(img_bytes)
         return h.hexdigest()[:8]  # 只取前8位，避免文件夹名过长
-    except Exception as _e:
+    except Exception:
         # 如果计算失败，返回基于时间戳的fallback值
         import time
         return f"fallback_{int(time.time() * 1000)}"
@@ -375,14 +376,14 @@ def download_url_with_progressbar(url: str, path: str, min_speed_kbps: float = 1
         raise Exception(f'Couldn\'t resolve url: "{url}" (Error: {r.status_code})')
 
 def prompt_yes_no(query: str, default: bool = None) -> bool:
-    s = '%s (%s/%s): ' % (query, 'Y' if default == True else 'y', 'N' if default == False else 'n')
+    s = '%s (%s/%s): ' % (query, 'Y' if default is True else 'y', 'N' if default is False else 'n')
     while True:
         inp = input(s).lower()
         if inp in ('yes', 'y'):
             return True
         elif inp in ('no', 'n'):
             return False
-        elif default != None:
+        elif default is not None:
             return default
         if inp:
             print('Error: Please answer with "y" or "n"')
@@ -455,6 +456,84 @@ def dump_image(img_pil: Image.Image, img: np.ndarray, alpha_ch: Image.Image = No
     result = img_pil.convert('RGBA').resize((img.shape[1], img.shape[0]))
     result.paste(Image.fromarray(img), mask = mask_for_paste)
     return result
+
+
+def _infer_pil_save_format(output_path: str, format: Optional[str] = None) -> str:
+    if format:
+        return format.upper()
+
+    ext = os.path.splitext(output_path)[1].lower()
+    format_map = {
+        '.jpg': 'JPEG',
+        '.jpeg': 'JPEG',
+        '.png': 'PNG',
+        '.webp': 'WEBP',
+        '.bmp': 'BMP',
+        '.tif': 'TIFF',
+        '.tiff': 'TIFF',
+        '.avif': 'AVIF',
+        '.heic': 'HEIF',
+        '.heif': 'HEIF',
+    }
+    return format_map.get(ext, 'PNG')
+
+
+def build_preserved_pil_save_kwargs(source_image: Optional[Image.Image] = None) -> dict:
+    if source_image is None:
+        return {}
+
+    info = getattr(source_image, 'info', None) or {}
+    save_kwargs = {}
+
+    icc_profile = info.get('icc_profile')
+    if icc_profile:
+        save_kwargs['icc_profile'] = icc_profile
+
+    dpi = info.get('dpi')
+    if isinstance(dpi, tuple) and len(dpi) >= 2 and dpi[0] is not None and dpi[1] is not None:
+        save_kwargs['dpi'] = dpi[:2]
+
+    return save_kwargs
+
+
+def save_pil_image(
+    image: Image.Image,
+    output_path: str,
+    source_image: Optional[Image.Image] = None,
+    *,
+    quality: Optional[int] = None,
+    format: Optional[str] = None,
+    **save_kwargs,
+):
+    """
+    Save a PIL image while preserving source color metadata when possible.
+    """
+    target_format = _infer_pil_save_format(output_path, format)
+    image_to_save = image
+    converted_image = None
+
+    try:
+        if target_format in {'JPEG', 'BMP'}:
+            if image_to_save.mode != 'RGB':
+                converted_image = image_to_save.convert('RGB')
+                image_to_save = converted_image
+        elif image_to_save.mode == 'CMYK':
+            converted_image = image_to_save.convert('RGB')
+            image_to_save = converted_image
+
+        for key, value in build_preserved_pil_save_kwargs(source_image).items():
+            save_kwargs.setdefault(key, value)
+
+        if quality is not None and target_format in {'JPEG', 'WEBP', 'AVIF', 'HEIF'}:
+            save_kwargs.setdefault('quality', quality)
+
+        if format is not None:
+            image_to_save.save(output_path, format=target_format, **save_kwargs)
+        else:
+            image_to_save.save(output_path, **save_kwargs)
+    finally:
+        if converted_image is not None:
+            converted_image.close()
 
 def resize_keep_aspect(img, size):
     ratio = (float(size)/max(img.shape[0], img.shape[1]))
@@ -706,11 +785,9 @@ class Quadrilateral(object):
     def is_axis_aligned(self) -> bool:
         [l1a, l1b, l2a, l2b] = [a.astype(np.float32) for a in self.structure]
         v1 = l1b - l1a
-        v2 = l2b - l2a
         e1 = np.array([0, 1])
         e2 = np.array([1, 0])
         unit_vector_1 = v1 / np.linalg.norm(v1)
-        _unit_vector_2 = v2 / np.linalg.norm(v2)
         if abs(np.dot(unit_vector_1, e1)) < 1e-2 or abs(np.dot(unit_vector_1, e2)) < 1e-2:
             return True
         return False
@@ -961,10 +1038,6 @@ def quadrilateral_can_merge_region(a: Quadrilateral, b: Quadrilateral, ratio = 1
     # 解决如 "抱..." 和 "抱歉" 竖排并列未能合并的问题
     if a.assigned_direction == b.assigned_direction:
         direction = a.assigned_direction or a.direction
-        
-        # 计算中心点距离
-        cx1, _cy1 = x1 + w1/2, y1 + h1/2
-        cx2, _cy2 = x2 + w2/2, y2 + h2/2
         
         if direction == 'v': # 竖排文本，检查垂直重叠（Y轴）和水平距离（X轴）
             # 垂直投影重叠率
@@ -1470,7 +1543,6 @@ def det_rearrange_forward(
     if plan is None:
         return None, None
 
-    transpose = plan['transpose']
     patch_arr = det_rearrange_patch_array(plan)
 
     if verbose:

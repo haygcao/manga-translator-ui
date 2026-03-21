@@ -1,14 +1,14 @@
 # import math
-import re
-from typing import List
 import os
+import re
 import shutil
-import cv2
-from PIL import Image
-import numpy as np
-import einops
+from typing import List
 
+import cv2
+import einops
+import numpy as np
 import torch
+from PIL import Image
 
 # 在导入 transformers 之前配置 HuggingFace 镜像
 os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
@@ -16,6 +16,7 @@ os.environ.setdefault('HF_HUB_ENDPOINT', 'https://hf-mirror.com')
 
 # 禁用 SSL 验证（解决 hf-mirror.com 证书问题）
 import ssl
+
 # import urllib.request
 ssl._create_default_https_context = ssl._create_unverified_context
 os.environ['CURL_CA_BUNDLE'] = ''
@@ -23,15 +24,13 @@ os.environ['REQUESTS_CA_BUNDLE'] = ''
 os.environ['HF_HUB_DISABLE_SSL_VERIFY'] = '1'
 
 # 直接导入 transformers 组件，不依赖 manga_ocr 库
-from transformers import ViTImageProcessor, AutoTokenizer, VisionEncoderDecoderModel
+from transformers import AutoTokenizer, VisionEncoderDecoderModel, ViTImageProcessor
 
+from ..config import OcrConfig
+from ..utils import Quadrilateral, TextBlock, chunks, imwrite_unicode, open_pil_image
+from ..utils.generic import AvgMeter
 from .common import OfflineOCR
 from .model_48px import OCR
-from ..config import OcrConfig
-from ..utils import TextBlock, Quadrilateral, chunks, imwrite_unicode, open_pil_image
-from ..utils.generic import AvgMeter
-from ..utils.bubble import is_ignore
-
 
 # ============ 内置 MangaOCR 功能（不依赖 manga_ocr 库）============
 

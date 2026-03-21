@@ -5,10 +5,13 @@
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from manga_translator.server.core.account_service import AccountService
-from manga_translator.server.core.permission_service_v2 import EnhancedPermissionService, get_enhanced_permission_service
+from manga_translator.server.core.permission_service_v2 import (
+    EnhancedPermissionService,
+    get_enhanced_permission_service,
+)
 
 logger = logging.getLogger(__name__)
 

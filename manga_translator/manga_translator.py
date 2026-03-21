@@ -1,70 +1,112 @@
 
 import asyncio
-import torch
-import cv2
 import json
-import langcodes
+import logging
 import os
-import regex as re
 import sys
 import time
-import logging
 import traceback
-import numpy as np
-from PIL import Image
-from typing import Optional, Any, List
-import py3langid as langid
+import unicodedata
+from typing import Any, List, Optional
 
-from .config import Config, Colorizer, Translator, Renderer, Inpainter
+import cv2
+import langcodes
+import matplotlib
+import numpy as np
+import py3langid as langid
+import regex as re
+import torch
+from PIL import Image
+
+from .config import Colorizer, Config, Inpainter, Renderer, Translator
 from .utils import (
     BASE_PATH,
     LANGUAGE_ORIENTATION_PRESETS,
-    ModelWrapper,
     Context,
-    detect_bubbles_with_mangalens,
-    open_pil_image,
-    load_image,
-    dump_image,
-    visualize_textblocks,
-    is_valuable_text,
-    sort_regions,
+    ModelWrapper,
     TextBlock,
-    imwrite_unicode
+    detect_bubbles_with_mangalens,
+    dump_image,
+    imwrite_unicode,
+    is_valuable_text,
+    load_image,
+    open_pil_image,
+    save_pil_image,
+    sort_regions,
+    visualize_textblocks,
 )
-from .utils.text_filter import match_filter, ensure_filter_list_exists
 from .utils.onnx_runtime import set_onnx_gpu_disabled
-import matplotlib
+from .utils.text_filter import ensure_filter_list_exists, match_filter
+
 matplotlib.use('Agg')  # 使用非GUI后端
 from matplotlib import cm
+
+from .colorization import dispatch as dispatch_colorization
+from .colorization import prepare as prepare_colorization
+from .colorization import unload as unload_colorization
+from .detection import dispatch as dispatch_detection
+from .detection.imported_yolo import (
+    build_mask_from_textlines,
+    load_imported_yolo_textlines,
+)
+from .detection import prepare as prepare_detection
+from .detection import unload as unload_detection
+from .inpainting import dispatch as dispatch_inpainting
+from .inpainting import prepare as prepare_inpainting
+from .inpainting import unload as unload_inpainting
+from .mask_refinement import dispatch as dispatch_mask_refinement
+from .ocr import dispatch as dispatch_ocr
+from .ocr import prepare as prepare_ocr
+from .ocr import unload as unload_ocr
+from .rendering import dispatch as dispatch_rendering
+from .rendering import dispatch_eng_render, dispatch_eng_render_pillow
+from .textline_merge import dispatch as dispatch_textline_merge
+from .translators import (
+    dispatch as dispatch_translation,
+)
+from .translators import (
+    prepare as prepare_translation,
+)
+from .translators import (
+    unload as unload_translation,
+)
+from .translators.common import ISO_639_1_TO_KEEP_LANGUAGES, ISO_639_1_TO_VALID_LANGUAGES, KEEP_LANGUAGES
+from .upscaling import dispatch as dispatch_upscaling
+from .upscaling import prepare as prepare_upscaling
+from .upscaling import unload as unload_upscaling
 from .utils.path_manager import (
-    get_json_path,
-    get_inpainted_path,
     find_inpainted_path,
     find_json_path,
+    get_inpainted_path,
+    get_json_path,
+    get_original_txt_path,
     get_work_image_path,
 )
 from .utils.translation_text import remove_trailing_period_if_needed
-
-from .detection import dispatch as dispatch_detection, prepare as prepare_detection, unload as unload_detection
-from .upscaling import dispatch as dispatch_upscaling, prepare as prepare_upscaling, unload as unload_upscaling
-from .ocr import dispatch as dispatch_ocr, prepare as prepare_ocr, unload as unload_ocr
-from .textline_merge import dispatch as dispatch_textline_merge
-from .mask_refinement import dispatch as dispatch_mask_refinement
-from .inpainting import dispatch as dispatch_inpainting, prepare as prepare_inpainting, unload as unload_inpainting
-from .translators import (
-    dispatch as dispatch_translation,
-    prepare as prepare_translation,
-    unload as unload_translation,
-)
-from .translators.common import ISO_639_1_TO_VALID_LANGUAGES
-from .colorization import dispatch as dispatch_colorization, prepare as prepare_colorization, unload as unload_colorization
-from .rendering import dispatch as dispatch_rendering, dispatch_eng_render, dispatch_eng_render_pillow
 
 # Will be overwritten by __main__.py if module is being run directly (with python -m)
 logger = logging.getLogger('manga_translator')
 
 ARCHIVE_EXTRACT_IMAGE_DIRNAME = 'original_images'
 ARCHIVE_EXTRACT_META_FILENAME = '.extract_meta.json'
+_KEEP_LANG_NONE_VALUES = {'', 'NONE', 'OFF', 'DISABLED'}
+_DETECTED_KEEP_LANG_CODES = set(KEEP_LANGUAGES.keys())
+_KEEP_LANG_CJK_SHARED = 'CJK_SHARED'
+_KEEP_LANG_SHARED_CJK_TARGETS = frozenset({'CHS', 'CHT', 'JPN'})
+_ENGLISH_KEEP_FILTER_PUNCTUATION = frozenset(
+    ".,!?;:'\"-()[]{}<>/&@#%+*=~_|`$^\\"
+    "…“”‘’–—"
+)
+
+
+class FileTranslationFailure(Exception):
+    """Abort the current file while allowing the overall batch to continue."""
+
+    def __init__(self, stage: str, error: Exception):
+        self.stage = stage
+        self.original_error = error
+        message = str(error).strip() or repr(error)
+        super().__init__(message)
 
 
 def _resolve_archive_output_dir_from_extracted_image(image_path: str, output_folder: str) -> Optional[str]:
@@ -96,6 +138,109 @@ def _resolve_archive_output_dir_from_extracted_image(image_path: str, output_fol
         return None
 
     return archive_output_dir
+
+
+def _is_likely_english_text_for_keep_filter(text: str) -> bool:
+    normalized = unicodedata.normalize('NFKC', str(text or '').strip())
+    if not normalized:
+        return False
+
+    has_latin_letter = False
+    for char in normalized:
+        if char.isspace() or char.isdigit():
+            continue
+        if char in _ENGLISH_KEEP_FILTER_PUNCTUATION:
+            continue
+
+        category = unicodedata.category(char)
+        if category.startswith('L') and 'LATIN' in unicodedata.name(char, ''):
+            has_latin_letter = True
+            continue
+
+        return False
+
+    return has_latin_letter
+
+
+def _normalize_detected_keep_language(lang_code: Optional[str]) -> str:
+    value = str(lang_code or '').strip()
+    if not value:
+        return 'UNKNOWN'
+
+    upper_value = value.upper()
+    if upper_value in _DETECTED_KEEP_LANG_CODES:
+        return upper_value
+
+    mapped = ISO_639_1_TO_KEEP_LANGUAGES.get(value.lower())
+    if mapped:
+        return mapped.upper()
+
+    return 'UNKNOWN'
+
+
+def _normalize_keep_filter_script_candidate(text: str) -> str:
+    normalized = unicodedata.normalize('NFKC', str(text or '').strip())
+    if not normalized:
+        return ''
+
+    normalized = re.sub(r'^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$', '', normalized)
+    return normalized
+
+
+def _detect_script_based_keep_language(text: str) -> Optional[str]:
+    candidate = _normalize_keep_filter_script_candidate(text)
+    if not candidate:
+        return None
+
+    meaningful_chars = []
+    for char in candidate:
+        category = unicodedata.category(char)
+        if char.isspace() or char.isdigit() or category.startswith(('P', 'S')):
+            continue
+        meaningful_chars.append(char)
+
+    if not meaningful_chars:
+        return None
+
+    meaningful_text = ''.join(meaningful_chars)
+    if re.search(r'[\p{Hiragana}\p{Katakana}]', meaningful_text):
+        return 'JPN'
+    if re.search(r'\p{Hangul}', meaningful_text):
+        return 'KOR'
+    if re.fullmatch(r'\p{Han}+', meaningful_text):
+        return _KEEP_LANG_CJK_SHARED
+
+    return None
+
+
+def _detect_region_keep_language(text: str) -> str:
+    text = str(text or '').strip()
+    if not text:
+        return 'UNKNOWN'
+
+    if _is_likely_english_text_for_keep_filter(text):
+        return 'ENG'
+
+    detected_by_script = _detect_script_based_keep_language(text)
+    if detected_by_script:
+        return detected_by_script
+
+    try:
+        detected_lang, _ = langid.classify(text)
+    except Exception:
+        return 'UNKNOWN'
+
+    return _normalize_detected_keep_language(detected_lang)
+
+
+def _keep_language_matches(detected_lang: str, keep_lang: str) -> bool:
+    if detected_lang == keep_lang:
+        return True
+    if keep_lang in {'CHS', 'CHT'} and detected_lang in {'CHS', 'CHT'}:
+        return True
+    if detected_lang == _KEEP_LANG_CJK_SHARED and keep_lang in _KEEP_LANG_SHARED_CJK_TARGETS:
+        return True
+    return False
 
 
 def set_main_logger(l):
@@ -137,7 +282,6 @@ def load_dictionary(file_path):
 
 def apply_dictionary(text, dictionary):
     for pattern, value, line_number in dictionary:
-        _original_text = text  
         text = pattern.sub(value, text)
     return text
 
@@ -174,6 +318,17 @@ def parse_upscale_ratio(upscale_ratio) -> float:
     except (ValueError, TypeError):
         logger.warning(f"无法解析超分倍率: {upscale_ratio}, 将忽略")
         return 0
+
+
+def _parse_skip_font_scaling_flag(value, default: bool = True) -> bool:
+    """Normalize skip_font_scaling values loaded from JSON."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    if value is None:
+        return default
+    return bool(value)
 
 class MangaTranslator:
     verbose: bool
@@ -287,6 +442,7 @@ class MangaTranslator:
         self.save_text = params.get('save_text', False)
         # Set load_text
         self.load_text = params.get('load_text', False)
+        self.translate_json_only = params.get('translate_json_only', False)
         self.save_mask = not params.get('no_save_mask', False)
         self.template = params.get('template', False)
         self.attempts = params.get('attempts', -1)
@@ -450,7 +606,15 @@ class MangaTranslator:
         final_output_path = os.path.join(final_output_dir, output_filename)
         return final_output_path
 
-    def _save_translated_image(self, image: Image.Image, output_path: str, image_path: str, overwrite: bool = True, mode_label: str = "BATCH") -> bool:
+    def _save_translated_image(
+        self,
+        image: Image.Image,
+        output_path: str,
+        image_path: str,
+        overwrite: bool = True,
+        mode_label: str = "BATCH",
+        source_image: Optional[Image.Image] = None,
+    ) -> bool:
         """
         保存翻译后的图片到指定路径
         
@@ -469,13 +633,12 @@ class MangaTranslator:
             return False
         
         try:
-            image_to_save = image
-            # 处理RGBA到RGB转换（JPEG格式）
-            if output_path.lower().endswith(('.jpg', '.jpeg')) and image_to_save.mode in ('RGBA', 'LA'):
-                image_to_save = image_to_save.convert('RGB')
-            
-            # 保存图片并应用save_quality设置
-            image_to_save.save(output_path, quality=self.save_quality)
+            save_pil_image(
+                image,
+                output_path,
+                source_image=source_image,
+                quality=self.save_quality,
+            )
             logger.info(f"  -> ✅ [{mode_label}] Saved successfully: {os.path.basename(output_path)}")
             
             # 更新翻译映射表
@@ -504,16 +667,32 @@ class MangaTranslator:
         try:
             overwrite = save_info.get('overwrite', True)
             final_output_path = self._calculate_output_path(ctx.image_name, save_info)
-            success = self._save_translated_image(ctx.result, final_output_path, ctx.image_name, overwrite, mode_label)
+            success = self._save_translated_image(
+                ctx.result,
+                final_output_path,
+                ctx.image_name,
+                overwrite,
+                mode_label,
+                source_image=ctx.input,
+            )
             
             # 标记成功
             if success or not overwrite:  # 跳过已存在的文件也算成功
                 ctx.success = True
+            elif overwrite:
+                self._mark_context_failure(
+                    ctx,
+                    RuntimeError(f"保存输出文件失败: {os.path.basename(final_output_path)}"),
+                    stage='saving',
+                )
             
             # 导出可编辑PSD（如果启用）
             if config and hasattr(config, 'cli') and hasattr(config.cli, 'export_editable_psd') and config.cli.export_editable_psd:
                 try:
-                    from .utils.photoshop_export import photoshop_export, get_psd_output_path
+                    from .utils.photoshop_export import (
+                        get_psd_output_path,
+                        photoshop_export,
+                    )
                     psd_path = get_psd_output_path(ctx.image_name)
                     cli_cfg = getattr(config, 'cli', None)
                     default_font = getattr(cli_cfg, 'psd_font', None)
@@ -530,9 +709,10 @@ class MangaTranslator:
             return success
         except Exception as e:
             logger.error(f"Error in _save_and_cleanup_context: {e}")
+            self._mark_context_failure(ctx, e, stage='saving')
             return False
 
-    def _save_text_to_file(self, image_path: str, ctx: Context, config: Config = None):
+    def _save_text_to_file(self, image_path: str, ctx: Context, config: Config = None) -> bool:
         """保存/回写文本区域到JSON（含translation、font_size等渲染后字段），使用新的目录结构"""
         text_output_file = self.text_output_file
         if not text_output_file:
@@ -649,9 +829,26 @@ class MangaTranslator:
             'original_height': original_height
         }
 
+        preserved_skip_font_scaling = getattr(ctx, 'skip_font_scaling', None)
+        if preserved_skip_font_scaling is None and os.path.exists(text_output_file):
+            try:
+                with open(text_output_file, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                if existing_data and len(existing_data.values()) > 0:
+                    existing_image_data = next(iter(existing_data.values()))
+                    if isinstance(existing_image_data, dict) and 'skip_font_scaling' in existing_image_data:
+                        preserved_skip_font_scaling = _parse_skip_font_scaling_flag(
+                            existing_image_data.get('skip_font_scaling'),
+                            default=True,
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to preserve skip_font_scaling from existing JSON {text_output_file}: {e}")
+
         # 导出原文/导出翻译模式：显式要求导入渲染时不要跳过字体缩放算法
         if (self.template and self.save_text) or self.generate_and_export:
             data_to_save['skip_font_scaling'] = False
+        elif preserved_skip_font_scaling is not None:
+            data_to_save['skip_font_scaling'] = bool(preserved_skip_font_scaling)
         
         # 添加超分和上色配置信息
         if config:
@@ -665,17 +862,33 @@ class MangaTranslator:
                 data_to_save['colorizer'] = config.colorizer.colorizer
                 logger.info(f"在JSON中记录上色信息: colorizer={config.colorizer.colorizer}")
 
+        # 导入 YOLO 框的导出类模式不保存蒙版，后续由 load_text 缺失 mask 时再补生成
+        skip_mask_export = (
+            getattr(ctx, 'used_imported_yolo_labels', False) and
+            ((self.template and self.save_text) or self.generate_and_export)
+        )
+
         # 保存优化后的蒙版（ctx.mask），而不是原始蒙版（ctx.mask_raw）
         # 这样加载后可以直接使用，无需再次进行蒙版优化
-        if self.save_mask and ctx.mask is not None:
+        mask_to_save = None
+        mask_is_refined = False
+        if ctx.mask is not None:
+            mask_to_save = ctx.mask
+            mask_is_refined = True
+        elif ctx.mask_raw is not None:
+            mask_to_save = ctx.mask_raw
+
+        if skip_mask_export:
+            logger.info("Import YOLO labels enabled in export mode: skipping mask save in JSON")
+        elif self.save_mask and mask_to_save is not None:
             try:
                 import base64
+
                 import cv2
-                _, buffer = cv2.imencode('.png', ctx.mask)
+                _, buffer = cv2.imencode('.png', mask_to_save)
                 mask_base64 = base64.b64encode(buffer).decode('utf-8')
                 data_to_save['mask_raw'] = mask_base64
-                # 保存的是优化后的蒙版，标记为已优化
-                data_to_save['mask_is_refined'] = True
+                data_to_save['mask_is_refined'] = mask_is_refined
             except Exception as e:
                 logger.error(f"Failed to encode mask to base64: {e}")
 
@@ -698,8 +911,57 @@ class MangaTranslator:
             with open(text_output_file, 'wb') as f:
                 f.write(json_string.encode('utf-8'))
             logger.info(f"JSON saved to: {text_output_file}")
+            return True
         except Exception as e:
             logger.error(f"Failed to write translation file to {text_output_file}: {e}")
+            return False
+
+    def _prepare_loaded_regions(self, loaded_regions: List[TextBlock], use_text_as_translation: bool = False) -> None:
+        for region in loaded_regions:
+            if not hasattr(region, 'font_size') or not region.font_size:
+                try:
+                    if region.lines.ndim == 3 and region.lines.shape[1] >= 4 and region.lines.shape[2] >= 2:
+                        box_height = np.max(region.lines[:, :, 1]) - np.min(region.lines[:, :, 1])
+                        region.font_size = min(int(box_height * 0.8), 128)
+                    else:
+                        logger.warning(f"Invalid lines shape {region.lines.shape}, using default font_size=24")
+                        region.font_size = 24
+                except Exception as e:
+                    logger.warning(f"Error calculating font_size from lines: {e}, using default font_size=24")
+                    region.font_size = 24
+
+            if use_text_as_translation and not region.translation:
+                region.translation = region.text
+                logger.debug(f"Region translation is empty, using original text: {region.text[:50]}...")
+
+    def _apply_pre_dictionary_to_regions(self, ctx: Context) -> None:
+        pre_dict = load_dictionary(self.pre_dict)
+        pre_replacements = []
+        for region in ctx.text_regions:
+            if region.text is None:
+                continue
+            original = region.text
+            region.text = apply_dictionary(region.text, pre_dict)
+            if original != region.text:
+                pre_replacements.append(f"{original} => {region.text}")
+
+        if pre_replacements:
+            logger.info("Pre-translation replacements:")
+            for replacement in pre_replacements:
+                logger.info(replacement)
+        else:
+            logger.info("No pre-translation replacements made.")
+
+    def _delete_original_txt_after_json_translation(self, image_path: str) -> None:
+        original_txt_path = get_original_txt_path(image_path, create_dir=False)
+        if not os.path.exists(original_txt_path):
+            return
+
+        try:
+            os.remove(original_txt_path)
+            logger.info(f"Deleted original text file after JSON translation: {original_txt_path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete original text file {original_txt_path}: {e}")
 
     async def _handle_generate_and_export(
         self,
@@ -717,8 +979,13 @@ class MangaTranslator:
         if not image_name:
             return
 
+        # 导入 YOLO 框的导出模式不保存蒙版
+        if getattr(ctx, 'used_imported_yolo_labels', False):
+            logger.info("Import YOLO labels enabled in generate_and_export mode: skipping mask refinement and mask save")
+            ctx.mask = None
+            ctx.mask_raw = None
         # 导出翻译模式：强制执行蒙版优化（跳过修复）
-        if ctx.mask is None and ctx.mask_raw is not None:
+        elif ctx.mask is None and ctx.mask_raw is not None:
             await self._report_progress('mask-generation')
             try:
                 ctx.mask = await self._run_mask_refinement(config, ctx)
@@ -736,7 +1003,10 @@ class MangaTranslator:
         try:
             json_path = find_json_path(image_name)
             if json_path and os.path.exists(json_path):
-                from desktop_qt_ui.services.workflow_service import generate_translated_text, get_template_path_from_config
+                from desktop_qt_ui.services.workflow_service import (
+                    generate_translated_text,
+                    get_template_path_from_config,
+                )
                 template_path = get_template_path_from_config()
                 if template_path and os.path.exists(template_path):
                     translated_result = generate_translated_text(json_path, template_path)
@@ -764,8 +1034,13 @@ class MangaTranslator:
         if not image_name:
             return
 
+        # 导入 YOLO 框的导出模式不保存蒙版
+        if getattr(ctx, 'used_imported_yolo_labels', False):
+            logger.info("Import YOLO labels enabled in template mode: skipping mask refinement and mask save")
+            ctx.mask = None
+            ctx.mask_raw = None
         # 导出原文模式：强制执行蒙版优化（跳过修复）
-        if ctx.mask is None and ctx.mask_raw is not None:
+        elif ctx.mask is None and ctx.mask_raw is not None:
             await self._report_progress('mask-generation')
             try:
                 ctx.mask = await self._run_mask_refinement(config, ctx)
@@ -783,7 +1058,10 @@ class MangaTranslator:
         try:
             json_path = find_json_path(image_name)
             if json_path and os.path.exists(json_path):
-                from desktop_qt_ui.services.workflow_service import generate_original_text, get_template_path_from_config
+                from desktop_qt_ui.services.workflow_service import (
+                    generate_original_text,
+                    get_template_path_from_config,
+                )
                 template_path = get_template_path_from_config()
                 if template_path and os.path.exists(template_path):
                     original_result = generate_original_text(json_path, template_path)
@@ -798,12 +1076,12 @@ class MangaTranslator:
     def _save_inpainted_image(self, image_path: str, inpainted_img: np.ndarray):
         """保存修复后的图片到 inpainted 目录。"""
         inpainted_path = get_inpainted_path(image_path, create_dir=True)
-        self._save_image_to_path(inpainted_path, inpainted_img, "Inpainted image")
+        self._save_image_to_path(inpainted_path, inpainted_img, "Inpainted image", source_image_path=image_path)
 
     def _save_work_image(self, image_path: str, image_data, label: str = "Work image") -> Optional[str]:
         """保存编辑器专用的上色/超分底图到 editor_base 目录。"""
         work_image_path = get_work_image_path(image_path, create_dir=True)
-        return self._save_image_to_path(work_image_path, image_data, label)
+        return self._save_image_to_path(work_image_path, image_data, label, source_image_path=image_path)
 
     def _save_editor_base_if_needed(self, ctx, config, image_data=None) -> Optional[str]:
         """在执行了上色或超分时，保存编辑器使用的底图。"""
@@ -824,12 +1102,19 @@ class MangaTranslator:
 
         return self._save_work_image(image_path, image_data, "Processed base image")
 
-    def _save_image_to_path(self, target_path: str, image_data, label: str) -> Optional[str]:
+    def _save_image_to_path(
+        self,
+        target_path: str,
+        image_data,
+        label: str,
+        source_image_path: Optional[str] = None,
+    ) -> Optional[str]:
         """将图像保存到指定路径。"""
         try:
             if image_data is None:
                 return None
 
+            source_image = None
             if isinstance(image_data, Image.Image):
                 image_to_save = image_data.copy()
             elif isinstance(image_data, np.ndarray):
@@ -837,18 +1122,29 @@ class MangaTranslator:
             else:
                 raise TypeError(f"Unsupported work image type: {type(image_data)}")
 
-            save_kwargs = {}
-            if target_path.lower().endswith(('.jpg', '.jpeg')):
-                if image_to_save.mode in ('RGBA', 'LA'):
-                    image_to_save = image_to_save.convert('RGB')
-                save_kwargs['quality'] = self.save_quality
-            elif target_path.lower().endswith('.webp'):
-                save_kwargs['quality'] = self.save_quality
+            try:
+                if source_image_path and os.path.exists(source_image_path):
+                    try:
+                        source_image = open_pil_image(source_image_path, eager=True)
+                    except Exception as exc:
+                        logger.warning(
+                            f"Failed to read source image metadata for {label.lower()}, saving without ICC: "
+                            f"{source_image_path}, error={exc}"
+                        )
 
-            image_to_save.save(target_path, **save_kwargs)
-            if self.verbose:
-                logger.debug(f"{label} saved to: {target_path}")
-            return target_path
+                save_pil_image(
+                    image_to_save,
+                    target_path,
+                    source_image=source_image,
+                    quality=self.save_quality,
+                )
+                if self.verbose:
+                    logger.debug(f"{label} saved to: {target_path}")
+                return target_path
+            finally:
+                if source_image is not None:
+                    source_image.close()
+                image_to_save.close()
         except Exception as e:
             logger.error(f"Failed to save {label.lower()}: {e}")
             return None
@@ -859,7 +1155,10 @@ class MangaTranslator:
         这个方法在翻译开始前统一执行，确保CLI和UI都能使用
         """
         try:
-            from manga_translator.utils.path_manager import find_json_path, find_txt_files, get_json_path
+            from manga_translator.utils.path_manager import (
+                find_json_path,
+                find_txt_files,
+            )
             
             # 获取默认模板路径
             template_path = self._get_default_template_path()
@@ -870,8 +1169,16 @@ class MangaTranslator:
             # 收集需要处理的图片路径
             image_paths = []
             for image, config in images_with_configs:
+                image_path = None
                 if hasattr(image, 'name') and image.name:
-                    image_paths.append(image.name)
+                    image_path = image.name
+                elif isinstance(image, (str, os.PathLike)):
+                    image_path = os.fspath(image)
+
+                if image_path:
+                    image_paths.append(image_path)
+                else:
+                    continue
             
             if not image_paths:
                 return
@@ -899,7 +1206,9 @@ class MangaTranslator:
                         continue
                     
                     # 执行TXT到JSON的导入
-                    from desktop_qt_ui.services.workflow_service import safe_update_large_json_from_text
+                    from desktop_qt_ui.services.workflow_service import (
+                        safe_update_large_json_from_text,
+                    )
                     result = safe_update_large_json_from_text(txt_path, json_path, template_path)
                     
                     if not result.startswith("错误"):
@@ -1012,15 +1321,10 @@ class MangaTranslator:
             regions_data = image_data.get('regions', [])
             mask_raw_data = image_data.get('mask_raw', None)
             mask_is_refined = image_data.get('mask_is_refined', False)
-            skip_font_scaling_raw = image_data.get('skip_font_scaling', True)
-            if isinstance(skip_font_scaling_raw, bool):
-                skip_font_scaling = skip_font_scaling_raw
-            elif isinstance(skip_font_scaling_raw, str):
-                skip_font_scaling = skip_font_scaling_raw.strip().lower() in ('1', 'true', 'yes', 'on')
-            elif skip_font_scaling_raw is None:
-                skip_font_scaling = True
-            else:
-                skip_font_scaling = bool(skip_font_scaling_raw)
+            skip_font_scaling = _parse_skip_font_scaling_flag(
+                image_data.get('skip_font_scaling', True),
+                default=True,
+            )
         else:
             logger.warning(f"Invalid data format in JSON file {text_file_path}.")
             return None, None, False, True
@@ -1110,6 +1414,7 @@ class MangaTranslator:
         if isinstance(mask_raw_data, str):
             try:
                 import base64
+
                 import cv2
                 img_bytes = base64.b64decode(mask_raw_data)
                 img_array = np.frombuffer(img_bytes, dtype=np.uint8)
@@ -1295,74 +1600,124 @@ class MangaTranslator:
         
         current_time = time.time()
         self._model_usage_timestamps[("detection", config.detector.detector)] = current_time
-        result = await dispatch_detection(
-            config.detector.detector,
-            ctx.img_rgb,
-            config.detector.detection_size,
-            config.detector.text_threshold,
-            config.detector.box_threshold,
-            config.detector.unclip_ratio,
-            self.device,
-            self.verbose,
-            config.detector.use_yolo_obb,
-            config.detector.yolo_obb_conf,
-            config.detector.yolo_obb_overlap_threshold,
-            config.detector.min_box_area_ratio,
-            self._result_path,
+        import_yolo_labels = bool(getattr(config.detector, 'import_yolo_labels', False))
+        ctx.used_imported_yolo_labels = False
+        imported_textlines = []
+        imported_mask_raw = None
+        if import_yolo_labels:
+            image_name = getattr(ctx, 'image_name', None)
+            input_name = getattr(getattr(ctx, 'input', None), 'name', None)
+            image_name_has_dir = bool(image_name and (os.path.isabs(image_name) or os.path.dirname(image_name)))
+            input_name_has_dir = bool(input_name and (os.path.isabs(input_name) or os.path.dirname(input_name)))
+            if input_name_has_dir and not image_name_has_dir:
+                label_lookup_path = input_name
+            else:
+                label_lookup_path = image_name or input_name
+            imported_textlines = load_imported_yolo_textlines(
+                getattr(ctx, 'img_rgb', None),
+                label_lookup_path,
+                logger=logger,
+            )
+            if imported_textlines:
+                imported_mask_raw = build_mask_from_textlines(ctx.img_rgb.shape, imported_textlines)
+
+        should_use_imported_labels_only = (
+            import_yolo_labels and
+            bool(imported_textlines) and
+            self.template and
+            self.save_text
         )
+
+        if should_use_imported_labels_only:
+            logger.info(
+                "Import YOLO labels enabled in template mode: skip detector boxes and use imported labels directly"
+            )
+            ctx.used_imported_yolo_labels = True
+            result = (imported_textlines, imported_mask_raw, None)
+        else:
+            use_yolo_obb = config.detector.use_yolo_obb
+            if self.load_text:
+                use_yolo_obb = False
+            result = await dispatch_detection(
+                config.detector.detector,
+                ctx.img_rgb,
+                config.detector.detection_size,
+                config.detector.text_threshold,
+                config.detector.box_threshold,
+                config.detector.unclip_ratio,
+                self.device,
+                self.verbose,
+                use_yolo_obb,
+                config.detector.yolo_obb_conf,
+                config.detector.yolo_obb_overlap_threshold,
+                config.detector.min_box_area_ratio,
+                self._result_path,
+            )
         
-        # 处理bbox调试图（如果检测器返回了）
-        if self.verbose and result and len(result) == 3 and result[2] is not None:
-            third_elem = result[2]
-            # 检查是否是tuple（包含三张图）
-            if isinstance(third_elem, tuple) and len(third_elem) == 3:
-                try:
-                    logger.info(f'[DEBUG] Processing 3-element tuple: {[type(x) for x in third_elem]}')
-                    bbox_img, binary_mask_img, raw_mask_mask = third_elem
-                    # 保存边框调试图
-                    bbox_debug_path = self._result_path('bboxes_with_scores.png')
-                    imwrite_unicode(bbox_debug_path, bbox_img, logger)
-                    logger.info(f'Saved bbox debug image to {bbox_debug_path}')
-                    # 保存二值化mask
-                    binary_mask_path = self._result_path('mask_binary.png')
-                    imwrite_unicode(binary_mask_path, binary_mask_img, logger)
-                    logger.info(f'Saved binary mask to {binary_mask_path}')
-                    # 暂存raw_mask_mask到ctx以便后续生成对比图
-                    ctx.raw_mask_mask = raw_mask_mask
-                    logger.info(f'[DEBUG] Stored raw_mask_mask for later comparison (shape: {raw_mask_mask.shape})')
-                    result = (result[0], result[1], None)
-                except Exception as e:
-                    logger.error(f'Failed to save bbox debug images: {e}')
-            # 兼容2张图的情况
-            elif isinstance(third_elem, tuple) and len(third_elem) == 2:
-                try:
-                    bbox_img, binary_mask_img = third_elem
-                    bbox_debug_path = self._result_path('bboxes_with_scores.png')
-                    imwrite_unicode(bbox_debug_path, bbox_img, logger)
-                    logger.info(f'Saved bbox debug image to {bbox_debug_path}')
-                    binary_mask_path = self._result_path('mask_binary.png')
-                    imwrite_unicode(binary_mask_path, binary_mask_img, logger)
-                    logger.info(f'Saved binary mask to {binary_mask_path}')
-                    result = (result[0], result[1], None)
-                except Exception as e:
-                    logger.error(f'Failed to save bbox debug images: {e}')
-            # 兼容单张图的情况（包括混合检测调试图）
-            elif isinstance(third_elem, np.ndarray) and len(third_elem.shape) == 3:
-                try:
-                    # 如果启用了YOLO辅助检测，优先保存为混合检测调试图
-                    if config.detector.use_yolo_obb:
-                        # 保存混合检测调试图
-                        hybrid_debug_path = self._result_path('hybrid_detection_boxes.png')
-                        imwrite_unicode(hybrid_debug_path, cv2.cvtColor(third_elem, cv2.COLOR_RGB2BGR), logger)
-                        logger.info(f'✅ 已保存混合检测调试图: {hybrid_debug_path}')
-                    else:
-                        # 保存普通bbox调试图
+            # 处理bbox调试图（如果检测器返回了）
+            if self.verbose and result and len(result) == 3 and result[2] is not None:
+                third_elem = result[2]
+                # 检查是否是tuple（包含三张图）
+                if isinstance(third_elem, tuple) and len(third_elem) == 3:
+                    try:
+                        logger.info(f'[DEBUG] Processing 3-element tuple: {[type(x) for x in third_elem]}')
+                        bbox_img, binary_mask_img, raw_mask_mask = third_elem
+                        # 保存边框调试图
                         bbox_debug_path = self._result_path('bboxes_with_scores.png')
-                        imwrite_unicode(bbox_debug_path, third_elem, logger)
+                        imwrite_unicode(bbox_debug_path, bbox_img, logger)
                         logger.info(f'Saved bbox debug image to {bbox_debug_path}')
-                    result = (result[0], result[1], None)
-                except Exception as e:
-                    logger.error(f'Failed to save bbox debug image: {e}')
+                        # 保存二值化mask
+                        binary_mask_path = self._result_path('mask_binary.png')
+                        imwrite_unicode(binary_mask_path, binary_mask_img, logger)
+                        logger.info(f'Saved binary mask to {binary_mask_path}')
+                        # 暂存raw_mask_mask到ctx以便后续生成对比图
+                        ctx.raw_mask_mask = raw_mask_mask
+                        logger.info(f'[DEBUG] Stored raw_mask_mask for later comparison (shape: {raw_mask_mask.shape})')
+                        result = (result[0], result[1], None)
+                    except Exception as e:
+                        logger.error(f'Failed to save bbox debug images: {e}')
+                # 兼容2张图的情况
+                elif isinstance(third_elem, tuple) and len(third_elem) == 2:
+                    try:
+                        bbox_img, binary_mask_img = third_elem
+                        bbox_debug_path = self._result_path('bboxes_with_scores.png')
+                        imwrite_unicode(bbox_debug_path, bbox_img, logger)
+                        logger.info(f'Saved bbox debug image to {bbox_debug_path}')
+                        binary_mask_path = self._result_path('mask_binary.png')
+                        imwrite_unicode(binary_mask_path, binary_mask_img, logger)
+                        logger.info(f'Saved binary mask to {binary_mask_path}')
+                        result = (result[0], result[1], None)
+                    except Exception as e:
+                        logger.error(f'Failed to save bbox debug images: {e}')
+                # 兼容单张图的情况（包括混合检测调试图）
+                elif isinstance(third_elem, np.ndarray) and len(third_elem.shape) == 3:
+                    try:
+                        # 如果启用了YOLO辅助检测，优先保存为混合检测调试图
+                        if config.detector.use_yolo_obb:
+                            # 保存混合检测调试图
+                            hybrid_debug_path = self._result_path('hybrid_detection_boxes.png')
+                            imwrite_unicode(hybrid_debug_path, cv2.cvtColor(third_elem, cv2.COLOR_RGB2BGR), logger)
+                            logger.info(f'✅ 已保存混合检测调试图: {hybrid_debug_path}')
+                        else:
+                            # 保存普通bbox调试图
+                            bbox_debug_path = self._result_path('bboxes_with_scores.png')
+                            imwrite_unicode(bbox_debug_path, third_elem, logger)
+                            logger.info(f'Saved bbox debug image to {bbox_debug_path}')
+                        result = (result[0], result[1], None)
+                    except Exception as e:
+                        logger.error(f'Failed to save bbox debug image: {e}')
+
+            if import_yolo_labels and imported_textlines and not self.load_text:
+                detector_box_count = len(result[0]) if result and result[0] else 0
+                raw_mask = result[1] if result and len(result) > 1 else None
+                if raw_mask is None:
+                    raw_mask = imported_mask_raw
+                ctx.used_imported_yolo_labels = True
+                result = (imported_textlines, raw_mask, result[2] if result and len(result) > 2 else None)
+                logger.info(
+                    f"Import YOLO labels enabled: replace detector boxes with imported boxes "
+                    f"(detector_boxes={detector_box_count}, imported_boxes={len(imported_textlines)})"
+                )
         
         # --- BEGIN NON-MAXIMUM SUPPRESSION (NMS) FOR DE-DUPLICATION ---
         if result and result[0]:
@@ -1627,7 +1982,7 @@ class MangaTranslator:
             if hasattr(ctx.input, 'close'):
                 try:
                     ctx.input.close()
-                except:
+                except Exception:
                     pass
             del ctx.input
             ctx.input = None
@@ -1696,7 +2051,7 @@ class MangaTranslator:
                 if hasattr(image, 'close'):
                     try:
                         image.close()
-                    except:
+                    except Exception:
                         pass
                 # 显式删除引用
                 del current_batch_images[i]
@@ -1709,7 +2064,7 @@ class MangaTranslator:
                     if hasattr(ctx.input, 'close'):
                         try:
                             ctx.input.close()
-                        except:
+                        except Exception:
                             pass
                     del ctx.input
                     ctx.input = None
@@ -1762,7 +2117,7 @@ class MangaTranslator:
             import ctypes
             ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
             logger.debug('[MEMORY] Windows working set trimmed')
-        except:
+        except Exception:
             pass  # 非 Windows 系统时忽略
         
         logger.debug('[MEMORY] Batch cleanup completed')
@@ -1783,11 +2138,24 @@ class MangaTranslator:
             "preprocessing": "预处理",
             "ocr": "OCR",
             "colorizing": "上色",
+            "upscaling": "超分",
+            "detection": "检测",
+            "textline_merge": "文本合并",
+            "translation": "翻译",
+            "mask-generation": "蒙版生成",
+            "inpainting": "修复",
             "rendering": "渲染",
+            "saving": "保存",
         }
         raw_message = str(error).strip() or repr(error)
         stage_label = stage_labels.get(stage, stage or "处理")
         return f"{stage_label}失败: {raw_message}"
+
+    def _resolve_pipeline_error(self, stage: str, error: Exception) -> tuple[str, Exception]:
+        if isinstance(error, FileTranslationFailure):
+            stage = error.stage or stage
+            error = error.original_error
+        return stage, error
 
     def _build_stage_error_context(
         self,
@@ -1796,6 +2164,7 @@ class MangaTranslator:
         config: Config = None,
         stage: str = "",
     ) -> Context:
+        stage, error = self._resolve_pipeline_error(stage, error)
         image_name = getattr(image, "name", None) if image is not None else None
         ctx = Context()
         if image is not None:
@@ -1811,6 +2180,7 @@ class MangaTranslator:
         return ctx
 
     def _mark_context_failure(self, ctx: Context, error: Exception, stage: str = "") -> Context:
+        stage, error = self._resolve_pipeline_error(stage, error)
         if ctx is None:
             ctx = Context()
         if ctx.text_regions is None:
@@ -2049,9 +2419,7 @@ class MangaTranslator:
             
             # 模拟检测器的切割逻辑，判断是否需要切割
             h, w = img_h, img_w
-            transpose = False
             if h < w:
-                _transpose = True
                 h, w = w, h
             
             asp_ratio = h / w
@@ -2062,12 +2430,11 @@ class MangaTranslator:
             # 如果需要切割，计算切割块的大小
             if require_rearrange:
                 pw_num = max(int(np.floor(2 * tgt_size / w)), 2)
-                patch_size = _ph = pw_num * w
+                patch_size = pw_num * w
                 
                 # 限制切割后块的最大长宽比（不超过 3:1）
                 # 注意：ph = pw_num * w，所以 ph/w = pw_num
                 max_patch_aspect_ratio = 3.0
-                _original_pw_num = pw_num
                 if pw_num > max_patch_aspect_ratio:
                     # pw_num 太大，说明切割块太高，需要减小
                     # 但是不能直接减小 pw_num，因为这是检测器的逻辑
@@ -2124,6 +2491,10 @@ class MangaTranslator:
                         height = y2 - y1
                         logger.debug(f'  移除单框区域[{idx+1}]: 大小={width:.0f}x{height:.0f}, 面积={region.real_area:.1f}像素, 占比={ratio*100:.3f}%, 文本="{region.text[:20]}"')
 
+        keep_lang = str(getattr(config.translator, 'keep_lang', 'none') or 'none').strip().upper()
+        keep_lang_enabled = keep_lang not in _KEEP_LANG_NONE_VALUES
+        keep_lang_filtered_count = 0
+
         new_text_regions = []
         for region in text_regions:
             # 跳过text为None的区域
@@ -2143,7 +2514,7 @@ class MangaTranslator:
             # Modified filtering condition: handle incomplete parentheses  
             bracket_pairs = {  
                 '(': ')', '（': '）', '[': ']', '【': '】', '{': '}', '〔': '〕', '〈': '〉', '「': '」',  
-                '"': '"', '＂': '＂', "'": "'", "“": "”", '《': '》', '『': '』', '"': '"', '〝': '〞', '﹁': '﹂', '﹃': '﹄',  
+                '"': '"', '＂': '＂', "'": "'", "“": "”", '《': '》', '『': '』', '〝': '〞', '﹁': '﹂', '﹃': '﹄',  
                 '⸂': '⸃', '⸄': '⸅', '⸉': '⸊', '⸌': '⸍', '⸜': '⸝', '⸠': '⸡', '‹': '›', '«': '»', '＜': '＞', '<': '>'  
             }   
             left_symbols = set(bracket_pairs.keys())  
@@ -2215,8 +2586,19 @@ class MangaTranslator:
                 
                 stripped_text = new_stripped_text  
               
-            region.text = stripped_text.strip()     
-            
+            region.text = stripped_text.strip()
+
+            if keep_lang_enabled and region.text:
+                detected_keep_lang = _detect_region_keep_language(region.text)
+                if not _keep_language_matches(detected_keep_lang, keep_lang):
+                    keep_lang_filtered_count += 1
+                    logger.info(f'Filtered out: {region.text}')
+                    logger.info(
+                        f'Reason: Detected source language {detected_keep_lang} '
+                        f'does not match keep_lang={keep_lang}.'
+                    )
+                    continue
+
             # 过滤空文本、过短文本、无价值文本
             if not region.text \
                     or len(region.text) < config.ocr.min_text_length \
@@ -2237,6 +2619,11 @@ class MangaTranslator:
                     if config.render.font_color_bg:
                         region.adjust_bg_color = False
                 new_text_regions.append(region)
+        if keep_lang_enabled and keep_lang_filtered_count > 0:
+            logger.info(
+                f'合并后保留语言过滤: keep_lang={keep_lang}, '
+                f'移除了 {keep_lang_filtered_count} 个文本区域'
+            )
         text_regions = new_text_regions
         text_regions = sort_regions(
             text_regions,
@@ -2272,6 +2659,85 @@ class MangaTranslator:
                 for k in keys_to_remove:
                     del self._saved_image_contexts[k]
 
+    @staticmethod
+    def _get_context_region_count(region: Any) -> int:
+        lines = getattr(region, 'lines', None)
+        if lines is None:
+            return 1
+
+        try:
+            return max(int(len(lines)), 1)
+        except TypeError:
+            return 1
+
+    def _build_page_context_entries(self, ctx: Context) -> List[dict]:
+        entries = []
+        if not getattr(ctx, 'text_regions', None):
+            return entries
+
+        for region in ctx.text_regions:
+            original_text = getattr(region, 'text', None)
+            translated_text = getattr(region, 'translation', None)
+            if original_text is None or not translated_text:
+                continue
+
+            entries.append({
+                "text": original_text,
+                "translation": translated_text,
+                "original_region_count": self._get_context_region_count(region),
+            })
+
+        return entries
+
+    def _normalize_context_page_entries(self, page: Any) -> List[dict]:
+        """
+        历史上下文页兼容两种结构：
+        1. 旧结构：{original_text: translation}
+        2. 新结构：[{"text": ..., "translation": ..., "original_region_count": ...}, ...]
+        """
+        normalized_entries: List[dict] = []
+
+        if isinstance(page, dict):
+            for original_text, translated_text in page.items():
+                normalized_entries.append({
+                    "text": original_text,
+                    "translation": translated_text,
+                })
+            return normalized_entries
+
+        if not isinstance(page, list):
+            return normalized_entries
+
+        for entry in page:
+            if not isinstance(entry, dict):
+                continue
+
+            original_text = entry.get("text")
+            translated_text = entry.get("translation")
+            if original_text is None or translated_text is None:
+                continue
+
+            normalized_entry = {
+                "text": original_text,
+                "translation": translated_text,
+            }
+
+            region_count = entry.get("original_region_count")
+            if isinstance(region_count, (int, float)):
+                normalized_entry["original_region_count"] = max(int(region_count), 1)
+
+            normalized_entries.append(normalized_entry)
+
+        return normalized_entries
+
+    def _page_has_context_entries(self, page: Any) -> bool:
+        for entry in self._normalize_context_page_entries(page):
+            original_text = str(entry.get("text") or "").strip()
+            translated_text = str(entry.get("translation") or "").strip()
+            if original_text and translated_text:
+                return True
+        return False
+
     def _build_prev_context(self, use_original_text=False, current_page_index=None, batch_index=None, batch_original_texts=None):
         """
         跳过句子数为0的页面，取最近 context_size 个非空页面，构造成历史多轮对话：
@@ -2302,7 +2768,7 @@ class MangaTranslator:
         # 筛选出有句子的页面
         non_empty_pages = [
             page for page in available_pages
-            if any(sent.strip() for sent in page.values())
+            if self._page_has_context_entries(page)
         ]
         # 实际要用的页数
         pages_used = min(self.context_size, len(non_empty_pages))
@@ -2313,24 +2779,37 @@ class MangaTranslator:
         # 构造成历史 user / assistant 多轮消息
         history_turns = []
         for page in tail:
-            page_pairs = []
-            for original_text, translated_text in page.items():
+            page_entries = []
+            for entry in self._normalize_context_page_entries(page):
+                original_text = entry.get("text")
+                translated_text = entry.get("translation")
                 original_clean = (original_text or "").replace('\n', ' ').replace('\ufffd', '').strip()
                 translated_clean = (translated_text or "").strip()
                 if original_clean and translated_clean:
-                    page_pairs.append((original_clean, translated_clean))
+                    page_entry = {
+                        "text": original_clean,
+                        "translation": translated_clean,
+                    }
+                    region_count = entry.get("original_region_count")
+                    if isinstance(region_count, int) and region_count > 0:
+                        page_entry["original_region_count"] = region_count
+                    page_entries.append(page_entry)
 
-            if not page_pairs:
+            if not page_entries:
                 continue
 
             input_data = [
-                {"id": index + 1, "text": original_text}
-                for index, (original_text, _) in enumerate(page_pairs)
+                {
+                    "id": index + 1,
+                    "text": entry["text"],
+                    **({"original_region_count": entry["original_region_count"]} if "original_region_count" in entry else {}),
+                }
+                for index, entry in enumerate(page_entries)
             ]
             output_data = {
                 "translations": [
-                    {"id": index + 1, "translation": translated_text}
-                    for index, (_, translated_text) in enumerate(page_pairs)
+                    {"id": index + 1, "translation": entry["translation"]}
+                    for index, entry in enumerate(page_entries)
                 ]
             }
             user_prompt = (
@@ -2362,7 +2841,7 @@ class MangaTranslator:
             pages_expected = min(self.context_size, len(done_pages))
             non_empty_pages = [
                 page for page in done_pages
-                if any(sent.strip() for sent in page.values())
+                if self._page_has_context_entries(page)
             ]
             pages_used = min(self.context_size, len(non_empty_pages))
             skipped = pages_expected - pages_used
@@ -2407,7 +2886,10 @@ class MangaTranslator:
         
     async def _load_and_prepare_prompts(self, config: Config, ctx: Context):
         """Loads custom HQ and line break prompts into the context object."""
-        from .translators.prompt_loader import load_custom_prompt, load_line_break_prompt
+        from .translators.prompt_loader import (
+            load_custom_prompt,
+            load_line_break_prompt,
+        )
         
         # Load custom high-quality prompt from file if specified (supports .yaml/.json)
         ctx.custom_prompt_json = None
@@ -2422,7 +2904,7 @@ class MangaTranslator:
                     logger.info(f"Successfully loaded custom HQ prompt from: {prompt_path}")
                     # Log the parsed content for user verification
                     from .translators.common import _flatten_prompt_data
-                    _parsed_content = _flatten_prompt_data(ctx.custom_prompt_json)
+                    _flatten_prompt_data(ctx.custom_prompt_json)
                     # logger.info(f"--- Parsed Custom Prompt Content ---\n{parsed_content}\n------------------------------------")
                 else:
                     logger.warning(f"Custom HQ prompt file not found or invalid: {prompt_path}")
@@ -3131,7 +3613,7 @@ class MangaTranslator:
                 from manga_translator.config import Translator
                 translator_type = first_config.translator.translator
                 is_hq_translator = translator_type in [Translator.openai_hq, Translator.gemini_hq]
-                is_import_export_mode = self.load_text or self.template
+                is_import_export_mode = self.load_text or self.template or self.translate_json_only
 
                 # 如果是高质量翻译且未启用并发模式，使用专用的高质量翻译流程
                 if is_hq_translator and not is_import_export_mode and not self.batch_concurrent:
@@ -3165,6 +3647,7 @@ class MangaTranslator:
         # 检查是否有不兼容的特殊模式
         has_incompatible_mode = (
             self.load_text or 
+            self.translate_json_only or
             is_template_save_mode or 
             self.generate_and_export or 
             self.colorize_only or 
@@ -3178,6 +3661,8 @@ class MangaTranslator:
             incompatible_modes = []
             if self.load_text:
                 incompatible_modes.append("加载翻译")
+            if self.translate_json_only:
+                incompatible_modes.append("仅翻译(JSON)")
             if is_template_save_mode:
                 incompatible_modes.append("导出原文")
             if self.generate_and_export:
@@ -3236,7 +3721,7 @@ class MangaTranslator:
         
         # === 步骤4: 批量处理模式（顺序处理） ===
         logger.info(f'Starting batch translation: {len(images_with_configs)} images, batch size: {batch_size}')
-        logger.info(f'[阶段] 批量翻译任务启动')
+        logger.info('[阶段] 批量翻译任务启动')
         
         # Start the background cleanup job once if not already started.
         if self._detector_cleanup_task is None:
@@ -3244,6 +3729,14 @@ class MangaTranslator:
         
         results = []
         total_images = len(images_with_configs)
+
+        async def report_completed_image_progress():
+            """顺序批处理按单张图片完成推进整体进度，避免整批处理期间长时间停滞。"""
+            if display_total <= 0:
+                return
+            completed = min(global_offset + len(results), display_total)
+            failed_count = sum(1 for ctx in results if getattr(ctx, 'translation_error', None))
+            await self._report_progress(f"batch:{completed}:{completed}:{display_total}:{failed_count}")
 
         # 分批处理所有图片
         for batch_start in range(0, total_images, batch_size):
@@ -3271,6 +3764,7 @@ class MangaTranslator:
                 current_batch_images, load_error_contexts = self._materialize_batch_inputs(current_batch_items)
                 if load_error_contexts:
                     results.extend(load_error_contexts)
+                    await report_completed_image_progress()
                 if not current_batch_images:
                     await self._report_progress(progress_state)
                     continue
@@ -3305,54 +3799,16 @@ class MangaTranslator:
                             if not loaded_regions:
                                 logger.info(f"No text regions found in JSON for {os.path.basename(image_name)}, will render original image")
                             
-                            # 设置字体大小和默认translation
-                            for region in loaded_regions:
-                                if not hasattr(region, 'font_size') or not region.font_size:
-                                    try:
-                                        # 确保lines形状正确 (N, 4, 2)
-                                        if region.lines.ndim == 3 and region.lines.shape[1] >= 4 and region.lines.shape[2] >= 2:
-                                            box_height = np.max(region.lines[:,:,1]) - np.min(region.lines[:,:,1])
-                                            region.font_size = min(int(box_height * 0.8), 128)
-                                        else:
-                                            logger.warning(f"Invalid lines shape {region.lines.shape}, using default font_size=24")
-                                            region.font_size = 24
-                                    except Exception as e:
-                                        logger.warning(f"Error calculating font_size from lines: {e}, using default font_size=24")
-                                        region.font_size = 24
-                                
-                                # 如果translation为空或None，使用原文text作为默认值
-                                if not region.translation:
-                                    region.translation = region.text
-                                    logger.debug(f"Region translation is empty, using original text: {region.text[:50]}...")
+                            self._prepare_loaded_regions(loaded_regions, use_text_as_translation=True)
                             
                             ctx.text_regions = loaded_regions
+                            ctx.skip_font_scaling = skip_font_scaling
                             
                             existing_inpainted_path = find_inpainted_path(image_name) if image_name else None
 
-                            # 导入翻译并渲染时，如果已有修复图，直接复用它作为渲染底图
-                            if existing_inpainted_path and os.path.exists(existing_inpainted_path):
-                                logger.info(f"Load text mode: Reusing inpainted image as render base: {existing_inpainted_path}")
-                                ctx.img_colorized = open_pil_image(existing_inpainted_path, eager=False)
-                            elif config.colorizer.colorizer != Colorizer.none:
-                                await self._report_progress('colorizing')
-                                ctx.img_colorized = await self._run_colorizer(config, ctx)
-                            else:
-                                ctx.img_colorized = ctx.input
-                            
-                            if existing_inpainted_path and os.path.exists(existing_inpainted_path):
-                                ctx.upscaled = ctx.img_colorized
-                            elif config.upscale.upscale_ratio:
-                                await self._report_progress('upscaling')
-                                ctx.upscaled = await self._run_upscaling(config, ctx)
-                            else:
-                                ctx.upscaled = ctx.img_colorized
-
-                            if (
-                                image_name and
-                                not existing_inpainted_path and
-                                (config.colorizer.colorizer != Colorizer.none or config.upscale.upscale_ratio)
-                            ):
-                                self._save_editor_base_if_needed(ctx, config)
+                            # load_text 始终基于原图处理，不走上色/超分，也不把已有修复图塞进 img_colorized/upscaled
+                            ctx.img_colorized = ctx.input
+                            ctx.upscaled = ctx.input
                             
                             ctx.img_rgb, ctx.img_alpha = load_image(ctx.upscaled)
                             
@@ -3365,35 +3821,49 @@ class MangaTranslator:
                                 logger.error(f"[批量] 加载的图片尺寸无效: {ctx.img_rgb.shape}")
                                 continue
                             
+                            import_yolo_labels = bool(getattr(config.detector, 'import_yolo_labels', False))
+
                             # 处理 mask
                             if loaded_mask is not None:
                                 if mask_is_refined:
                                     ctx.mask = loaded_mask
                                 else:
                                     ctx.mask_raw = loaded_mask
+                                if import_yolo_labels:
+                                    self._prime_bubble_detection_cache(config, ctx.img_rgb)
                             else:
-                                if ctx.mask_raw is None:
+                                if import_yolo_labels:
+                                    try:
+                                        detection_img_rgb = None
+                                        input_image = getattr(ctx, 'input', None)
+                                        if input_image is not None:
+                                            try:
+                                                detection_img_rgb, _ = load_image(input_image)
+                                            except Exception as original_load_err:
+                                                logger.warning(
+                                                    f"Load text mode: failed to load original image for mask detection, "
+                                                    f"falling back to current image ({original_load_err})"
+                                                )
+
+                                        mask_ctx = Context()
+                                        mask_ctx.img_rgb = detection_img_rgb if detection_img_rgb is not None else ctx.img_rgb
+                                        mask_ctx.image_name = image_name
+                                        _, generated_mask_raw, generated_mask = await self._run_detection(config, mask_ctx)
+                                        if generated_mask_raw is not None:
+                                            ctx.mask_raw = generated_mask_raw
+                                        if generated_mask is not None:
+                                            ctx.mask = generated_mask
+                                        if ctx.mask_raw is not None or ctx.mask is not None:
+                                            logger.info("Load text mode: generated mask from detection because JSON has no mask")
+                                    except Exception as e:
+                                        logger.warning(f"Load text mode: detection-based mask generation failed, fallback to region mask ({e})")
+
+                                if ctx.mask_raw is None and ctx.mask is None:
                                     mask = np.zeros_like(ctx.img_rgb[:, :, 0])
                                     polygons = [p.reshape((-1, 1, 2)) for r in ctx.text_regions for p in r.lines]
                                     cv2.fillPoly(mask, polygons, 255)
                                     ctx.mask_raw = mask
                             
-                            # 如果执行了超分，需要将mask和坐标也超分
-                            if config.upscale.upscale_ratio:
-                                upscale_ratio = parse_upscale_ratio(config.upscale.upscale_ratio)
-                                if upscale_ratio > 0:
-                                    if ctx.mask_raw is not None:
-                                        ctx.mask_raw = cv2.resize(ctx.mask_raw, (ctx.img_rgb.shape[1], ctx.img_rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
-                                    if ctx.mask is not None:
-                                        ctx.mask = cv2.resize(ctx.mask, (ctx.img_rgb.shape[1], ctx.img_rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
-                                    
-                                    for region in ctx.text_regions:
-                                        region.lines = region.lines * upscale_ratio
-                                        if hasattr(region, '_center_override') and region._center_override is not None:
-                                            region._center_override = region._center_override * upscale_ratio
-                                        if hasattr(region, 'font_size') and region.font_size:
-                                            region.font_size = int(region.font_size * upscale_ratio)
-
                             # load_text 模式下：无论是否超分，都强制对齐 mask 到当前图像尺寸，
                             # 避免 ONNX inpainting 因 image/mask 维度不一致而报错。
                             target_h, target_w = ctx.img_rgb.shape[:2]
@@ -3439,15 +3909,35 @@ class MangaTranslator:
                                     ctx.mask = await self._run_mask_refinement(config, ctx)
                                 
                                 # Inpainting
+                                generated_inpainted_in_load_text = False
                                 if self._should_skip_inpainting_for_ai_renderer(config):
                                     logger.info("AI renderer selected: skipping inpainting and using original work image as render base.")
                                     ctx.img_inpainted = ctx.img_rgb
                                 elif existing_inpainted_path and loaded_mask is not None:
-                                    logger.info("Load text mode: Using existing inpainted image, skipping inpainting.")
-                                    ctx.img_inpainted = ctx.img_rgb
+                                    try:
+                                        existing_inpainted_image = open_pil_image(existing_inpainted_path, eager=False)
+                                        existing_inpainted_rgb, _ = load_image(existing_inpainted_image)
+                                        ctx.img_inpainted = existing_inpainted_rgb
+                                        logger.info("Load text mode: Using existing inpainted image, skipping inpainting.")
+                                    except Exception as existing_inpaint_err:
+                                        logger.warning(
+                                            f"Load text mode: failed to load existing inpainted image, rerunning inpainting ({existing_inpaint_err})"
+                                        )
+                                        await self._report_progress('inpainting')
+                                        ctx.img_inpainted = await self._run_inpainting(config, ctx)
+                                        generated_inpainted_in_load_text = True
                                 else:
                                     await self._report_progress('inpainting')
                                     ctx.img_inpainted = await self._run_inpainting(config, ctx)
+                                    generated_inpainted_in_load_text = True
+
+                                if (
+                                    generated_inpainted_in_load_text
+                                    and image_name
+                                    and ctx.img_inpainted is not None
+                                    and self.save_text
+                                ):
+                                    self._save_inpainted_image(image_name, ctx.img_inpainted)
                                 
                                 # Rendering - load_text按JSON中的skip_font_scaling控制：True=跳过字体缩放，False=执行字体缩放
                                 await self._report_progress('rendering')
@@ -3490,6 +3980,7 @@ class MangaTranslator:
                                 logger.error(f"Error saving load_text result for {os.path.basename(ctx.image_name)}: {save_err}")
                         
                         results.append(ctx)
+                        await report_completed_image_progress()
                     
                     # ✅ load_text模式：批次完成后清理批次数据（图片已在循环内清理）
                     if current_batch_images:
@@ -3497,14 +3988,97 @@ class MangaTranslator:
                             if hasattr(image, 'close'):
                                 try:
                                     image.close()
-                                except:
+                                except Exception:
                                     pass
                     
                     # load_text模式处理完成，继续下一批
                     continue
 
+                if self.translate_json_only:
+                    logger.info("Translate JSON only mode: Loading original text from JSON and skipping detection/OCR/rendering")
+                    for i, (image, config) in enumerate(current_batch_images):
+                        await asyncio.sleep(0)
+                        self._check_cancelled()
+                        try:
+                            self._set_image_context(config, image)
+                            image_name = image.name if hasattr(image, 'name') else None
+
+                            ctx = Context()
+                            ctx.input = image
+                            ctx.image_name = image_name
+                            ctx.verbose = self.verbose
+                            ctx.save_quality = self.save_quality
+                            ctx.config = config
+                            ctx.from_lang = 'auto'
+
+                            loaded_regions, loaded_mask, mask_is_refined, skip_font_scaling = self._load_text_and_regions_from_file(image_name, config)
+                            if loaded_regions is None:
+                                json_path = find_json_path(image_name) if image_name else None
+                                if not json_path and image_name:
+                                    json_path = get_json_path(image_name, create_dir=False)
+                                raise FileNotFoundError(f"JSON translation data not found or invalid: {json_path}")
+
+                            self._prepare_loaded_regions(loaded_regions, use_text_as_translation=False)
+                            ctx.text_regions = loaded_regions
+                            ctx.skip_font_scaling = skip_font_scaling
+
+                            if loaded_mask is not None:
+                                if mask_is_refined:
+                                    ctx.mask = loaded_mask
+                                else:
+                                    ctx.mask_raw = loaded_mask
+
+                            self._apply_pre_dictionary_to_regions(ctx)
+                            preprocessed_contexts.append((ctx, config))
+                        except Exception as e:
+                            logger.error(f"Error loading JSON translation data for image {i+1} in batch: {e}")
+                            ctx = Context()
+                            ctx.input = image
+                            ctx.text_regions = []
+                            if hasattr(image, 'name'):
+                                ctx.image_name = image.name
+                            ctx.translation_error = str(e)
+                            preprocessed_contexts.append((ctx, config))
+
+                    logger.info('[阶段] JSON 原文加载完成，开始翻译阶段')
+                    try:
+                        translated_contexts = await self._batch_translate_contexts(preprocessed_contexts, batch_size)
+                    except Exception as e:
+                        logger.error(f"Error during JSON-only batch translation stage: {e}")
+                        raise
+
+                    for ctx, config in translated_contexts:
+                        if getattr(ctx, 'translation_error', None):
+                            results.append(ctx)
+                            await report_completed_image_progress()
+                            continue
+
+                        try:
+                            save_success = self._save_text_to_file(ctx.image_name, ctx, config)
+                            if not save_success:
+                                raise IOError(f"Failed to save JSON for {os.path.basename(ctx.image_name)}")
+                            self._delete_original_txt_after_json_translation(ctx.image_name)
+                            ctx.success = True
+                        except Exception as save_err:
+                            logger.error(f"Error saving translated JSON for {os.path.basename(ctx.image_name)}: {save_err}")
+                            ctx = self._mark_context_failure(ctx, save_err, stage='saving')
+
+                        results.append(ctx)
+                        await report_completed_image_progress()
+                        self._cleanup_context_memory(ctx, keep_result=True)
+
+                    if current_batch_images:
+                        for image, _ in current_batch_images:
+                            if hasattr(image, 'close'):
+                                try:
+                                    image.close()
+                                except Exception:
+                                    pass
+
+                    continue
+
                 # 标准模式：执行检测、OCR等预处理
-                logger.info(f'[阶段] 开始预处理阶段（检测、OCR）')
+                logger.info('[阶段] 开始预处理阶段（检测、OCR）')
                 for i, (image, config) in enumerate(current_batch_images):
                     # 检查是否被取消
                     await asyncio.sleep(0)
@@ -3525,7 +4099,7 @@ class MangaTranslator:
                         preprocessed_contexts.append((ctx, config))
 
                 # --- 阶段2: 翻译 ---
-                logger.info(f'[阶段] 预处理完成，开始翻译阶段')
+                logger.info('[阶段] 预处理完成，开始翻译阶段')
                 if self.colorize_only or self.upscale_only or self.inpaint_only:
                     # 特殊情况：仅上色/仅超分/仅修复模式，跳过翻译
                     mode_name = "Colorize Only" if self.colorize_only else ("Upscale Only" if self.upscale_only else "Inpaint Only")
@@ -3550,11 +4124,13 @@ class MangaTranslator:
                     for ctx, config in translated_contexts:
                         if getattr(ctx, 'translation_error', None):
                             results.append(ctx)
+                            await report_completed_image_progress()
                             continue
                         await self._handle_template_and_save_text(ctx, config)
                         # ✅ 标记成功（导出原文完成）
                         ctx.success = True
                         results.append(ctx)
+                        await report_completed_image_progress()
                         
                         # ✅ 每处理完一张图片后立即清理内存（保留result）
                         self._cleanup_context_memory(ctx, keep_result=True)
@@ -3565,7 +4141,7 @@ class MangaTranslator:
                             if hasattr(image, 'close'):
                                 try:
                                     image.close()
-                                except:
+                                except Exception:
                                     pass
                     
                     continue  # 跳过渲染，继续下一批次
@@ -3576,11 +4152,13 @@ class MangaTranslator:
                     for ctx, config in translated_contexts:
                         if getattr(ctx, 'translation_error', None):
                             results.append(ctx)
+                            await report_completed_image_progress()
                             continue
                         await self._handle_generate_and_export(ctx, config)
                         # ✅ 标记成功（导出翻译完成）
                         ctx.success = True
                         results.append(ctx)
+                        await report_completed_image_progress()
                         
                         # ✅ 每处理完一张图片后立即清理内存（保留result）
                         self._cleanup_context_memory(ctx, keep_result=True)
@@ -3591,18 +4169,19 @@ class MangaTranslator:
                             if hasattr(image, 'close'):
                                 try:
                                     image.close()
-                                except:
+                                except Exception:
                                     pass
                     
                     continue  # 跳过渲染，继续下一批次
 
                 # 标准流程：渲染并保存
-                logger.info(f'[阶段] 翻译完成，开始渲染阶段')
+                logger.info('[阶段] 翻译完成，开始渲染阶段')
                 for idx, (ctx, config) in enumerate(translated_contexts):
                     await asyncio.sleep(0)  # 检查是否被取消
                     self._check_cancelled()  # 检查取消标志
                     if getattr(ctx, 'translation_error', None):
                         results.append(ctx)
+                        await report_completed_image_progress()
                         continue
                     try:
                         if hasattr(ctx, 'input'):
@@ -3627,6 +4206,7 @@ class MangaTranslator:
                             self._save_text_to_file(ctx.image_name, ctx, config)
 
                         results.append(ctx)
+                        await report_completed_image_progress()
 
                         # ✅ 渲染完一张立即清理这张图片的中间数据（不等整个批次完成）
                         self._cleanup_context_memory(ctx, keep_result=True)
@@ -3640,6 +4220,7 @@ class MangaTranslator:
                         logger.error(f"Error rendering image in batch: {e}", exc_info=True)
                         ctx = self._mark_context_failure(ctx, e, stage='rendering')
                         results.append(ctx)
+                        await report_completed_image_progress()
             
             finally:
                 # ✅ 批次完成后（无论成功还是失败）立即清理内存
@@ -3735,11 +4316,11 @@ class MangaTranslator:
             await self._report_progress('colorizing')
             try:
                 ctx.img_colorized = await self._run_colorizer(config, ctx)
-            except Exception as _e:  
+            except Exception as e:
                 logger.error(f"Error during colorizing:\n{traceback.format_exc()}")  
                 if not self.ignore_errors:  
                     raise  
-                ctx.img_colorized = ctx.input
+                raise FileTranslationFailure("colorizing", e) from e
         else:
             ctx.img_colorized = ctx.input
 
@@ -3762,11 +4343,11 @@ class MangaTranslator:
             await self._report_progress('upscaling')
             try:
                 ctx.upscaled = await self._run_upscaling(config, ctx)
-            except Exception as _e:  
+            except Exception as e:
                 logger.error(f"Error during upscaling:\n{traceback.format_exc()}")  
                 if not self.ignore_errors:  
                     raise  
-                ctx.upscaled = ctx.img_colorized
+                raise FileTranslationFailure("upscaling", e) from e
         else:
             ctx.upscaled = ctx.img_colorized
 
@@ -3809,13 +4390,11 @@ class MangaTranslator:
                 logger.info(f"  - mask_raw: {ctx.mask_raw.shape if ctx.mask_raw is not None else 'None'}")
                 if ctx.mask_raw is not None:
                     logger.info(f"  - mask_raw non-zero pixels: {np.count_nonzero(ctx.mask_raw)}")
-            except Exception as _e:
+            except Exception as e:
                 logger.error(f"Error during detection:\n{traceback.format_exc()}")
                 if not self.ignore_errors:
                     raise
-                ctx.textlines = []
-                ctx.mask_raw = None
-                ctx.mask = None
+                raise FileTranslationFailure("detection", e) from e
             
             if not ctx.textlines or ctx.mask_raw is None:
                 logger.warning("No textlines or mask_raw detected, skipping inpainting.")
@@ -3846,7 +4425,7 @@ class MangaTranslator:
                     )
                 )
                 logger.info(f"✓ Step 3 - Textline Merge: Merged {len(ctx.textlines)} textlines into {len(ctx.text_regions)} text_regions")
-            except Exception as _e:
+            except Exception:
                 logger.error(f"Error during textline merge:\n{traceback.format_exc()}")
                 # 降级：为每个textline创建一个简单的TextBlock
                 logger.warning("Falling back to simple text_regions (1 textline = 1 region)")
@@ -3885,19 +4464,27 @@ class MangaTranslator:
                 return ctx
             
             # Step 4: Mask Refinement - 使用text_regions和mask_raw优化蒙版
-            await self._report_progress('mask-generation')
-            try:
-                ctx.mask = await self._run_mask_refinement(config, ctx)
-                mask_pixels = np.count_nonzero(ctx.mask) if ctx.mask is not None else 0
-                logger.info(f"✓ Step 4 - Mask Refinement: Generated mask with {mask_pixels} non-zero pixels")
-            except Exception as _e:
-                logger.error(f"Error during mask refinement:\n{traceback.format_exc()}")
-                # 降级到简单膨胀
-                logger.warning("Falling back to simple mask dilation")
-                kernel = np.ones((config.kernel_size, config.kernel_size), np.uint8)
-                ctx.mask = cv2.dilate(ctx.mask_raw, kernel, iterations=config.mask_dilation_offset // config.kernel_size)
-                mask_pixels = np.count_nonzero(ctx.mask) if ctx.mask is not None else 0
-                logger.info(f"Simple dilated mask has {mask_pixels} non-zero pixels")
+            skip_mask_refinement_for_imported_export = (
+                getattr(ctx, 'used_imported_yolo_labels', False) and
+                ((self.template and self.save_text) or self.generate_and_export)
+            )
+            if skip_mask_refinement_for_imported_export:
+                logger.info("Import YOLO labels enabled in export mode: skipping mask refinement stage")
+                ctx.mask = None
+            else:
+                await self._report_progress('mask-generation')
+                try:
+                    ctx.mask = await self._run_mask_refinement(config, ctx)
+                    mask_pixels = np.count_nonzero(ctx.mask) if ctx.mask is not None else 0
+                    logger.info(f"✓ Step 4 - Mask Refinement: Generated mask with {mask_pixels} non-zero pixels")
+                except Exception:
+                    logger.error(f"Error during mask refinement:\n{traceback.format_exc()}")
+                    # 降级到简单膨胀
+                    logger.warning("Falling back to simple mask dilation")
+                    kernel = np.ones((config.kernel_size, config.kernel_size), np.uint8)
+                    ctx.mask = cv2.dilate(ctx.mask_raw, kernel, iterations=config.mask_dilation_offset // config.kernel_size)
+                    mask_pixels = np.count_nonzero(ctx.mask) if ctx.mask is not None else 0
+                    logger.info(f"Simple dilated mask has {mask_pixels} non-zero pixels")
             
             # Step 5: Inpainting - 使用优化后的mask进行修复
             if self._should_skip_inpainting_for_ai_renderer(config):
@@ -3911,11 +4498,11 @@ class MangaTranslator:
                 try:
                     ctx.img_inpainted = await self._run_inpainting(config, ctx)
                     logger.info("✓ Step 5 - Inpainting: Completed successfully")
-                except Exception as _e:
+                except Exception as e:
                     logger.error(f"Error during inpainting:\n{traceback.format_exc()}")
                     if not self.ignore_errors:
                         raise
-                    ctx.img_inpainted = ctx.img_rgb
+                    raise FileTranslationFailure("inpainting", e) from e
             
             # 设置结果 - 转换为PIL Image（保存函数需要PIL格式）
             from PIL import Image
@@ -3941,25 +4528,23 @@ class MangaTranslator:
             logger.error("加载图片失败: img_rgb为空或无效")
             if not self.ignore_errors:
                 raise Exception("加载图片失败: img_rgb为空或无效")
-            # 尝试从原始输入重新加载
-            ctx.img_rgb, ctx.img_alpha = load_image(ctx.input)
+            raise FileTranslationFailure("preprocessing", RuntimeError("加载图片失败: img_rgb为空或无效"))
         
         if len(ctx.img_rgb.shape) < 2 or ctx.img_rgb.shape[0] == 0 or ctx.img_rgb.shape[1] == 0:
             logger.error(f"加载的图片尺寸无效: {ctx.img_rgb.shape}")
             if not self.ignore_errors:
                 raise Exception(f"加载的图片尺寸无效: {ctx.img_rgb.shape}")
+            raise FileTranslationFailure("preprocessing", RuntimeError(f"加载的图片尺寸无效: {ctx.img_rgb.shape}"))
 
         # -- Detection
         await self._report_progress('detection')
         try:
             ctx.textlines, ctx.mask_raw, ctx.mask = await self._run_detection(config, ctx)
-        except Exception as _e:  
+        except Exception as e:
             logger.error(f"Error during detection:\n{traceback.format_exc()}")  
             if not self.ignore_errors:  
                 raise 
-            ctx.textlines = [] 
-            ctx.mask_raw = None
-            ctx.mask = None
+            raise FileTranslationFailure("detection", e) from e
 
         if self.verbose and ctx.mask_raw is not None:
             # 生成带置信度颜色映射和颜色条的热力图
@@ -3996,11 +4581,11 @@ class MangaTranslator:
         await self._report_progress('ocr')
         try:
             ctx.textlines = await self._run_ocr(config, ctx)
-        except Exception as _e:  
+        except Exception as e:
             logger.error(f"Error during ocr:\n{traceback.format_exc()}")  
             if not self.ignore_errors:  
                 raise 
-            ctx.textlines = []
+            raise FileTranslationFailure("ocr", e) from e
 
         if not ctx.textlines:
             await self._report_progress('skip-no-text', True)
@@ -4012,11 +4597,11 @@ class MangaTranslator:
         await self._report_progress('textline_merge')
         try:
             ctx.text_regions = await self._run_textline_merge(config, ctx)
-        except Exception as _e:  
+        except Exception as e:
             logger.error(f"Error during textline_merge:\n{traceback.format_exc()}")  
             if not self.ignore_errors:  
                 raise 
-            ctx.text_regions = []
+            raise FileTranslationFailure("textline_merge", e) from e
 
         if self.verbose and ctx.text_regions:
             show_panels = not config.force_simple_sort  # 当不使用简单排序时显示panel
@@ -4025,20 +4610,7 @@ class MangaTranslator:
             imwrite_unicode(self._result_path('bboxes.png'), bboxes, logger)
 
         # Apply pre-dictionary after textline merge
-        pre_dict = load_dictionary(self.pre_dict)
-        pre_replacements = []
-        for region in ctx.text_regions:
-            original = region.text  
-            region.text = apply_dictionary(region.text, pre_dict)
-            if original != region.text:
-                pre_replacements.append(f"{original} => {region.text}")
-
-        if pre_replacements:
-            logger.info("Pre-translation replacements:")
-            for replacement in pre_replacements:
-                logger.info(replacement)
-        else:
-            logger.info("No pre-translation replacements made.")
+        self._apply_pre_dictionary_to_regions(ctx)
 
         # 保存当前图片上下文到ctx中，用于并发翻译时的路径管理
         if self._current_image_context:
@@ -4205,12 +4777,9 @@ class MangaTranslator:
                 # ✅ 立即保存当前批次的翻译结果到all_page_translations，供下一个批次使用上下文
                 for ctx, config in batch:
                     if ctx.text_regions:
-                        page_trans = {}
-                        for region in ctx.text_regions:
-                            if region.translation:
-                                page_trans[region.text] = region.translation
-                        self.all_page_translations.append(page_trans)
-                        logger.debug(f"[Batch Context] Saved {len(page_trans)} translations for next batch context")
+                        page_entries = self._build_page_context_entries(ctx)
+                        self.all_page_translations.append(page_entries)
+                        logger.debug(f"[Batch Context] Saved {len(page_entries)} translations for next batch context")
                         
                 # Prune history to prevent memory leak
                 self._prune_context_history()
@@ -4347,15 +4916,10 @@ class MangaTranslator:
                 logger.error(traceback.format_exc())
                 if not self.ignore_errors:
                     raise
-                # 错误时保持原文
+                # 错误时标记当前批次文件失败，不再回退原文
                 for ctx, config in batch:
-                    if not ctx.text_regions:  # 检查text_regions是否为None或空
-                        continue
-                    for region in ctx.text_regions:
-                        region.translation = region.text
-                        region.target_lang = config.translator.target_lang
-                        region._alignment = config.render.alignment
-                        region._direction = config.render.direction
+                    self._mark_context_failure(ctx, FileTranslationFailure("translation", e), stage='translation')
+                    ctx.text_regions = []
                 results.extend(batch)
             
             # ✅ 翻译批次完成后清理内存
@@ -4365,7 +4929,6 @@ class MangaTranslator:
                     merged_ctx = None
                 batch = None
                 self._cleanup_gpu_memory(aggressive=True)
-                await self._report_progress(progress_state)
 
         return results
 
@@ -4515,13 +5078,8 @@ class MangaTranslator:
                 logger.error(f"Error in concurrent translation for single image: {e}")
                 if not self.ignore_errors:
                     raise
-                # 错误时保持原文
-                if ctx.text_regions:
-                    for region in ctx.text_regions:
-                        region.translation = region.text
-                        region.target_lang = config.translator.target_lang
-                        region._alignment = config.render.alignment
-                        region._direction = config.render.direction
+                self._mark_context_failure(ctx, FileTranslationFailure("translation", e), stage='translation')
+                ctx.text_regions = []
                 return ctx, config
         
         # 创建并发任务，为每个任务添加页面索引和批次索引
@@ -4550,14 +5108,9 @@ class MangaTranslator:
                 logger.error(f"Image {i+1} concurrent translation failed: {result}")
                 if not self.ignore_errors:
                     raise result
-                # 创建失败的占位符
                 ctx, config = contexts_with_configs[i]
-                if ctx.text_regions:
-                    for region in ctx.text_regions:
-                        region.translation = region.text
-                        region.target_lang = config.translator.target_lang
-                        region._alignment = config.render.alignment
-                        region._direction = config.render.direction
+                self._mark_context_failure(ctx, FileTranslationFailure("translation", result), stage='translation')
+                ctx.text_regions = []
                 final_results.append((ctx, config))
             else:
                 final_results.append(result)
@@ -4612,7 +5165,7 @@ class MangaTranslator:
                 pages_expected = min(self.context_size, len(done_pages))
                 non_empty_pages = [
                     page for page in done_pages
-                    if any(sent.strip() for sent in page.values())
+                    if self._page_has_context_entries(page)
                 ]
                 pages_used = min(self.context_size, len(non_empty_pages))
                 skipped = pages_expected - pages_used
@@ -4876,11 +5429,11 @@ class MangaTranslator:
             await self._report_progress('mask-generation')
             try:
                 ctx.mask = await self._run_mask_refinement(config, ctx)
-            except Exception as _e:  
+            except Exception as e:
                 logger.error(f"Error during mask-generation:\n{traceback.format_exc()}")  
                 if not self.ignore_errors:  
                     raise 
-                ctx.mask = ctx.mask_raw if ctx.mask_raw is not None else np.zeros_like(ctx.img_rgb, dtype=np.uint8)[:,:,0]
+                raise FileTranslationFailure("mask-generation", e) from e
 
         if self.verbose and ctx.mask is not None:
             try:
@@ -4910,12 +5463,11 @@ class MangaTranslator:
                 # ✅ Inpainting完成后强制GC和GPU清理
                 self._cleanup_gpu_memory()
 
-            except Exception as _e:
+            except Exception as e:
                 logger.error(f"Error during inpainting:\n{traceback.format_exc()}")
                 if not self.ignore_errors:
                     raise
-                else:
-                    ctx.img_inpainted = ctx.img_rgb
+                raise FileTranslationFailure("inpainting", e) from e
 
         if self.verbose:
             try:
@@ -4926,8 +5478,8 @@ class MangaTranslator:
                 logger.debug(f"Exception details: {traceback.format_exc()}")
 
         # 保存inpainted图片到新目录结构（用于可编辑图片功能）
-        # 与JSON保存逻辑保持一致：save_text或text_output_file任一满足即保存
-        if (self.save_text or self.text_output_file) and hasattr(ctx, 'image_name') and ctx.image_name and ctx.img_inpainted is not None:
+        # 仅在开启“图片可编辑”时保存
+        if self.save_text and hasattr(ctx, 'image_name') and ctx.image_name and ctx.img_inpainted is not None:
             self._save_inpainted_image(ctx.image_name, ctx.img_inpainted)
 
         # -- Rendering
@@ -4941,11 +5493,11 @@ class MangaTranslator:
 
         try:
             ctx.img_rendered = await self._run_text_rendering(config, ctx)
-        except Exception as _e:
+        except Exception as e:
             logger.error(f"Error during rendering:\n{traceback.format_exc()}")
             if not self.ignore_errors:
                 raise
-            ctx.img_rendered = ctx.img_inpainted
+            raise FileTranslationFailure("rendering", e) from e
 
         await self._report_progress('finished', True)
         ctx.result = dump_image(ctx.input, ctx.img_rendered, ctx.img_alpha)
@@ -5059,7 +5611,6 @@ class MangaTranslator:
         except Exception as e:
             logger.debug(f'py3langid failed for merged text: {e}')
             detected_language = 'UNKNOWN'
-            _confidence = -9999
         
         # 检查检测出的语言是否为目标语言
         is_target_lang = (detected_language == target_lang.upper())
@@ -5243,6 +5794,14 @@ class MangaTranslator:
         display_total = global_total if global_total is not None else len(images_with_configs)
         
         total_images = len(images_with_configs)
+
+        async def report_completed_image_progress():
+            if display_total <= 0:
+                return
+            completed = min(global_offset + len(results), display_total)
+            failed_count = sum(1 for ctx in results if getattr(ctx, 'translation_error', None))
+            await self._report_progress(f"batch:{completed}:{completed}:{display_total}:{failed_count}")
+
         for batch_start in range(0, total_images, batch_size):
             # 检查是否被取消
             await asyncio.sleep(0)
@@ -5263,6 +5822,7 @@ class MangaTranslator:
             current_batch_images, load_error_contexts = self._materialize_batch_inputs(current_batch_items)
             if load_error_contexts:
                 results.extend(load_error_contexts)
+                await report_completed_image_progress()
             if not current_batch_images:
                 await self._report_progress(progress_state)
                 continue
@@ -5375,13 +5935,10 @@ class MangaTranslator:
                         # ✅ 立即保存当前批次的翻译结果到all_page_translations，供下一个批次使用上下文
                         for ctx, config in preprocessed_contexts:
                             if ctx.text_regions:
-                                # 保存译文
-                                page_trans = {}
-                                for region in ctx.text_regions:
-                                    if region.translation:
-                                        page_trans[region.text] = region.translation
-                                self.all_page_translations.append(page_trans)
-                                logger.debug(f"[HQ Batch Context] Saved {len(page_trans)} translations for next batch context")
+                                # 保存译文和原始区域数量，供历史上下文与 AI 断句复用
+                                page_entries = self._build_page_context_entries(ctx)
+                                self.all_page_translations.append(page_entries)
+                                logger.debug(f"[HQ Batch Context] Saved {len(page_entries)} translations for next batch context")
                                 
                                 # 保存原文（用于并发模式的上下文）
                                 page_original_texts = {i: (r.text_raw if hasattr(r, "text_raw") else r.text)
@@ -5394,20 +5951,25 @@ class MangaTranslator:
                                 
                 except Exception as e:
                     logger.error(f"Error in high quality batch translation: {e}")
-                    # 重新抛出异常，终止翻译流程
-                    raise
+                    if not self.ignore_errors:
+                        raise
+                    for ctx, config in preprocessed_contexts:
+                        self._mark_context_failure(ctx, FileTranslationFailure("translation", e), stage='translation')
+                        ctx.text_regions = []
             # --- NEW: Handle Generate and Export for High-Quality Mode ---
             if self.generate_and_export:
                 logger.info("'Generate and Export' mode enabled. Skipping rendering.")
                 for ctx, config in preprocessed_contexts:
                     if getattr(ctx, 'translation_error', None):
                         results.append(ctx)
+                        await report_completed_image_progress()
                         continue
                     await self._handle_generate_and_export(ctx, config)
 
                     # ✅ 标记成功（导出翻译完成）
                     ctx.success = True
                     results.append(ctx)
+                    await report_completed_image_progress()
                 
                 # ✅ 批次完成后立即清理内存
                 self._cleanup_batch_memory(
@@ -5426,6 +5988,7 @@ class MangaTranslator:
                 self._check_cancelled()  # 检查取消标志
                 if getattr(ctx, 'translation_error', None):
                     results.append(ctx)
+                    await report_completed_image_progress()
                     continue
                 try:
                     if hasattr(ctx, 'input'):
@@ -5460,10 +6023,14 @@ class MangaTranslator:
                     self._cleanup_context_memory(ctx, keep_result=True)
 
                     results.append(ctx)
+                    await report_completed_image_progress()
                 except Exception as e:
                     logger.error(f"Error rendering image: {e}")
-                    # 渲染失败时抛出异常，而不是继续处理
-                    raise RuntimeError(f"Rendering failed for {os.path.basename(ctx.image_name) if hasattr(ctx, 'image_name') else 'Unknown'}: {e}") from e
+                    if not self.ignore_errors:
+                        raise RuntimeError(f"Rendering failed for {os.path.basename(ctx.image_name) if hasattr(ctx, 'image_name') else 'Unknown'}: {e}") from e
+                    ctx = self._mark_context_failure(ctx, e, stage='rendering')
+                    results.append(ctx)
+                    await report_completed_image_progress()
             
             # ✅ 批次完成后立即清理内存（但保留翻译历史供下一批次使用）
 #             import gc

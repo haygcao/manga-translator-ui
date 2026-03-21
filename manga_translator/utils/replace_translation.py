@@ -18,18 +18,18 @@
 日期: 2026-01-01
 """
 
-import os
-import logging
-import numpy as np
 import asyncio
+import logging
+import os
 import traceback
-import cv2
-from typing import Optional, List, Tuple, Dict, Any
-from PIL import Image
+from typing import List, Optional, Tuple
 
-from .textblock import TextBlock
+import cv2
+import numpy as np
+
 from .generic import Context, dump_image, imwrite_unicode, open_pil_image
 from .path_manager import TRANSLATED_IMAGES_SUBDIR, get_work_dir
+from .textblock import TextBlock
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,7 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
     results = []
     
     display_total = global_total if global_total is not None else len(images_with_configs)
+    failed_count = 0
     
     for idx, (image, config) in enumerate(images_with_configs):
         # ✅ 检查停止标志
@@ -156,7 +157,6 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
         translated_image = None
         image_name = image if isinstance(image, str) else (image.name if hasattr(image, 'name') else f"image_{idx}")
         global_idx = global_offset + idx + 1
-        progress_state = f"batch:{global_idx}:{global_idx}:{display_total}"
         loaded_source_image = False
 
         if isinstance(image, str):
@@ -174,7 +174,8 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                 ctx.success = False
                 ctx.translation_error = str(e)
                 results.append(ctx)
-                await translator._report_progress(progress_state)
+                failed_count += 1
+                await translator._report_progress(f"batch:{global_idx}:{global_idx}:{display_total}:{failed_count}")
                 continue
         
         # 强制启用 AI断句 和 严格边框模式
@@ -203,7 +204,8 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                 ctx.text_regions = []
                 ctx.success = False
                 results.append(ctx)
-                await translator._report_progress(progress_state)
+                failed_count += 1
+                await translator._report_progress(f"batch:{global_idx}:{global_idx}:{display_total}:{failed_count}")
                 continue
             
             logger.info(f"  找到翻译图: {os.path.basename(translated_path)}")
@@ -314,8 +316,6 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                 # === DEBUG: 生成匹配调试图 ===
                 if translator.verbose:
                     try:
-                        from .generic import imwrite_unicode
-                        
                         # 复制生肉图作为画布
                         debug_img = raw_ctx.img_rgb.copy()
                         if len(debug_img.shape) == 2: # 灰度图转RGB
@@ -405,10 +405,9 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                     logger.info("    [修复模型=none] 使用替换翻译专用检测模块...")
                     
                     try:
-                        from .ctd_replace import detect_for_replace_translation
-                        from ..detection.ctd import ComicTextDetector
-                        from ..detection import get_detector
                         from ..config import Detector
+                        from ..detection import get_detector
+                        from .ctd_replace import detect_for_replace_translation
                         
                         # 获取 CTD 检测器实例
                         detector = get_detector(Detector.ctd)
@@ -622,7 +621,10 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                             # 直接粘贴模式下也不导出 PSD（因为没有文本区域数据）
                             if not config.render.enable_template_alignment:
                                 try:
-                                    from .photoshop_export import photoshop_export, get_psd_output_path
+                                    from .photoshop_export import (
+                                        get_psd_output_path,
+                                        photoshop_export,
+                                    )
                                     psd_path = get_psd_output_path(image_name)
                                     cli_cfg = getattr(config, 'cli', None)
                                     default_font = getattr(cli_cfg, 'psd_font', None)
@@ -643,7 +645,9 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
                 raw_ctx.success = True
             
             results.append(raw_ctx)
-            await translator._report_progress(progress_state)
+            if not getattr(raw_ctx, 'success', False):
+                failed_count += 1
+            await translator._report_progress(f"batch:{global_idx}:{global_idx}:{display_total}:{failed_count}")
             
             # ✅ 每处理完一张图片后立即清理内存
             translator._cleanup_context_memory(raw_ctx, keep_result=True)
@@ -661,17 +665,18 @@ async def translate_batch_replace_translation(translator, images_with_configs: L
             ctx.text_regions = []
             ctx.success = False
             results.append(ctx)
-            await translator._report_progress(progress_state)
+            failed_count += 1
+            await translator._report_progress(f"batch:{global_idx}:{global_idx}:{display_total}:{failed_count}")
         finally:
             if translated_image is not None and hasattr(translated_image, 'close'):
                 try:
                     translated_image.close()
-                except:
+                except Exception:
                     pass
             if loaded_source_image and hasattr(image, 'close'):
                 try:
                     image.close()
-                except:
+                except Exception:
                     pass
     
     logger.info(f"Replace translation completed: {len(results)} images processed")
@@ -1225,8 +1230,8 @@ def _refine_mask_winpy(rgbimg, rawmask):
     使用 DenseCRF 优化蒙版边缘
     """
     try:
-        from pydensecrf.utils import unary_from_softmax
         import pydensecrf.densecrf as dcrf
+        from pydensecrf.utils import unary_from_softmax
         
         if len(rawmask.shape) == 2:
             rawmask = rawmask[:, :, None]

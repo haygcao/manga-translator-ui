@@ -1,6 +1,12 @@
 
 from typing import Any
 
+from editor.editor_controller import EditorController
+from editor.editor_logic import EditorLogic
+from editor.editor_model import EditorModel
+from editor.graphics_view import GraphicsView
+from editor.original_compare_view import OriginalCompareView
+from main_view_parts.theme import get_current_theme
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -11,13 +17,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from editor.editor_controller import EditorController
-from editor.editor_logic import EditorLogic
-from editor.editor_model import EditorModel
-from editor.graphics_view import GraphicsView
-from editor.original_compare_view import OriginalCompareView
-from main_view_parts.theme import get_current_theme
 from services import get_i18n_manager
 from utils.shortcut_manager import EditorShortcutManager
 from widgets.editor_toolbar import EditorToolbar

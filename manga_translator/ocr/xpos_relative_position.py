@@ -2,9 +2,11 @@
 # Licensed under The MIT License [see LICENSE for details]
 
 import einops
+
 # import numpy as np
 import torch
 import torch.nn as nn
+
 
 def fixed_pos_embedding(x):
     seq_len, dim = x.shape

@@ -19,10 +19,8 @@ class EditorModel(QObject):
     inpainted_image_changed = pyqtSignal(object)
     compare_image_changed = pyqtSignal(object)
     region_display_mode_changed = pyqtSignal(str) # New signal
-    source_image_path_changed = pyqtSignal(str)
     original_image_alpha_changed = pyqtSignal(float)
     region_style_updated = pyqtSignal(int) # NEW SIGNAL for targeted style updates
-    region_text_updated = pyqtSignal(int)  # Signal for targeted text updates
     active_tool_changed = pyqtSignal(str)
     brush_size_changed = pyqtSignal(int)
 
@@ -42,14 +40,10 @@ class EditorModel(QObject):
         self._compare_image = None
         self._active_tool: str = 'select'
         self._brush_size: int = 30
-        self.controller = None
-
     # --- Getter / Setter 方法 ---
 
     def set_source_image_path(self, path: str):
-        if self._source_image_path != path:
-            self._source_image_path = path
-            self.source_image_path_changed.emit(path)
+        self._source_image_path = path
 
     def get_source_image_path(self) -> Optional[str]:
         return self._source_image_path
@@ -178,9 +172,6 @@ class EditorModel(QObject):
         self._compare_image = image
         self.compare_image_changed.emit(image)
 
-    def get_compare_image(self) -> Optional[Any]:
-        return self._compare_image
-
     def set_region_display_mode(self, mode: str):
         """设置区域显示模式 ('full', 'text_only', 'box_only', 'none')"""
         if self._region_display_mode != mode:
@@ -203,9 +194,6 @@ class EditorModel(QObject):
             self._active_tool = tool
             self.active_tool_changed.emit(tool)
 
-    def get_active_tool(self) -> str:
-        return self._active_tool
-
     def set_brush_size(self, size: int):
         if self._brush_size != size:
             self._brush_size = size
@@ -213,37 +201,3 @@ class EditorModel(QObject):
 
     def get_brush_size(self) -> int:
         return self._brush_size
-
-    def update_region_text(self, index: int, key: str, value: str):
-        """Updates only the text of a specific region and emits a targeted signal."""
-        all_regions = self.resource_manager.get_all_regions()
-        if 0 <= index < len(all_regions):
-            region_resource = all_regions[index]
-            if region_resource.data.get(key) != value:
-                self.resource_manager.update_region(region_resource.region_id, {key: value})
-                self.region_text_updated.emit(index) # Emit targeted signal
-
-    def update_region_style(self, index: int, key: str, value: Any):
-        """Updates only the style of a specific region and emits a targeted signal."""
-        all_regions = self.resource_manager.get_all_regions()
-        if 0 <= index < len(all_regions):
-            region_resource = all_regions[index]
-            old_value = region_resource.data.get(key)
-            if old_value != value:
-                self.resource_manager.update_region(region_resource.region_id, {key: value})
-                self.region_style_updated.emit(index) # Emit targeted signal
-
-    def update_region_data(self, index: int, key: str, value: Any):
-        """安全地更新单个区域的特定字段，但不发出信号。"""
-        all_regions = self.resource_manager.get_all_regions()
-        if 0 <= index < len(all_regions):
-            region_resource = all_regions[index]
-            if region_resource.data.get(key) != value:
-                self.resource_manager.update_region(region_resource.region_id, {key: value})
-
-    def update_region_silent(self, index: int, new_data: dict):
-        """静默更新整个区域数据,不发出信号"""
-        all_regions = self.resource_manager.get_all_regions()
-        if 0 <= index < len(all_regions):
-            region_resource = all_regions[index]
-            self.resource_manager.update_region(region_resource.region_id, new_data)

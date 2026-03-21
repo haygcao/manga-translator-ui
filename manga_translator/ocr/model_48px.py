@@ -1,25 +1,24 @@
 import math
-from typing import Callable, List, Optional, Tuple, Union
-from collections import defaultdict
 import os
 import shutil
-import cv2
-import numpy as np
-import einops
+from collections import defaultdict
+from typing import List, Optional
 
+import cv2
+import einops
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from manga_translator.config import OcrConfig
-from .xpos_relative_position import XPOS
+
+from ..utils import Quadrilateral, TextBlock, chunks, imwrite_unicode
+from ..utils.generic import AvgMeter
 
 # Roformer with Xpos and Local Attention ViT
-
 from .common import OfflineOCR
-from ..utils import TextBlock, Quadrilateral, chunks, imwrite_unicode
-from ..utils.generic import AvgMeter
-from ..utils.bubble import is_ignore
+from .xpos_relative_position import XPOS
 
 # Roformer with Xpos
 
@@ -578,7 +577,6 @@ class OCR(nn.Module):
         self.max_len = max_len
         self.dictionary = dictionary
         self.dict_size = len(dictionary)
-        _n_decoders = 4
         embd_dim = 320
         nhead = 4
         #self.backbone = LocalViT_FeatureExtractor(48, 3, dim = embd_dim, ff_dim = embd_dim * 4, n_layers = n_encoders)
@@ -896,6 +894,7 @@ class OCR(nn.Module):
         return result
 
 import numpy as np
+
 
 def convert_pl_model(filename: str) :
     sd = torch.load(filename, map_location = 'cpu')['state_dict']

@@ -1,11 +1,13 @@
 """
-文件列表模型 - 统一处理原图和翻译后的图
+文件列表模型 - 统一处理编辑器中的原图入口
 """
-import os
 import json
-from typing import List, Optional, Dict, Tuple
-from enum import Enum
+import os
 from dataclasses import dataclass
+from enum import Enum
+from typing import Dict, List, Optional
+
+from manga_translator.utils.path_manager import resolve_original_image_path
 
 SUPPORTED_IMAGE_EXTENSIONS = {
     '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.avif', '.tiff', '.tif', '.heic', '.heif'
@@ -15,8 +17,7 @@ SUPPORTED_IMAGE_EXTENSIONS = {
 class FileType(Enum):
     """文件类型枚举"""
     SOURCE = "source"           # 原图（有JSON）
-    TRANSLATED = "translated"   # 翻译后的图（有translation_map.json）
-    UNTRANSLATED = "untranslated"  # 未翻译的图（既没有JSON也没有map）
+    UNTRANSLATED = "untranslated"  # 未翻译的原图（暂无JSON）
 
 
 @dataclass
@@ -25,19 +26,17 @@ class FileItem:
     path: str                    # 文件路径
     file_type: FileType          # 文件类型
     json_path: Optional[str] = None      # JSON路径（如果是原图）
-    map_path: Optional[str] = None       # translation_map.json路径（如果是翻译后的图）
-    source_path: Optional[str] = None    # 对应的源文件路径（如果是翻译后的图）
-    translated_path: Optional[str] = None  # 对应的翻译后文件路径（如果是原图）
 
 
 class FileListModel:
     """
-    文件列表模型 - 统一处理原图和翻译后的图
+    文件列表模型 - 统一处理编辑器中的原图入口
     
     核心逻辑：
     1. 检查目录中是否有 JSON 文件 → 原图
-    2. 检查目录中是否有 translation_map.json → 翻译后的图
-    3. 都没有 → 未翻译的图
+    2. 都没有 → 未翻译的图
+    
+    translation_map 仅用于把“翻译结果图路径”解析回原图路径，不直接作为编辑器列表项。
     """
     
     def __init__(self):
@@ -68,6 +67,7 @@ class FileListModel:
         added_items = []
         
         for file_path in file_paths:
+            file_path = self.resolve_entry_path(file_path)
             if not os.path.exists(file_path):
                 continue
             if not os.path.isfile(file_path):
@@ -120,22 +120,16 @@ class FileListModel:
                 return item
         return None
     
-    def get_all_files(self) -> List[FileItem]:
-        """获取所有文件项"""
-        return self.files.copy()
-    
-    def get_files_by_type(self, file_type: FileType) -> List[FileItem]:
-        """
-        获取指定类型的文件
-        
-        Args:
-            file_type: 文件类型
-            
-        Returns:
-            文件项列表
-        """
-        return [item for item in self.files if item.file_type == file_type]
-    
+    def resolve_entry_path(self, file_path: str) -> str:
+        """将工作底图/翻译结果图统一解析为原图路径。"""
+        norm_path = os.path.normpath(file_path)
+
+        source_from_map = self._find_source_from_map(norm_path)
+        if source_from_map:
+            return source_from_map
+
+        return os.path.normpath(resolve_original_image_path(norm_path))
+
     def _identify_file(self, file_path: str) -> FileItem:
         """
         识别文件类型
@@ -154,28 +148,13 @@ class FileListModel:
         # 1. 检查是否有对应的 JSON 文件（原图）
         json_path = self._find_json_file(file_dir, file_name_no_ext)
         if json_path:
-            # 这是原图，尝试找到对应的翻译后文件
-            translated_path = self._find_translated_file(norm_path)
             return FileItem(
                 path=norm_path,
                 file_type=FileType.SOURCE,
-                json_path=json_path,
-                translated_path=translated_path
+                json_path=json_path
             )
         
-        # 2. 检查是否在 translation_map.json 中（翻译后的图）
-        map_path = os.path.join(file_dir, 'translation_map.json')
-        if os.path.exists(map_path):
-            source_path = self._find_source_from_map(norm_path, map_path)
-            if source_path:
-                return FileItem(
-                    path=norm_path,
-                    file_type=FileType.TRANSLATED,
-                    map_path=map_path,
-                    source_path=source_path
-                )
-        
-        # 3. 都没有，未翻译的图
+        # 没有 JSON，视为未翻译原图
         return FileItem(
             path=norm_path,
             file_type=FileType.UNTRANSLATED
@@ -204,33 +183,26 @@ class FileListModel:
         
         return None
     
-    def _find_translated_file(self, source_path: str) -> Optional[str]:
-        """
-        根据源文件路径查找翻译后的文件
-        
-        遍历所有可能的输出目录，查找 translation_map.json
-        """
-        # 这里简化处理，实际使用时可能需要从配置中获取输出目录
-        # 暂时返回 None，由调用方处理
-        return None
-    
-    def _find_source_from_map(self, translated_path: str, map_path: str) -> Optional[str]:
+    def _find_source_from_map(self, translated_path: str) -> Optional[str]:
         """
         从 translation_map.json 中查找源文件路径
         
         Args:
             translated_path: 翻译后的文件路径
-            map_path: translation_map.json 路径
             
         Returns:
             源文件路径，如果不存在返回 None
         """
         try:
+            map_path = os.path.join(os.path.dirname(translated_path), 'translation_map.json')
+            if not os.path.exists(map_path):
+                return None
+
             # 使用缓存
             if map_path not in self._map_cache:
                 with open(map_path, 'r', encoding='utf-8') as f:
                     self._map_cache[map_path] = json.load(f)
-            
+             
             translation_map = self._map_cache[map_path]
             norm_translated = os.path.normpath(translated_path)
             
@@ -243,21 +215,3 @@ class FileListModel:
         
         return None
     
-    def refresh_file(self, file_path: str) -> Optional[FileItem]:
-        """
-        刷新文件项（重新识别文件类型）
-        
-        Args:
-            file_path: 文件路径
-            
-        Returns:
-            更新后的文件项，如果不存在返回 None
-        """
-        norm_path = os.path.normpath(file_path)
-        for i, item in enumerate(self.files):
-            if os.path.normpath(item.path) == norm_path:
-                # 重新识别
-                new_item = self._identify_file(file_path)
-                self.files[i] = new_item
-                return new_item
-        return None

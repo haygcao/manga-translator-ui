@@ -7,29 +7,43 @@ This module contains all /translate/* endpoints for the manga translator server.
 import io
 import os
 import secrets
-import zipfile
 import tempfile
-from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
+import zipfile
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
-from manga_translator.utils import open_pil_image
-from manga_translator.server.request_extraction import (
-    get_ctx, while_streaming, TranslateRequest, BatchTranslateRequest, get_batch_ctx
-)
-from manga_translator.server.to_json import to_translation, TranslationResponse
-from manga_translator.server.core.config_manager import parse_config, admin_settings
-from manga_translator.server.core.response_utils import (
-    transform_to_image, transform_to_json, transform_to_bytes, apply_user_env_vars
-)
+from manga_translator.server.core.config_manager import admin_settings, parse_config
 from manga_translator.server.core.logging_manager import add_log
-from manga_translator.server.routes.translation_auth import (
-    verify_translation_auth,
-    log_translation_task_created,
-    track_task_start,
-    track_task_end
+from manga_translator.server.core.response_utils import (
+    apply_user_env_vars,
+    transform_to_bytes,
+    transform_to_image,
+    transform_to_json,
 )
+from manga_translator.server.request_extraction import (
+    BatchTranslateRequest,
+    TranslateRequest,
+    get_batch_ctx,
+    get_ctx,
+    while_streaming,
+)
+from manga_translator.server.routes.translation_auth import (
+    log_translation_task_created,
+    track_task_end,
+    track_task_start,
+    verify_translation_auth,
+)
+from manga_translator.server.to_json import TranslationResponse, to_translation
+from manga_translator.utils import open_pil_image
 
 router = APIRouter(prefix="/translate", tags=["translation"])
+
+
+def _get_translator_name(config) -> str:
+    if hasattr(config, 'translator') and hasattr(config.translator, 'translator'):
+        return config.translator.translator
+    return "unknown"
 
 
 # ============================================================================
@@ -205,8 +219,17 @@ async def translate_json_form(req: Request, image: UploadFile = File(...), confi
     """Translate image (form upload) and return JSON format result"""
     img = await image.read()
     conf = parse_config(config)
-    ctx = await get_ctx(req, conf, img, "save_json")
-    return to_translation(ctx)
+    username, ip_address = await verify_translation_auth(req, conf)
+    translator = _get_translator_name(conf)
+    conf._username = username
+    track_task_start(username)
+
+    try:
+        log_translation_task_created(username, ip_address, translator, conf)
+        ctx = await get_ctx(req, conf, img, "save_json")
+        return to_translation(ctx)
+    finally:
+        track_task_end(username)
 
 
 @router.post("/with-form/bytes", response_class=StreamingResponse, tags=["api", "form"],
@@ -215,8 +238,17 @@ async def bytes_form(req: Request, image: UploadFile = File(...), config: str = 
     """Translate image (form upload) and return custom byte format result"""
     img = await image.read()
     conf = parse_config(config)
-    ctx = await get_ctx(req, conf, img, "save_json")
-    return StreamingResponse(content=to_translation(ctx).to_bytes())
+    username, ip_address = await verify_translation_auth(req, conf)
+    translator = _get_translator_name(conf)
+    conf._username = username
+    track_task_start(username)
+
+    try:
+        log_translation_task_created(username, ip_address, translator, conf)
+        ctx = await get_ctx(req, conf, img, "save_json")
+        return StreamingResponse(content=to_translation(ctx).to_bytes())
+    finally:
+        track_task_end(username)
 
 
 @router.post("/with-form/image", response_description="the result image", tags=["api", "form"],
@@ -225,16 +257,25 @@ async def image_form(req: Request, image: UploadFile = File(...), config: str = 
     """Translate image (form upload) and return result image"""
     img = await image.read()
     conf = parse_config(config)
-    ctx = await get_ctx(req, conf, img, "normal")
-    
-    if not ctx.result:
-        raise HTTPException(500, detail="Translation failed: no result image generated")
-    
-    img_byte_arr = io.BytesIO()
-    ctx.result.save(img_byte_arr, format="PNG")
-    img_byte_arr.seek(0)
+    username, ip_address = await verify_translation_auth(req, conf)
+    translator = _get_translator_name(conf)
+    conf._username = username
+    track_task_start(username)
 
-    return StreamingResponse(img_byte_arr, media_type="image/png")
+    try:
+        log_translation_task_created(username, ip_address, translator, conf)
+        ctx = await get_ctx(req, conf, img, "normal")
+
+        if not ctx.result:
+            raise HTTPException(500, detail="Translation failed: no result image generated")
+
+        img_byte_arr = io.BytesIO()
+        ctx.result.save(img_byte_arr, format="PNG")
+        img_byte_arr.seek(0)
+
+        return StreamingResponse(img_byte_arr, media_type="image/png")
+    finally:
+        track_task_end(username)
 
 
 # ============================================================================
@@ -356,8 +397,12 @@ async def stream_image_form_web(req: Request, image: UploadFile = File(...), con
 async def translate_batch_json(req: Request, data: BatchTranslateRequest):
     """Batch translate images and return JSON format results"""
     import asyncio
-    from manga_translator.server.core.task_manager import register_active_task, unregister_active_task
+
     from manga_translator.server.core.logging_manager import generate_task_id
+    from manga_translator.server.core.task_manager import (
+        register_active_task,
+        unregister_active_task,
+    )
     
     task_id = generate_task_id()
     
@@ -370,6 +415,7 @@ async def translate_batch_json(req: Request, data: BatchTranslateRequest):
     # Convert config to Config object if needed using parse_config for consistency
     if isinstance(data.config, dict):
         import json
+
         from manga_translator.server.core.config_manager import parse_config
         config = parse_config(json.dumps(data.config))
     else:
@@ -401,7 +447,9 @@ async def translate_batch_json(req: Request, data: BatchTranslateRequest):
         results = await get_batch_ctx(req, config, data.images, data.batch_size, "normal", task_id)
         
         # Save each result to history
-        from manga_translator.server.request_extraction import save_translation_to_history
+        from manga_translator.server.request_extraction import (
+            save_translation_to_history,
+        )
         filenames = data.filenames if data.filenames else []
         for i, ctx in enumerate(results):
             if ctx and ctx.result:
@@ -432,8 +480,12 @@ async def translate_batch_json(req: Request, data: BatchTranslateRequest):
 async def batch_images(req: Request, data: BatchTranslateRequest):
     """Batch translate images and return zip archive containing translated images"""
     import asyncio
-    from manga_translator.server.core.task_manager import register_active_task, unregister_active_task
+
     from manga_translator.server.core.logging_manager import generate_task_id
+    from manga_translator.server.core.task_manager import (
+        register_active_task,
+        unregister_active_task,
+    )
     
     # 验证请求数据
     if not data.images or len(data.images) == 0:
@@ -454,6 +506,7 @@ async def batch_images(req: Request, data: BatchTranslateRequest):
         # If config is dict, convert to Config object using parse_config for consistency
         if isinstance(data.config, dict):
             import json
+
             from manga_translator.server.core.config_manager import parse_config
             config = parse_config(json.dumps(data.config))
         else:
@@ -635,7 +688,7 @@ async def batch_images(req: Request, data: BatchTranslateRequest):
         try:
             if img_data.get('image'):
                 img_data['image'].close()
-        except:
+        except Exception:
             pass
     result_images.clear()
     
@@ -1087,6 +1140,7 @@ async def import_txt_and_render(req: Request, image: UploadFile = File(...), txt
                                template: UploadFile = File(None), user_env_vars: str = Form("{}")):
     """Import TXT + JSON + image, return rendered image (using UI layer import logic)"""
     import importlib.util
+
     from manga_translator.utils.path_manager import get_work_dir
     
     # Import workflow_service module directly, avoid triggering __init__.py
@@ -1250,7 +1304,7 @@ async def import_json_and_render_stream(req: Request, image: UploadFile = File(.
                 os.unlink(json_path)
             if os.path.exists(temp_image_path):
                 os.unlink(temp_image_path)
-        except:
+        except Exception:
             pass  # Ignore cleanup errors
         raise
 
@@ -1261,6 +1315,7 @@ async def import_txt_and_render_stream(req: Request, image: UploadFile = File(..
                                       template: UploadFile = File(None), user_env_vars: str = Form("{}")):
     """Import TXT + JSON + image, return rendered image (streaming, with progress, using UI layer import logic)"""
     import importlib.util
+
     from manga_translator.utils.path_manager import get_work_dir
     
     # Import workflow_service module directly, avoid triggering __init__.py
@@ -1348,7 +1403,7 @@ async def import_txt_and_render_stream(req: Request, image: UploadFile = File(..
                 os.unlink(json_path)
             if os.path.exists(temp_image_path):
                 os.unlink(temp_image_path)
-        except:
+        except Exception:
             pass  # Ignore cleanup errors
         raise
 

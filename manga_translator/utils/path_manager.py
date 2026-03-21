@@ -8,12 +8,12 @@
 import os
 from typing import Optional, Tuple
 
-
 # 工作目录名称常量
 WORK_DIR_NAME = "manga_translator_work"
 JSON_SUBDIR = "json"
 TRANSLATIONS_SUBDIR = "translations"
 ORIGINALS_SUBDIR = "originals"
+YOLO_LABELS_SUBDIR = "yolo_labels"
 INPAINTED_SUBDIR = "inpainted"
 TRANSLATED_IMAGES_SUBDIR = "translated_images"  # 已翻译图片目录（替换翻译模式使用）
 EDITOR_BASE_SUBDIR = "editor_base"
@@ -21,6 +21,7 @@ WORK_DIR_RESERVED_NAMES = {
     JSON_SUBDIR,
     TRANSLATIONS_SUBDIR,
     ORIGINALS_SUBDIR,
+    YOLO_LABELS_SUBDIR,
     INPAINTED_SUBDIR,
     TRANSLATED_IMAGES_SUBDIR,
     EDITOR_BASE_SUBDIR,
@@ -200,6 +201,64 @@ def get_translated_txt_path(image_path: str, create_dir: bool = True) -> str:
     
     base_name = os.path.splitext(os.path.basename(image_path))[0]
     return os.path.join(translations_dir, f"{base_name}_translated.txt")
+
+
+def get_yolo_labels_dir(image_path: str, create_dir: bool = True) -> str:
+    """
+    获取 YOLO 标注目录路径。
+
+    Args:
+        image_path: 原图片路径
+        create_dir: 是否自动创建目录
+
+    Returns:
+        YOLO 标注目录的绝对路径
+    """
+    work_dir = get_work_dir(image_path)
+    yolo_labels_dir = os.path.join(work_dir, YOLO_LABELS_SUBDIR)
+
+    if create_dir:
+        os.makedirs(yolo_labels_dir, exist_ok=True)
+
+    return yolo_labels_dir
+
+
+def get_yolo_label_path(image_path: str, create_dir: bool = True) -> str:
+    """
+    获取图片对应的 YOLO 标注文件路径。
+
+    Args:
+        image_path: 原图片路径
+        create_dir: 是否自动创建目录
+
+    Returns:
+        YOLO 标注文件的绝对路径
+    """
+    yolo_labels_dir = get_yolo_labels_dir(image_path, create_dir=create_dir)
+    base_name = os.path.splitext(os.path.basename(resolve_original_image_path(image_path)))[0]
+    return os.path.join(yolo_labels_dir, f"{base_name}.txt")
+
+
+def find_yolo_label_path(image_path: str) -> Optional[str]:
+    """
+    查找图片对应的 YOLO 标注文件。
+
+    Args:
+        image_path: 原图片路径
+
+    Returns:
+        找到的 YOLO 标注文件路径，如果不存在返回 None
+    """
+    original_path = resolve_original_image_path(image_path)
+    yolo_label_path = get_yolo_label_path(original_path, create_dir=False)
+    if os.path.exists(yolo_label_path):
+        return yolo_label_path
+
+    legacy_yolo_label_path = os.path.splitext(original_path)[0] + ".txt"
+    if os.path.exists(legacy_yolo_label_path):
+        return legacy_yolo_label_path
+
+    return None
 
 
 def get_inpainted_path(image_path: str, create_dir: bool = True) -> str:

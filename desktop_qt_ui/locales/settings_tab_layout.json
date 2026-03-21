@@ -65,6 +65,7 @@
           "title": "Detection"
         },
         "detector.detector",
+        "detector.import_yolo_labels",
         "detector.use_yolo_obb",
         "detector.min_box_area_ratio",
         {
@@ -86,6 +87,7 @@
       "items": [
         "translator.translator",
         "translator.target_lang",
+        "translator.keep_lang",
         "translator.enable_streaming",
         "translator.no_text_lang_skip",
         "translator.extract_glossary",

@@ -1,10 +1,32 @@
 
-import os
 import cv2
 import numpy as np
-from manga_translator.utils import TextBlock, rotate_polygons
+
+# --- 新增Imports for Refactoring ---
+from editor import text_renderer_backend
+from editor.editor_model import EditorModel
+from editor.graphics_items import RegionTextItem, TransparentPixmapItem
+from editor.region_render_snapshot import RegionRenderSnapshot
+from editor.render_layout_pipeline import (
+    build_region_specific_params,
+    calculate_region_dst_points,
+    prepare_layout_context,
+)
+from editor.selection_manager import SelectionManager
+from editor.text_render_pipeline import (
+    build_region_render_params as pipeline_build_region_render_params,
+)
+from editor.text_render_pipeline import (
+    build_text_block_from_region as pipeline_build_text_block_from_region,
+)
+from editor.text_render_pipeline import (
+    clear_region_text,
+    make_text_render_cache_key,
+    render_region_text,
+)
+from main_view_parts.theme import get_current_theme, get_theme_colors
 from PIL.ImageQt import ImageQt
-from PyQt6.QtCore import QPoint, QPointF, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QPointF, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import (
     QColor,
     QCursor,
@@ -14,29 +36,10 @@ from PyQt6.QtGui import (
     QPixmap,
     QTransform,
 )
-from PyQt6.QtWidgets import QApplication, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QMenu, QToolTip
-
-# --- 新增Imports for Refactoring ---
-from editor import text_renderer_backend
-from editor.editor_model import EditorModel
-from editor.graphics_items import RegionTextItem, TransparentPixmapItem
-from editor.selection_manager import SelectionManager
-from editor.text_render_pipeline import (
-    build_text_block_from_region as pipeline_build_text_block_from_region,
-    build_region_render_params as pipeline_build_region_render_params,
-    make_text_render_cache_key,
-    render_region_text,
-    clear_region_text,
-)
-from editor.render_layout_pipeline import (
-    build_region_specific_params,
-    calculate_region_dst_points,
-    prepare_layout_context,
-)
-from editor.region_render_snapshot import RegionRenderSnapshot
-from main_view_parts.theme import get_current_theme
-from main_view_parts.theme import get_theme_colors
+from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView, QMenu
 from services import get_render_parameter_service
+
+from manga_translator.utils import TextBlock
 
 # --- 结束新增 ---
 
@@ -47,8 +50,6 @@ class GraphicsView(QGraphicsView):
     """
     region_geometry_changed = pyqtSignal(int, dict)
     _layout_result_ready = pyqtSignal(list)  # 布局计算结果信号
-    color_picked = pyqtSignal(str, str)  # target, hex_color
-    color_pick_cancelled = pyqtSignal()
     view_state_changed = pyqtSignal(object, object)
 
     def __init__(self, model: EditorModel, parent=None):
@@ -73,8 +74,6 @@ class GraphicsView(QGraphicsView):
         # --- Mask Editing State ---
         self._active_tool = 'select'
         self._brush_size = 30
-        self._color_pick_target: str | None = None
-        self._color_pick_cursor_override = False
         self._is_drawing = False
         self._current_draw_scene_points: list[QPointF] = []
         self._current_draw_mask_points: list[tuple[int, int]] = []
@@ -156,7 +155,6 @@ class GraphicsView(QGraphicsView):
         self.model.inpainted_image_changed.connect(self.on_inpainted_image_changed)
         self.model.region_display_mode_changed.connect(self.on_region_display_mode_changed)
         self.model.original_image_alpha_changed.connect(self.on_original_image_alpha_changed)
-        self.model.region_text_updated.connect(self.on_region_text_updated) # New connection
         self.model.region_style_updated.connect(self.on_region_style_updated) # NEW: For targeted style updates
         # selection_changed 由 SelectionManager 处理，无需在此连接
 
@@ -193,11 +191,6 @@ class GraphicsView(QGraphicsView):
 
     def clear_all_state(self):
         """清空所有状态,包括items、缓存、计时器"""
-        if self._color_pick_target is not None:
-            self._color_pick_target = None
-            self._clear_color_pick_preview()
-            self.color_pick_cancelled.emit()
-        self._clear_color_pick_cursor_override()
         self.selection_manager.suppress_forward_sync(True)  # 防止 removeItem 触发选择同步
         try:
             self._reset_drawing_state()
@@ -439,11 +432,6 @@ class GraphicsView(QGraphicsView):
             self._inpainted_image_item.setOpacity(1.0) # 始终完全不透明
 
         self._inpainted_image_item.setVisible(True)
-
-    @pyqtSlot(int)
-    def on_region_text_updated(self, region_index: int):
-        """Slot for targeted update when only text changes."""
-        self._perform_single_item_update(region_index)
 
     @pyqtSlot(int)
     def on_region_style_updated(self, region_index: int):
@@ -999,83 +987,6 @@ class GraphicsView(QGraphicsView):
         self._update_cursor() # Update cursor size on zoom
         self._emit_view_state_changed()
 
-    @pyqtSlot(str)
-    def start_color_pick(self, target: str):
-        if target not in ("font", "stroke"):
-            return
-        if self._image_item is None or self._image_np is None:
-            self.color_pick_cancelled.emit()
-            return
-        self._color_pick_target = target
-        self._ensure_color_pick_cursor_override()
-        self._update_cursor()
-        self._update_color_pick_preview_at_global(QCursor.pos())
-
-    @pyqtSlot()
-    def cancel_color_pick(self):
-        if self._color_pick_target is None:
-            return
-        self._color_pick_target = None
-        self._clear_color_pick_preview()
-        self._clear_color_pick_cursor_override()
-        self._update_cursor()
-        self.color_pick_cancelled.emit()
-
-    def _sample_color_info_from_view_pos(self, pos) -> tuple[str, int, int, int] | None:
-        if self._image_item is None or self._image_np is None:
-            return None
-
-        scene_point = self.mapToScene(pos)
-        image_point = self._image_item.mapFromScene(scene_point)
-
-        x = float(image_point.x())
-        y = float(image_point.y())
-        h, w = self._image_np.shape[:2]
-        if x < 0.0 or y < 0.0 or x >= float(w) or y >= float(h):
-            return None
-
-        xi = min(max(int(round(x)), 0), w - 1)
-        yi = min(max(int(round(y)), 0), h - 1)
-        r, g, b = self._image_np[yi, xi][:3]
-        return f"#{int(r):02x}{int(g):02x}{int(b):02x}", int(r), int(g), int(b)
-
-    def _sample_color_from_view_pos(self, pos) -> str | None:
-        info = self._sample_color_info_from_view_pos(pos)
-        if info is None:
-            return None
-        return info[0]
-
-    def _update_color_pick_preview_at_view_pos(self, view_pos):
-        info = self._sample_color_info_from_view_pos(view_pos)
-        if info is None:
-            QToolTip.hideText()
-            return
-        hex_color, r, g, b = info
-        tip = (
-            f"<span style='display:inline-block;width:10px;height:10px;"
-            f"background:{hex_color};border:1px solid #fff;'></span> "
-            f"{hex_color.upper()}  RGB({r}, {g}, {b})"
-        )
-        global_pos = self.mapToGlobal(view_pos + QPoint(16, 18))
-        QToolTip.showText(global_pos, tip, self.viewport())
-
-    def _update_color_pick_preview_at_global(self, global_pos: QPoint):
-        self._update_color_pick_preview_at_view_pos(self.mapFromGlobal(global_pos))
-
-    def _clear_color_pick_preview(self):
-        QToolTip.hideText()
-
-    def _ensure_color_pick_cursor_override(self):
-        if not self._color_pick_cursor_override:
-            QApplication.setOverrideCursor(QCursor(Qt.CursorShape.CrossCursor))
-            self._color_pick_cursor_override = True
-
-    def _clear_color_pick_cursor_override(self):
-        if self._color_pick_cursor_override:
-            if QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
-            self._color_pick_cursor_override = False
-
     def mousePressEvent(self, event):
         """处理鼠标按下事件以实现平移、选择和开始绘图"""
         # 确保点击画布时，保存文本框的编辑内容
@@ -1085,23 +996,6 @@ class GraphicsView(QGraphicsView):
         
         # 让画布获取焦点
         self.setFocus()
-
-        if self._color_pick_target is not None:
-            if event.button() == Qt.MouseButton.LeftButton:
-                color_hex = self._sample_color_from_view_pos(event.pos())
-                if color_hex:
-                    target = self._color_pick_target
-                    self._color_pick_target = None
-                    self._clear_color_pick_preview()
-                    self._clear_color_pick_cursor_override()
-                    self._update_cursor()
-                    self.color_picked.emit(target, color_hex)
-                event.accept()
-                return
-            if event.button() == Qt.MouseButton.RightButton:
-                self.cancel_color_pick()
-                event.accept()
-                return
         
         if self._active_tool == 'draw_textbox' and event.button() == Qt.MouseButton.LeftButton:
             self._start_drawing_textbox(event.pos())
@@ -1172,11 +1066,6 @@ class GraphicsView(QGraphicsView):
 
     def mouseMoveEvent(self, event):
         """Handle mouse move for drawing."""
-        if self._color_pick_target is not None:
-            self._update_color_pick_preview_at_view_pos(event.pos())
-            event.accept()
-            return
-
         # 处理框选
         if self.selection_manager.is_box_selecting:
             current_pos = self.mapToScene(event.pos())
@@ -1197,11 +1086,6 @@ class GraphicsView(QGraphicsView):
 
     def mouseReleaseEvent(self, event):
         """处理鼠标释放事件"""
-        if self._color_pick_target is not None:
-            if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
-                event.accept()
-                return
-
         # 处理框选完成
         if self.selection_manager.is_box_selecting and event.button() == Qt.MouseButton.LeftButton:
             ctrl_pressed = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
@@ -1481,14 +1365,6 @@ class GraphicsView(QGraphicsView):
 
     def _update_cursor(self):
         """Updates the cursor to match the selected tool and brush size."""
-        if self._color_pick_target is not None:
-            self._ensure_color_pick_cursor_override()
-            cursor = QCursor(Qt.CursorShape.CrossCursor)
-            self.setCursor(cursor)
-            self.viewport().setCursor(cursor)
-            return
-        self._clear_color_pick_cursor_override()
-
         if self._active_tool in ['pen', 'eraser', 'brush']:
             size = max(10, int(self._brush_size * self.transform().m11()))
 
@@ -1536,16 +1412,10 @@ class GraphicsView(QGraphicsView):
     def enterEvent(self, event):
         """Handle mouse enter event."""
         self._update_cursor()
-        if self._color_pick_target is not None:
-            self._update_color_pick_preview_at_global(QCursor.pos())
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         """Handle mouse leave event."""
-        if self._color_pick_target is not None:
-            self._clear_color_pick_preview()
-            super().leaveEvent(event)
-            return
         # Reset cursor when leaving the view
         self.unsetCursor()
         self.viewport().unsetCursor()

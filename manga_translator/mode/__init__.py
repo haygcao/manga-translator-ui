@@ -1,24 +1,23 @@
-from typing import Tuple, List
-import numpy as np
-import cv2
-import math
 import logging
+import math
+from typing import List, Tuple
 
-from tqdm import tqdm
+import cv2
+import numpy as np
 from shapely.geometry import Polygon
+from tqdm import tqdm
+
 # from sklearn.mixture import BayesianGaussianMixture
 # from functools import reduce
 # from collections import defaultdict
 # from scipy.optimize import linear_sum_assignment
-
 from ..utils import (
     Quadrilateral,
-    image_resize,
-    imwrite_unicode,
     build_det_rearrange_plan,
     det_collect_plan_patches,
     det_rearrange_patch_array,
     det_unrearrange_patch_maps,
+    imwrite_unicode,
 )
 
 COLOR_RANGE_SIGMA = 1.5 # how many stddev away is considered the same color
@@ -76,8 +75,8 @@ def complete_mask_fill(text_lines: List[Tuple[int, int, int, int]], mask_shape):
         final_mask = cv2.rectangle(final_mask, (x, y), (x + w, y + h), (255), -1)
     return final_mask
 
-from pydensecrf.utils import compute_unary, unary_from_softmax
 import pydensecrf.densecrf as dcrf
+from pydensecrf.utils import unary_from_softmax
 
 # 兼容不同版本的 pydensecrf
 DIAG_KERNEL = getattr(dcrf, 'DIAG_KERNEL', 0)

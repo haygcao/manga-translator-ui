@@ -2,10 +2,10 @@
 Configuration data models.
 """
 
-from dataclasses import dataclass, asdict, field
-from datetime import datetime, timezone
-from typing import Optional, List
 import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from typing import List, Optional
 
 
 @dataclass

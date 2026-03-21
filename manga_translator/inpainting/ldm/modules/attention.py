@@ -1,24 +1,25 @@
-from inspect import isfunction
 import math
+from inspect import isfunction
+from typing import Any, Optional
+
 import torch
 import torch.nn.functional as F
-from torch import nn, einsum
 from einops import rearrange, repeat
-from typing import Optional, Any
+from torch import einsum, nn
 
 from .diffusionmodules.util import checkpoint
-
 
 try:
     import xformers
     import xformers.ops
     XFORMERS_IS_AVAILABLE = True
-except (ImportError, AttributeError) as e:
+except (ImportError, AttributeError):
     XFORMERS_IS_AVAILABLE = False
     # 忽略triton相关的AttributeError
 
 # CrossAttn precision handling
 import os
+
 _ATTN_PRECISION = os.environ.get("ATTN_PRECISION", "fp32")
 
 def exists(val):

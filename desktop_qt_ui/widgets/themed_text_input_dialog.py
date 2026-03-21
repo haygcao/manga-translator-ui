@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from main_view_parts.theme import get_current_theme_colors
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QShowEvent
 from PyQt6.QtWidgets import (
@@ -11,8 +12,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from main_view_parts.theme import get_current_theme_colors
 
 
 def _tokens() -> dict[str, str]:

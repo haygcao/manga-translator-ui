@@ -9,45 +9,44 @@ from argparse import Namespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from fastapi import FastAPI, Request, Header, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.exceptions import RequestValidationError
-
-from manga_translator.server.instance import ExecutorInstance, executor_instances
 import logging
+
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # Import core modules
 from manga_translator.server.core import config_manager, logging_manager, task_manager
+from manga_translator.server.instance import ExecutorInstance, executor_instances
 
 # 初始化服务器配置文件（如果不存在则从模板复制）
 config_manager.init_server_config_file()
 
 # Import route modules
+# Import sessions_router
 from manga_translator.server.routes import (
-    translation_router,
     admin_router,
-    config_router,
-    files_router,
-    web_router,
-    users_router,
     audit_router,
     auth_router,
-    init_auth_services,
-    groups_router,
-    resources_router,
-    init_resource_routes,
-    history_router,
-    init_history_routes,
-    quota_router,
-    init_quota_routes,
     config_management_router,
-    logs_router
+    config_router,
+    files_router,
+    groups_router,
+    history_router,
+    init_auth_services,
+    init_history_routes,
+    init_quota_routes,
+    init_resource_routes,
+    logs_router,
+    quota_router,
+    resources_router,
+    sessions_router,
+    translation_router,
+    users_router,
+    web_router,
 )
-
-# Import sessions_router
-from manga_translator.server.routes import sessions_router
 
 logger = logging.getLogger('manga_translator.server')
 
@@ -56,6 +55,7 @@ os.environ['MANGA_TRANSLATOR_WEB_SERVER'] = 'true'
 
 # 启动时加载 .env 文件
 from dotenv import load_dotenv
+
 env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 if os.path.exists(env_path):
     load_dotenv(env_path)
@@ -91,11 +91,11 @@ async def startup_event():
     
     from manga_translator.server.core import (
         AccountService,
-        SessionService,
-        PermissionService,
         AuditService,
+        PermissionService,
+        SessionService,
         init_middleware_services,
-        init_system
+        init_system,
     )
     from manga_translator.server.core.logging_manager import add_log
     from manga_translator.server.routes.translation_auth import init_translation_auth
@@ -103,11 +103,19 @@ async def startup_event():
     # 添加启动日志
     add_log("服务器正在启动...", "INFO")
     logger.info("Server starting up...")
+    from manga_translator.server.core.permission_integration import (
+        IntegratedPermissionService,
+    )
+    from manga_translator.server.core.permission_service_v2 import (
+        EnhancedPermissionService,
+    )
     from manga_translator.server.core.resource_service import ResourceManagementService
-    from manga_translator.server.core.permission_service_v2 import EnhancedPermissionService
-    from manga_translator.server.core.permission_integration import IntegratedPermissionService
-    from manga_translator.server.repositories.resource_repository import ResourceRepository
-    from manga_translator.server.repositories.permission_repository import PermissionRepository
+    from manga_translator.server.repositories.permission_repository import (
+        PermissionRepository,
+    )
+    from manga_translator.server.repositories.resource_repository import (
+        ResourceRepository,
+    )
     
     # Initialize services - 所有数据文件统一放在 manga_translator/server/data 目录
     DATA_DIR = "manga_translator/server/data"
@@ -147,7 +155,9 @@ async def startup_event():
     # Initialize history management services
     from manga_translator.server.core.history_service import HistoryManagementService
     from manga_translator.server.core.search_service import SearchService
-    from manga_translator.server.repositories.translation_repository import TranslationRepository
+    from manga_translator.server.repositories.translation_repository import (
+        TranslationRepository,
+    )
     
     translation_repo = TranslationRepository("manga_translator/server/data/translation_history.json")
     history_service = HistoryManagementService(
@@ -160,8 +170,8 @@ async def startup_event():
     init_history_routes(history_service, integrated_permission_service, search_service)
     
     # Initialize quota management services
-    from manga_translator.server.core.quota_service import QuotaManagementService
     from manga_translator.server.core.group_service import GroupService
+    from manga_translator.server.core.quota_service import QuotaManagementService
     from manga_translator.server.repositories.quota_repository import QuotaRepository
     
     quota_repo = QuotaRepository("manga_translator/server/data/quotas.json")
@@ -250,10 +260,6 @@ async def favicon():
 locales_dir = os.path.join(os.path.dirname(__file__), "../../desktop_qt_ui/locales")
 if os.path.exists(locales_dir):
     app.mount("/locales", StaticFiles(directory=locales_dir), name="locales")
-
-# Mount result folder
-if os.path.exists("../result"):
-    app.mount("/result", StaticFiles(directory="../result"), name="result")
 
 # Register route modules
 app.include_router(translation_router)

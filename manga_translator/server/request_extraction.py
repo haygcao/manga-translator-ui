@@ -2,22 +2,22 @@
 import asyncio
 import builtins
 import io
+import json
+import logging
 import os
 import re
-import json
 from base64 import b64decode
+from contextlib import asynccontextmanager
 from typing import Union
 
 import requests
-from PIL import Image
-from fastapi import Request, HTTPException
-from pydantic import BaseModel
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
+from PIL import Image
+from pydantic import BaseModel
 
 from manga_translator import Config
 from manga_translator.utils import normalize_pil_image, open_pil_image
-from contextlib import asynccontextmanager
-import logging
 
 logger = logging.getLogger('manga_translator.server')
 
@@ -70,13 +70,13 @@ def _remove_task_log_handler(handler: TaskLogHandler):
     try:
         mt_logger = logging.getLogger('manga_translator')
         mt_logger.removeHandler(handler)
-    except:
+    except Exception:
         pass
     
     try:
         mt_hyphen_logger = logging.getLogger('manga-translator')
         mt_hyphen_logger.removeHandler(handler)
-    except:
+    except Exception:
         pass
 
 
@@ -142,8 +142,12 @@ def _run_translate_sync(pil_image, config: Config, task_id: str = None, cancel_c
         cancel_check_callback: 取消检查回调函数
     """
     import threading
-#     import gc
-    from manga_translator.server.core.task_manager import update_task_thread_id, get_global_translator
+
+    #     import gc
+    from manga_translator.server.core.task_manager import (
+        get_global_translator,
+        update_task_thread_id,
+    )
     
     # 更新任务的线程ID
     if task_id:
@@ -204,8 +208,12 @@ def _run_translate_batch_sync(images_with_configs: list, batch_size: int, task_i
         cancel_check_callback: 取消检查回调函数
     """
     import threading
-#     import gc
-    from manga_translator.server.core.task_manager import update_task_thread_id, get_global_translator
+
+    #     import gc
+    from manga_translator.server.core.task_manager import (
+        get_global_translator,
+        update_task_thread_id,
+    )
     
     # 更新任务的线程ID
     if task_id:
@@ -260,6 +268,8 @@ def prepare_translator_params(config: Config, workflow: str = "normal") -> dict:
     if hasattr(config, 'cli'):
         if hasattr(config.cli, 'load_text'):
             config.cli.load_text = False
+        if hasattr(config.cli, 'translate_json_only'):
+            config.cli.translate_json_only = False
         if hasattr(config.cli, 'template'):
             config.cli.template = False
         if hasattr(config.cli, 'generate_and_export'):
@@ -313,8 +323,8 @@ def prepare_translator_params(config: Config, workflow: str = "normal") -> dict:
 
 async def get_ctx(req: Request, config: Config, image: str|bytes, workflow: str = "normal"):
     """Translate single image. 使用全局翻译器实例，复用已加载的模型。"""
-    from manga_translator.server.core.task_manager import get_semaphore
     from manga_translator.server.core.logging_manager import add_log
+    from manga_translator.server.core.task_manager import get_semaphore
     
     # 动态获取 semaphore（支持热加载）
     translation_semaphore = get_semaphore()
@@ -330,7 +340,7 @@ async def get_ctx(req: Request, config: Config, image: str|bytes, workflow: str 
             if translation_semaphore:
                 try:
                     waiters_count = len(translation_semaphore._waiters) if hasattr(translation_semaphore, '_waiters') and translation_semaphore._waiters else 0
-                except:
+                except Exception:
                     waiters_count = 0
                 
                 if waiters_count > 0:
@@ -339,11 +349,15 @@ async def get_ctx(req: Request, config: Config, image: str|bytes, workflow: str 
                 async with translation_semaphore:
                     add_log("获得翻译槽位，开始翻译", "INFO")
                     # 使用翻译线程池执行，复用全局翻译器
-                    from manga_translator.server.core.task_manager import run_in_translator_thread
+                    from manga_translator.server.core.task_manager import (
+                        run_in_translator_thread,
+                    )
                     ctx = await run_in_translator_thread(_run_translate_sync, pil_image, config)
             else:
                 # 没有 semaphore 时直接执行
-                from manga_translator.server.core.task_manager import run_in_translator_thread
+                from manga_translator.server.core.task_manager import (
+                    run_in_translator_thread,
+                )
                 ctx = await run_in_translator_thread(_run_translate_sync, pil_image, config)
         
         result = {
@@ -370,7 +384,7 @@ async def get_ctx(req: Request, config: Config, image: str|bytes, workflow: str 
         # 关闭输入图片
         try:
             pil_image.close()
-        except:
+        except Exception:
             pass
         
         # 注意：ctx的清理和内存回收已在_run_translate_sync的cleanup_after_request中处理
@@ -379,9 +393,22 @@ async def get_ctx(req: Request, config: Config, image: str|bytes, workflow: str 
 
 async def while_streaming(req: Request, transform, config: Config, image: bytes | str, workflow: str = "normal", original_filename: str = None):
     """Streaming translation with concurrency control."""
-    from manga_translator.server.core.task_manager import get_semaphore, register_active_task, unregister_active_task, is_task_cancelled, update_task_status
-    from manga_translator.server.core.logging_manager import add_log, generate_task_id, set_task_id, set_session_id
-    from manga_translator.server.core.config_manager import reload_admin_settings_if_changed
+    from manga_translator.server.core.config_manager import (
+        reload_admin_settings_if_changed,
+    )
+    from manga_translator.server.core.logging_manager import (
+        add_log,
+        generate_task_id,
+        set_session_id,
+        set_task_id,
+    )
+    from manga_translator.server.core.task_manager import (
+        get_semaphore,
+        is_task_cancelled,
+        register_active_task,
+        unregister_active_task,
+        update_task_status,
+    )
     
     # 检查配置是否变化（热加载）
     reload_admin_settings_if_changed()
@@ -426,7 +453,11 @@ async def while_streaming(req: Request, transform, config: Config, image: bytes 
         print(f"[DEBUG] generate() 开始, semaphore={translation_semaphore}, task_id={task_id}")
         
         # 先检查用户级并发限制（在获取 semaphore 之前）
-        from manga_translator.server.core.middleware import check_concurrent_limit, increment_task_count, decrement_task_count
+        from manga_translator.server.core.middleware import (
+            check_concurrent_limit,
+            decrement_task_count,
+            increment_task_count,
+        )
         
         # 增加用户任务计数
         increment_task_count(username)
@@ -446,7 +477,7 @@ async def while_streaming(req: Request, transform, config: Config, image: bytes 
                 # 检查当前等待队列
                 try:
                     waiters_count = len(translation_semaphore._waiters) if hasattr(translation_semaphore, '_waiters') and translation_semaphore._waiters else 0
-                except:
+                except Exception:
                     waiters_count = 0
                 
                 if waiters_count > 0:
@@ -514,8 +545,12 @@ async def while_streaming(req: Request, transform, config: Config, image: bytes 
                 try:
                     add_log("调用翻译器", "INFO")
                     # 使用翻译线程池执行，复用全局翻译器
-                    from manga_translator.server.core.task_manager import run_in_translator_thread
-                    cancel_callback = lambda: is_task_cancelled(task_id)
+                    from manga_translator.server.core.task_manager import (
+                        run_in_translator_thread,
+                    )
+                    def cancel_callback():
+                        return is_task_cancelled(task_id)
+
                     ctx = await run_in_translator_thread(_run_translate_sync, pil_image, config, task_id, cancel_callback)
                     add_log(f"翻译完成，有结果: {ctx.result is not None if hasattr(ctx, 'result') else False}", "INFO")
                     
@@ -591,7 +626,7 @@ async def while_streaming(req: Request, transform, config: Config, image: bytes 
             add_log("Task cancelled", "WARNING")
             try:
                 yield pack_message(2, json.dumps({"error": "Task cancelled by admin", "stage": "cancelled"}, ensure_ascii=False).encode('utf-8'))
-            except:
+            except Exception:
                 pass
         except Exception as e:
             error_msg = f"Translation failed: {type(e).__name__}: {str(e)}"
@@ -600,21 +635,23 @@ async def while_streaming(req: Request, transform, config: Config, image: bytes 
             traceback.print_exc()
             try:
                 yield pack_message(2, json.dumps({"error": error_msg, "stage": "unknown"}, ensure_ascii=False).encode('utf-8'))
-            except:
+            except Exception:
                 pass
         finally:
             add_log("Cleaning up", "DEBUG")
             try:
                 # 使用统一的Context清理函数
                 if 'ctx' in locals() and ctx:
-                    from manga_translator.server.core.task_manager import cleanup_context
+                    from manga_translator.server.core.task_manager import (
+                        cleanup_context,
+                    )
                     cleanup_context(ctx)
                 
                 # 关闭输入图片
                 if 'pil_image' in locals() and pil_image:
                     try:
                         pil_image.close()
-                    except:
+                    except Exception:
                         pass
                 
                 # 注意：不要调用translator.unload_models()
@@ -646,8 +683,11 @@ async def get_batch_ctx(req: Request, config: Config, images: list[str|bytes], b
     Args:
         task_id: 任务ID，用于检查取消状态
     """
-    from manga_translator.server.core.task_manager import is_task_cancelled, get_semaphore
     from manga_translator.server.core.logging_manager import add_log
+    from manga_translator.server.core.task_manager import (
+        get_semaphore,
+        is_task_cancelled,
+    )
     
     # 动态获取 semaphore（支持热加载）
     translation_semaphore = get_semaphore()
@@ -685,7 +725,7 @@ async def get_batch_ctx(req: Request, config: Config, images: list[str|bytes], b
                 from manga_translator.server.core.task_manager import update_task_status
                 try:
                     waiters_count = len(translation_semaphore._waiters) if hasattr(translation_semaphore, '_waiters') and translation_semaphore._waiters else 0
-                except:
+                except Exception:
                     waiters_count = 0
                 
                 print(f"[DEBUG] get_batch_ctx 准备获取 semaphore, task_id={task_id}, waiters={waiters_count}")
@@ -699,14 +739,18 @@ async def get_batch_ctx(req: Request, config: Config, images: list[str|bytes], b
                     add_log("批量翻译获得槽位，开始执行", "INFO")
                     
                     # 使用翻译线程池执行，复用全局翻译器
-                    from manga_translator.server.core.task_manager import run_in_translator_thread
+                    from manga_translator.server.core.task_manager import (
+                        run_in_translator_thread,
+                    )
                     cancel_callback = (lambda: is_task_cancelled(task_id)) if task_id else None
                     contexts = await run_in_translator_thread(
                         _run_translate_batch_sync, images_with_configs, batch_size, task_id, cancel_callback
                     )
             else:
                 # 没有 semaphore 时直接执行
-                from manga_translator.server.core.task_manager import run_in_translator_thread
+                from manga_translator.server.core.task_manager import (
+                    run_in_translator_thread,
+                )
                 cancel_callback = (lambda: is_task_cancelled(task_id)) if task_id else None
                 contexts = await run_in_translator_thread(
                     _run_translate_batch_sync, images_with_configs, batch_size, task_id, cancel_callback
@@ -752,7 +796,7 @@ async def get_batch_ctx(req: Request, config: Config, images: list[str|bytes], b
             for pil_img in pil_images:
                 try:
                     pil_img.close()
-                except:
+                except Exception:
                     pass
             
             # 注意：contexts的清理和内存回收已在_run_translate_batch_sync的cleanup_after_request中处理
@@ -774,9 +818,10 @@ async def save_translation_to_history(ctx, username: str, task_id: str, workflow
         original_filename: 原始文件名（可选）
         config: 配置对象（可选，用于获取输出格式）
     """
-    import tempfile
     import shutil
+    import tempfile
     from datetime import datetime, timezone
+
     from manga_translator.server.core.logging_manager import add_log
     
     add_log(f"Saving translation to history for user: {username}, task: {task_id[:8]}", "DEBUG")
@@ -934,5 +979,5 @@ async def save_translation_to_history(ctx, username: str, task_id: str, workflow
         try:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-        except:
+        except Exception:
             pass

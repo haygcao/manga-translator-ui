@@ -1,9 +1,7 @@
-from PyQt6.QtCore import QObject, QRectF
+from main_view_parts.theme import get_current_theme_colors
+from PyQt6.QtCore import QObject, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QPen
 from PyQt6.QtWidgets import QGraphicsRectItem
-from PyQt6.QtCore import Qt
-
-from main_view_parts.theme import get_current_theme_colors
 
 
 class SelectionManager(QObject):
@@ -42,24 +40,6 @@ class SelectionManager(QObject):
     # ------------------------------------------------------------------ #
     #  公开 API
     # ------------------------------------------------------------------ #
-
-    def select(self, indices):
-        """设置选择（替换当前选择）"""
-        self._model.set_selection(sorted(indices))
-
-    def add_to_selection(self, indices):
-        """追加选择"""
-        current = set(self._model.get_selection())
-        current.update(indices)
-        self._model.set_selection(sorted(current))
-
-    def clear_selection(self):
-        """清空选择"""
-        self._model.set_selection([])
-
-    def get_selection(self):
-        """获取当前选择"""
-        return self._model.get_selection()
 
     # ------------------------------------------------------------------ #
     #  框选 API
@@ -164,17 +144,6 @@ class SelectionManager(QObject):
 
         except RuntimeError:
             self._box_select_rect_item = None
-
-    def cancel_box_select(self):
-        """取消框选"""
-        self._is_box_selecting = False
-        self._box_select_start_pos = None
-        if self._box_select_rect_item:
-            try:
-                self._box_select_rect_item.setVisible(False)
-                self._box_select_rect_item.setRect(0, 0, 0, 0)
-            except RuntimeError:
-                self._box_select_rect_item = None
 
     @property
     def is_box_selecting(self):

@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any, Dict, List, Tuple
 
+VALID_LAYOUT_MODES = {"smart_scaling", "strict", "balloon_fill"}
+
 
 class Alignment(Enum):
     """对齐方式枚举"""
@@ -45,7 +47,7 @@ class RenderParameters:
     direction: str = "auto"
     line_spacing: float = 1.0  # 行间距倍数
     letter_spacing: float = 1.0  # 字间距倍数
-    layout_mode: str = "default"  # 布局模式
+    layout_mode: str = "smart_scaling"  # 布局模式
     disable_auto_wrap: bool = False  # 禁用自动换行（AI断句）
     font_size_offset: int = 0  # 字体大小偏移
     font_size_minimum: int = 0  # 最小字体大小
@@ -70,6 +72,11 @@ class RenderParameters:
     def __post_init__(self):
         if self.shadow_offset is None:
             self.shadow_offset = [0.0, 0.0]
+        if self.layout_mode not in VALID_LAYOUT_MODES:
+            raise ValueError(
+                f"Invalid layout_mode: {self.layout_mode!r}. "
+                f"Supported values: {', '.join(sorted(VALID_LAYOUT_MODES))}"
+            )
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""

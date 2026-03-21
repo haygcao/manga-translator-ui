@@ -2,10 +2,10 @@
 Translation result data models.
 """
 
-from dataclasses import dataclass, asdict
+import uuid
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Optional
-import uuid
 
 
 @dataclass

@@ -1,19 +1,17 @@
 
+from main_view_parts import dynamic_settings as main_view_dynamic
+from main_view_parts import env_management as main_view_env
+from main_view_parts import layout as layout_parts
+from main_view_parts import runtime as main_view_runtime
+from main_view_parts.style_generator import generate_main_view_style
+from main_view_parts.theme import apply_widget_stylesheet, get_current_theme
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QSplitter,
     QWidget,
 )
-
 from services import get_config_service, get_i18n_manager
-import main_view_layout
-from main_view_parts import dynamic_settings as main_view_dynamic
-from main_view_parts import env_management as main_view_env
-from main_view_parts import runtime as main_view_runtime
-from main_view_parts import style as main_view_style
-from main_view_parts import ui_texts as main_view_texts
-from main_view_parts.theme import get_current_theme
 
 
 class MainView(QWidget):
@@ -26,6 +24,68 @@ class MainView(QWidget):
     editor_view_requested = pyqtSignal()
     theme_change_requested = pyqtSignal(str)
     language_change_requested = pyqtSignal(str)
+
+    _open_filter_list = main_view_dynamic._open_filter_list
+    _open_ai_ocr_prompt_editor = main_view_dynamic._open_ai_ocr_prompt_editor
+    _open_ai_colorizer_prompt_editor = main_view_dynamic._open_ai_colorizer_prompt_editor
+    _open_ai_renderer_prompt_editor = main_view_dynamic._open_ai_renderer_prompt_editor
+    _process_next_setting_chunk = main_view_dynamic._process_next_setting_chunk
+    _finalize_settings_ui = main_view_dynamic._finalize_settings_ui
+    _create_dynamic_settings = main_view_dynamic._create_dynamic_settings
+    _on_setting_changed = main_view_dynamic._on_setting_changed
+    _on_upscale_ratio_changed = main_view_dynamic._on_upscale_ratio_changed
+    _on_numeric_input_changed = main_view_dynamic._on_numeric_input_changed
+    _update_upscale_ratio_options = main_view_dynamic._update_upscale_ratio_options
+    _create_param_widgets = main_view_dynamic._create_param_widgets
+
+    _create_left_sidebar = layout_parts.create_left_sidebar
+    _create_translation_page = layout_parts.create_translation_page
+    _create_settings_page = layout_parts.create_settings_page
+    _create_env_page = layout_parts.create_env_page
+    _create_prompt_page = layout_parts.create_prompt_page
+    _create_font_page = layout_parts.create_font_page
+    _create_right_panel = layout_parts.create_right_panel
+    _switch_content_page = layout_parts.switch_content_page
+    _on_nav_prompt_clicked = layout_parts.on_nav_prompt_clicked
+    _on_nav_editor_clicked = layout_parts.on_nav_editor_clicked
+    _on_nav_font_clicked = layout_parts.on_nav_font_clicked
+    _populate_theme_combo = layout_parts.populate_theme_combo
+    _populate_language_combo = layout_parts.populate_language_combo
+    _on_theme_combo_changed = layout_parts.on_theme_combo_changed
+    _on_language_combo_changed = layout_parts.on_language_combo_changed
+    _refresh_prompt_manager = layout_parts.refresh_prompt_manager
+    _apply_selected_prompt = layout_parts.apply_selected_prompt
+    _on_prompt_selection_changed = layout_parts.on_prompt_selection_changed
+    _open_prompt_editor = layout_parts.open_prompt_editor
+    _create_new_prompt = layout_parts.create_new_prompt
+    _delete_selected_prompt = layout_parts.delete_selected_prompt
+    _refresh_font_manager = layout_parts.refresh_font_manager
+    _apply_selected_font = layout_parts.apply_selected_font
+    _on_font_selection_changed = layout_parts._on_font_selection_changed
+    _refresh_font_preview_styles = layout_parts.refresh_font_preview_styles
+
+    update_progress = main_view_runtime.update_progress
+    reset_progress = main_view_runtime.reset_progress
+
+    _create_env_widgets = main_view_env.create_env_widgets
+    _get_env_default_placeholder = main_view_env.get_env_default_placeholder
+    _debounced_save_env_var = main_view_env.debounced_save_env_var
+    _on_open_custom_api_params_file = main_view_env.on_open_custom_api_params_file
+    _on_test_api_clicked = main_view_env.on_test_api_clicked
+    _on_get_models_clicked = main_view_env.on_get_models_clicked
+    _refresh_preset_list = main_view_env.refresh_preset_list
+    _on_add_preset_clicked = main_view_env.on_add_preset_clicked
+    _on_delete_preset_clicked = main_view_env.on_delete_preset_clicked
+    _on_preset_changed = main_view_env.on_preset_changed
+    update_output_path_display = main_view_env.update_output_path_display
+    _trigger_add_files = main_view_env.trigger_add_files
+
+    _enable_stop_button = main_view_runtime.enable_stop_button
+    set_stopping_state = main_view_runtime.set_stopping_state
+    _sync_workflow_mode_from_config = main_view_runtime.sync_workflow_mode_from_config
+    _on_workflow_mode_changed = main_view_runtime.on_workflow_mode_changed
+    _update_workflow_mode_description = main_view_runtime.update_workflow_mode_description
+    update_start_button_text = main_view_runtime.update_start_button_text
 
     def __init__(self, controller, parent=None):
         super().__init__(parent)
@@ -81,45 +141,16 @@ class MainView(QWidget):
 
     def _apply_reference_ui_style(self, theme: str | None = None):
         theme = theme or get_current_theme()
-        main_view_style.apply_reference_ui_style(self, theme)
+        apply_widget_stylesheet(self, generate_main_view_style(theme))
         if hasattr(self, "prompt_preview_panel") and self.prompt_preview_panel:
             self.prompt_preview_panel.apply_theme()
         if hasattr(self, "_refresh_font_preview_styles"):
             self._refresh_font_preview_styles()
 
-    def _open_filter_list(self):
-        main_view_dynamic._open_filter_list(self)
-
-    def _open_ai_ocr_prompt_editor(self):
-        main_view_dynamic._open_ai_ocr_prompt_editor(self)
-
-    def _open_ai_colorizer_prompt_editor(self):
-        main_view_dynamic._open_ai_colorizer_prompt_editor(self)
-
-    def _open_ai_renderer_prompt_editor(self):
-        main_view_dynamic._open_ai_renderer_prompt_editor(self)
-
     @pyqtSlot(dict)
     def set_parameters(self, config: dict):
         main_view_dynamic.set_parameters(self, config)
 
-    def _process_next_setting_chunk(self):
-        main_view_dynamic._process_next_setting_chunk(self)
-
-    def _finalize_settings_ui(self):
-        main_view_dynamic._finalize_settings_ui(self)
-    def _create_dynamic_settings(self):
-        main_view_dynamic._create_dynamic_settings(self)
-    def _on_setting_changed(self, value, full_key, display_map=None):
-        main_view_dynamic._on_setting_changed(self, value, full_key, display_map)
-    def _on_upscale_ratio_changed(self, text, full_key):
-        main_view_dynamic._on_upscale_ratio_changed(self, text, full_key)
-    def _on_numeric_input_changed(self, text, full_key, value_type):
-        main_view_dynamic._on_numeric_input_changed(self, text, full_key, value_type)
-    def _update_upscale_ratio_options(self, upscaler):
-        main_view_dynamic._update_upscale_ratio_options(self, upscaler)
-    def _create_param_widgets(self, data, parent_layout, prefix=""):
-        main_view_dynamic._create_param_widgets(self, data, parent_layout, prefix)
     def _show_setting_description(self, key: str, name: str, description: str):
         """更新右侧描述面板"""
         if hasattr(self, 'settings_desc_name'):
@@ -128,173 +159,178 @@ class MainView(QWidget):
             self.settings_desc_key.setText(self._t("Settings Desc Key", config_key=key))
         if hasattr(self, 'settings_desc_text'):
             self.settings_desc_text.setText(description or self._t("Settings Desc No Description"))
-    def _create_left_sidebar(self) -> QWidget:
-        return main_view_layout.create_left_sidebar(self)
 
-    def _create_translation_page(self) -> QWidget:
-        return main_view_layout.create_translation_page(self)
-
-    def _create_settings_page(self) -> QWidget:
-        return main_view_layout.create_settings_page(self)
-
-    def _create_env_page(self) -> QWidget:
-        return main_view_layout.create_env_page(self)
-
-    def _create_prompt_page(self) -> QWidget:
-        return main_view_layout.create_prompt_page(self)
-
-    def _create_font_page(self) -> QWidget:
-        return main_view_layout.create_font_page(self)
-
-    def _create_right_panel(self) -> QWidget:
-        return main_view_layout.create_right_panel(self)
-
-    def _switch_content_page(self, page_key: str):
-        main_view_layout.switch_content_page(self, page_key)
-
-    def _on_nav_add_folder_clicked(self):
-        main_view_layout.on_nav_add_folder_clicked(self)
-
-    def _on_nav_mode_clicked(self):
-        main_view_layout.on_nav_mode_clicked(self)
-
-    def _on_nav_prompt_clicked(self):
-        main_view_layout.on_nav_prompt_clicked(self)
-
-    def _on_nav_editor_clicked(self):
-        main_view_layout.on_nav_editor_clicked(self)
-
-    def _on_nav_font_clicked(self):
-        main_view_layout.on_nav_font_clicked(self)
-
-    def _on_env_translator_combo_changed(self, display_name: str):
-        main_view_layout.on_env_translator_combo_changed(self, display_name)
-
-    def _populate_theme_combo(self):
-        main_view_layout.populate_theme_combo(self)
-
-    def _populate_language_combo(self):
-        main_view_layout.populate_language_combo(self)
-
-    def _on_theme_combo_changed(self, index: int):
-        main_view_layout.on_theme_combo_changed(self, index)
-
-    def _on_language_combo_changed(self, index: int):
-        main_view_layout.on_language_combo_changed(self, index)
-
-    def _sync_env_translator_combo_selection(self, display_name: str):
-        main_view_layout.sync_env_translator_combo_selection(self, display_name)
-
-    def _refresh_prompt_manager(self):
-        main_view_layout.refresh_prompt_manager(self)
-
-    def _apply_selected_prompt(self):
-        main_view_layout.apply_selected_prompt(self)
-
-    def _on_prompt_selection_changed(self, current, previous):
-        main_view_layout.on_prompt_selection_changed(self, current, previous)
-
-    def _open_prompt_editor(self, file_path: str):
-        main_view_layout.open_prompt_editor(self, file_path)
-
-    def _create_new_prompt(self):
-        main_view_layout.create_new_prompt(self)
-
-    def _delete_selected_prompt(self):
-        main_view_layout.delete_selected_prompt(self)
-
-    def _refresh_font_manager(self):
-        main_view_layout.refresh_font_manager(self)
-
-    def _apply_selected_font(self):
-        main_view_layout.apply_selected_font(self)
-
-    def _on_font_selection_changed(self, current, previous):
-        main_view_layout._on_font_selection_changed(self, current, previous)
-
-    def _refresh_font_preview_styles(self):
-        main_view_layout.refresh_font_preview_styles(self)
-
-
-
-    
-    def update_progress(self, current: int, total: int, message: str = ""):
-        main_view_runtime.update_progress(self, current, total, message)
-    
-    def reset_progress(self):
-        main_view_runtime.reset_progress(self)
-    
     def refresh_tab_titles(self):
-        main_view_texts.refresh_tab_titles(self)
-    
+        """刷新标签页标题（用于语言切换）。"""
+        tab_titles = getattr(self, "settings_tab_title_keys", None)
+        if not tab_titles:
+            tab_titles = ["Application Settings", "Basic Settings", "Advanced Settings", "Options"]
+        for i, title_key in enumerate(tab_titles):
+            if i < self.settings_tabs.count():
+                self.settings_tabs.setTabText(i, self._t(title_key))
+
     def refresh_ui_texts(self):
-        main_view_texts.refresh_ui_texts(self)
-    
+        """刷新所有UI文本（用于语言切换）。"""
+        self.refresh_tab_titles()
+
+        if hasattr(self, "sidebar_start_label"):
+            self.sidebar_start_label.setText(self._t("Start Translation"))
+        if hasattr(self, "sidebar_settings_label"):
+            self.sidebar_settings_label.setText(self._t("Settings"))
+        if hasattr(self, "sidebar_tools_label"):
+            self.sidebar_tools_label.setText(self._t("Data Management"))
+        if hasattr(self, "sidebar_editor_label"):
+            self.sidebar_editor_label.setText(self._t("Editor"))
+        if hasattr(self, "nav_translation_button"):
+            self.nav_translation_button.setText(self._t("Translation Interface"))
+        if hasattr(self, "nav_editor_button"):
+            self.nav_editor_button.setText(self._t("Editor View"))
+        if hasattr(self, "nav_settings_button"):
+            self.nav_settings_button.setText(self._t("Settings"))
+        if hasattr(self, "nav_env_button"):
+            self.nav_env_button.setText(self._t("API Management"))
+        if hasattr(self, "nav_prompt_button"):
+            self.nav_prompt_button.setText(self._t("Prompt Management"))
+        if hasattr(self, "nav_font_button"):
+            self.nav_font_button.setText(self._t("Font Management"))
+
+        if hasattr(self, "theme_label"):
+            self.theme_label.setText(self._t("Theme:"))
+        if hasattr(self, "language_label"):
+            self.language_label.setText(self._t("Language:"))
+        self._populate_theme_combo()
+        self._populate_language_combo()
+
+        if hasattr(self, "translation_page_title"):
+            self.translation_page_title.setText(self._t("Translation Interface"))
+        if hasattr(self, "translation_input_card"):
+            self.translation_input_card.setTitle(self._t("Input Files"))
+        if hasattr(self, "translation_task_card"):
+            self.translation_task_card.setTitle(self._t("Translation Task"))
+        if hasattr(self, "add_files_button"):
+            self.add_files_button.setText(self._t("Add Files"))
+        if hasattr(self, "add_folder_button"):
+            self.add_folder_button.setText(self._t("Add Folder"))
+        if hasattr(self, "clear_list_button"):
+            self.clear_list_button.setText(self._t("Clear List"))
+
+        if hasattr(self, "output_folder_label"):
+            self.output_folder_label.setText(self._t("Output Directory:"))
+        if hasattr(self, "output_folder_input"):
+            self.output_folder_input.setPlaceholderText(self._t("Select or drag output folder..."))
+        if hasattr(self, "browse_button"):
+            self.browse_button.setText(self._t("Browse..."))
+        if hasattr(self, "open_button"):
+            self.open_button.setText(self._t("Open"))
+
+        if hasattr(self, "workflow_mode_hint_label"):
+            self.workflow_mode_hint_label.setText(
+                self._t("Choose translation workflow mode before starting the task.")
+            )
+        if hasattr(self, "workflow_mode_label"):
+            self.workflow_mode_label.setText(self._t("Translation Workflow Mode:"))
+        current_index = 0
+        if hasattr(self, "workflow_mode_combo"):
+            current_index = self.workflow_mode_combo.currentIndex()
+            self.workflow_mode_combo.blockSignals(True)
+            self.workflow_mode_combo.clear()
+            self.workflow_mode_combo.addItems(
+                [
+                    self._t("Normal Translation"),
+                    self._t("Export Translation"),
+                    self._t("Export Original Text"),
+                    self._t("Translate JSON Only"),
+                    self._t("Import Translation and Render"),
+                    self._t("Colorize Only"),
+                    self._t("Upscale Only"),
+                    self._t("Inpaint Only"),
+                    self._t("Replace Translation"),
+                ]
+            )
+            self.workflow_mode_combo.setCurrentIndex(current_index)
+            self.workflow_mode_combo.blockSignals(False)
+        self._update_workflow_mode_description(current_index)
+
+        self.update_start_button_text()
+
+        if hasattr(self, "export_config_button"):
+            self.export_config_button.setText(self._t("Export Config"))
+        if hasattr(self, "import_config_button"):
+            self.import_config_button.setText(self._t("Import Config"))
+
+        if hasattr(self, "settings_page_title"):
+            self.settings_page_title.setText(self._t("Settings Page Title"))
+        if hasattr(self, "settings_page_subtitle"):
+            self.settings_page_subtitle.setText(self._t("Settings Page Subtitle"))
+        if hasattr(self, "settings_desc_header_label"):
+            self.settings_desc_header_label.setText(self._t("Settings Desc Header"))
+        if hasattr(self, "settings_desc_name"):
+            self.settings_desc_name.setText("")
+        if hasattr(self, "settings_desc_key"):
+            self.settings_desc_key.setText("")
+        if hasattr(self, "settings_desc_text"):
+            self.settings_desc_text.setText(self._t("Settings Desc Placeholder"))
+
+        if hasattr(self, "env_page_title_label"):
+            self.env_page_title_label.setText(self._t("API Management"))
+        if hasattr(self, "env_page_subtitle_label"):
+            self.env_page_subtitle_label.setText(
+                self._t("Manage API keys and environment variables for each translator")
+            )
+        if hasattr(self, "env_tab_widget"):
+            self.env_tab_widget.setTabText(0, self._t("Translation"))
+            self.env_tab_widget.setTabText(1, self._t("OCR"))
+            self.env_tab_widget.setTabText(2, self._t("Colorization"))
+            self.env_tab_widget.setTabText(3, self._t("Render"))
+
+        if hasattr(self, "file_list") and hasattr(self.file_list, "refresh_ui_texts"):
+            self.file_list.refresh_ui_texts()
+
+        if hasattr(self, "prompt_page_title_label"):
+            self.prompt_page_title_label.setText(self._t("Prompt Management"))
+        if hasattr(self, "prompt_card"):
+            self.prompt_card.setTitle(self._t("Prompt Management"))
+        if hasattr(self, "prompt_refresh_button"):
+            self.prompt_refresh_button.setText(self._t("Refresh"))
+        if hasattr(self, "prompt_open_dir_button"):
+            self.prompt_open_dir_button.setText(self._t("Open Directory"))
+        if hasattr(self, "prompt_apply_button"):
+            self.prompt_apply_button.setText(self._t("Apply Selected Prompt"))
+        if hasattr(self, "prompt_new_button"):
+            self.prompt_new_button.setText(self._t("New"))
+        if hasattr(self, "prompt_delete_button"):
+            self.prompt_delete_button.setText(self._t("Delete"))
+
+        if hasattr(self, "font_page_title_label"):
+            self.font_page_title_label.setText(self._t("Font Management"))
+        if hasattr(self, "font_card"):
+            self.font_card.setTitle(self._t("Font Management"))
+        if hasattr(self, "font_refresh_button"):
+            self.font_refresh_button.setText(self._t("Refresh"))
+        if hasattr(self, "font_open_dir_button"):
+            self.font_open_dir_button.setText(self._t("Open Directory"))
+        if hasattr(self, "font_apply_button"):
+            self.font_apply_button.setText(self._t("Apply Selected Font"))
+
+        self._clear_dynamic_settings()
+        self._create_dynamic_settings()
+
     def _clear_dynamic_settings(self):
-        main_view_texts.clear_dynamic_settings(self)
+        """清理所有动态创建的设置控件。"""
+        if hasattr(self, "env_group_container_layout"):
+            while self.env_group_container_layout.count():
+                item = self.env_group_container_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
 
-    def _on_translator_changed(self, display_name: str):
-        main_view_env.on_translator_changed(self, display_name)
-
-    def _create_env_widgets(self, keys: list, current_values: dict):
-        main_view_env.create_env_widgets(self, keys, current_values)
-
-    def _get_env_default_placeholder(self, key: str) -> str:
-        return main_view_env.get_env_default_placeholder(self, key)
-
-    def _debounced_save_env_var(self, key: str, text: str):
-        main_view_env.debounced_save_env_var(self, key, text)
-
-    def _on_open_custom_api_params_file(self):
-        main_view_env.on_open_custom_api_params_file(self)
-
-    def _on_test_api_clicked(self, key: str):
-        main_view_env.on_test_api_clicked(self, key)
-
-    def _on_get_models_clicked(self, key: str):
-        main_view_env.on_get_models_clicked(self, key)
-
-    def _refresh_preset_list(self, deleted_preset_name: str = None):
-        main_view_env.refresh_preset_list(self, deleted_preset_name)
-
-    def _on_add_preset_clicked(self):
-        main_view_env.on_add_preset_clicked(self)
-
-    def _on_delete_preset_clicked(self):
-        main_view_env.on_delete_preset_clicked(self)
-
-    def _on_preset_changed(self, new_preset_name: str):
-        main_view_env.on_preset_changed(self, new_preset_name)
-
-    def update_output_path_display(self, path: str):
-        main_view_env.update_output_path_display(self, path)
-
-    def _trigger_add_files(self):
-        main_view_env.trigger_add_files(self)
-
-    def closeEvent(self, event):
-        """处理窗口关闭事件"""
-        self.app_logic.shutdown()
-        event.accept()
+        for panel in getattr(self, "tab_frames", {}).values():
+            if panel and panel.layout():
+                layout = panel.layout()
+                while layout.count():
+                    item = layout.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
 
     @pyqtSlot(bool)
     def on_translation_state_changed(self, is_translating: bool):
         main_view_runtime.on_translation_state_changed(self, is_translating)
-    
-    def _enable_stop_button(self):
-        main_view_runtime.enable_stop_button(self)
-
-    def set_stopping_state(self):
-        main_view_runtime.set_stopping_state(self)
-
-    def _sync_workflow_mode_from_config(self):
-        main_view_runtime.sync_workflow_mode_from_config(self)
-
-    def _on_workflow_mode_changed(self, index: int):
-        main_view_runtime.on_workflow_mode_changed(self, index)
-
-    def _update_workflow_mode_description(self, index: int | None = None):
-        main_view_runtime.update_workflow_mode_description(self, index)
-
-    def update_start_button_text(self):
-        main_view_runtime.update_start_button_text(self)

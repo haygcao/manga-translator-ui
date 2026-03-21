@@ -3,34 +3,28 @@
 此模块包含编辑器的核心数据结构、类型定义和管理器。
 """
 
-from .types import (
-    EditorState,
-    JobState,
-    JobPriority,
-    MaskType,
-    ResourceType,
-)
+from .async_job_manager import AsyncJobManager
+from .resource_manager import ResourceManager
 from .resources import (
     ImageResource,
     MaskResource,
     RegionResource,
-    AsyncJob,
 )
-from .async_job_manager import AsyncJobManager
-from .resource_manager import ResourceManager
+from .types import (
+    EditorState,
+    MaskType,
+    ResourceType,
+)
 
 __all__ = [
     # Types
     "EditorState",
-    "JobState",
-    "JobPriority",
     "MaskType",
     "ResourceType",
     # Resources
     "ImageResource",
     "MaskResource",
     "RegionResource",
-    "AsyncJob",
     # Managers
     "AsyncJobManager",
     "ResourceManager",

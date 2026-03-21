@@ -1,11 +1,9 @@
-import json
 import os
-from typing import List, Optional
+from typing import List
 
+from editor.file_list_model import SUPPORTED_IMAGE_EXTENSIONS, FileListModel, FileType
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QFileDialog
-
-from editor.file_list_model import FileListModel, FileType, FileItem, SUPPORTED_IMAGE_EXTENSIONS
 from services import get_config_service, get_logger
 from widgets.folder_dialog import select_folders
 
@@ -43,7 +41,6 @@ class EditorLogic(QObject):
         )
         if file_paths:
             self.add_files(file_paths)
-            os.path.dirname(file_paths[0])
             # TODO: Find a way to save last_open_dir back to config service
 
     @pyqtSlot()
@@ -160,18 +157,7 @@ class EditorLogic(QObject):
             emit_signal: 是否发射 file_list_changed 信号（默认 False，由视图自己处理）
         """
         norm_path = os.path.normpath(file_path)
-        
-        # 获取要删除的文件项，检查是否有关联的源文件或翻译文件
-        file_item = self.file_model.get_file_item(file_path)
         paths_to_check = [norm_path]
-        
-        if file_item:
-            # 如果是翻译后的文件，添加源文件路径
-            if file_item.source_path:
-                paths_to_check.append(os.path.normpath(file_item.source_path))
-            # 如果是源文件，添加翻译后的文件路径
-            if file_item.translated_path:
-                paths_to_check.append(os.path.normpath(file_item.translated_path))
         
         # 检查是否是文件夹（在 folder_tree 中）
         if norm_path in self.folder_tree:
@@ -265,28 +251,23 @@ class EditorLogic(QObject):
 
     # --- Image Loading Methods ---
 
-    def load_file_lists(self, source_files: List[str], translated_files: List[str], folder_tree: dict = None, show_translated: bool = False):
+    def load_file_lists(self, source_files: List[str], folder_tree: dict = None):
         """
         从主窗口接收文件列表（用于翻译完成后进入编辑器）
         
         Args:
             source_files: 源文件列表
-            translated_files: 翻译后的文件列表
             folder_tree: 文件夹树结构
-            show_translated: 是否显示翻译后的文件列表
         """
         self.folder_tree = folder_tree if folder_tree else {}
-        
-        # 决定显示哪个文件列表
-        files_to_show = translated_files if (show_translated and translated_files) else source_files
-        
+
         # 清空文件模型
         self.file_model.clear()
         
         # 批量添加文件，避免一次性处理过多文件导致UI卡顿
         batch_size = 50  # 每批处理50个文件
-        for i in range(0, len(files_to_show), batch_size):
-            batch = files_to_show[i:i + batch_size]
+        for i in range(0, len(source_files), batch_size):
+            batch = source_files[i:i + batch_size]
             self.file_model.add_files(batch)
             
             # 处理事件，保持UI响应
@@ -307,88 +288,27 @@ class EditorLogic(QObject):
     def load_image_into_editor(self, file_path: str):
         """
         加载图片到编辑器（统一接口）
-        
-        根据文件类型自动处理：
-        - 原图（有JSON）：加载原图和JSON进行编辑
-        - 翻译后的图（有map）：只显示翻译后的图（查看模式）
-        - 未翻译的图：提示进行翻译
         """
+        resolved_path = self.file_model.resolve_entry_path(file_path)
+
         # 获取文件项
-        if not FileListModel.is_supported_image_file(file_path):
+        if not FileListModel.is_supported_image_file(resolved_path):
             self.logger.warning(f"不支持的编辑器文件类型，已忽略: {file_path}")
             return
 
-        file_item = self.file_model.get_file_item(file_path)
+        file_item = self.file_model.get_file_item(resolved_path)
         
         if not file_item:
             # 文件不在列表中，尝试识别
-            self.file_model.add_files([file_path])
-            file_item = self.file_model.get_file_item(file_path)
+            self.file_model.add_files([resolved_path])
+            file_item = self.file_model.get_file_item(resolved_path)
         
         if not file_item:
-            self.logger.error(f"无法识别文件: {file_path}")
+            self.logger.error(f"无法识别文件: {resolved_path}")
             return
-        
-        # 根据文件类型处理
-        if file_item.file_type == FileType.SOURCE:
-            # 原图：加载原图和JSON
-            self.controller.load_image_and_regions(file_path)
-        
-        elif file_item.file_type == FileType.TRANSLATED:
-            # 翻译后的图：只显示翻译后的图
-            self.controller.load_image_and_regions(file_path)
-        
-        elif file_item.file_type == FileType.UNTRANSLATED:
-            # 未翻译的图：提示进行翻译
-            self.logger.warning(f"未翻译的图片: {file_path}")
-            # 仍然加载图片，但不加载JSON
-            self.controller.load_image_and_regions(file_path)
 
-    def _find_file_pair(self, file_path: str) -> (str, Optional[str]):
-        """Given a file path, find its source/translated pair using translation_map.json."""
-        norm_path = os.path.normpath(file_path)
+        if file_item.file_type == FileType.UNTRANSLATED:
+            self.logger.warning(f"未翻译的图片: {resolved_path}")
 
-        # Case 1: The given file is a translated file (a key in a map)
-        try:
-            output_dir = os.path.dirname(norm_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
-            if os.path.exists(map_path):
-                t_map = self.translation_map_cache.get(map_path)
-                if t_map is None:
-                    with open(map_path, 'r', encoding='utf-8') as f:
-                        t_map = json.load(f)
-                    self.translation_map_cache[map_path] = t_map
-                
-                if norm_path in t_map:
-                    source = t_map[norm_path]
-                    if os.path.exists(source):
-                        return source, file_path
-        except Exception:
-            pass
-        
-        # Case 2: The given file is a source file (a value in a map)
-        try:
-            for trans_file in self.translated_files:
-                if not trans_file: continue
-                norm_trans = os.path.normpath(trans_file)
-                output_dir = os.path.dirname(norm_trans)
-                map_path = os.path.join(output_dir, 'translation_map.json')
-                if os.path.exists(map_path):
-                    t_map = self.translation_map_cache.get(map_path)
-                    if t_map is None:
-                        with open(map_path, 'r', encoding='utf-8') as f:
-                            t_map = json.load(f)
-                        self.translation_map_cache[map_path] = t_map
+        self.controller.load_image_and_regions(resolved_path)
 
-                    if t_map.get(norm_trans) == norm_path:
-                        return file_path, trans_file
-        except Exception:
-            pass
-
-        # Case 3: No pair found, it's a source file with no known translation.
-        return file_path, None
-
-    @pyqtSlot()
-    def on_global_render_setting_changed(self):
-        """Slot to handle changes in global render settings."""
-        self.controller.handle_global_render_setting_change()

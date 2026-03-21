@@ -1,11 +1,12 @@
 import os
 import re
+import shutil
 import subprocess
 import tempfile
-import shutil
-import tqdm
 from sys import platform
 from typing import List
+
+import tqdm
 from PIL import Image
 
 from .common import OfflineUpscaler

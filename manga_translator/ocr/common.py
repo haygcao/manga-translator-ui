@@ -1,20 +1,22 @@
-import os
-import numpy as np
-from abc import abstractmethod
-from typing import List, Tuple, Union
-from collections import Counter
-import networkx as nx
 import itertools
+import os
+from abc import abstractmethod
+from collections import Counter
+from typing import List, Tuple, Union
+
+import networkx as nx
+import numpy as np
 
 from ..config import OcrConfig
 from ..utils import (
     InfererModule,
-    TextBlock,
     ModelWrapper,
     Quadrilateral,
+    TextBlock,
     build_bubble_mask_from_mangalens_result,
     get_cached_bubbles_with_mangalens,
 )
+
 
 class CommonOCR(InfererModule):
     @staticmethod
@@ -201,7 +203,7 @@ class OfflineOCR(CommonOCR, ModelWrapper):
         for obj in objects:
             try:
                 del obj
-            except:
+            except Exception:
                 pass
         
         # 如果使用 GPU 或强制清理，清理 GPU 显存
@@ -210,7 +212,7 @@ class OfflineOCR(CommonOCR, ModelWrapper):
                 import torch
                 if torch.cuda.is_available():
                     pass
-            except:
+            except Exception:
                 pass
         
         # 轻量级垃圾回收（不强制完整 GC，避免性能影响）
@@ -243,7 +245,7 @@ class OfflineOCR(CommonOCR, ModelWrapper):
                 elif isinstance(data, dict):
                     data.clear()
                 del data
-            except:
+            except Exception:
                 pass
         
         # GPU 清理
@@ -252,7 +254,7 @@ class OfflineOCR(CommonOCR, ModelWrapper):
                 import torch
                 if torch.cuda.is_available():
                     pass
-            except:
+            except Exception:
                 pass
 
     def _get_ocr_canvas_width(self, valid_widths: List[int], base_align: int = 4, extra_pad: int = 0) -> int:

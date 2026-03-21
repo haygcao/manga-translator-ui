@@ -6,27 +6,42 @@ https://github.com/CompVis/taming-transformers
 -- merci
 """
 
-import torch
-import torch.nn as nn
-import numpy as np
-import pytorch_lightning as pl
-from torch.optim.lr_scheduler import LambdaLR
-from einops import rearrange, repeat
+import itertools
 from contextlib import contextmanager, nullcontext
 from functools import partial
-import itertools
-from tqdm import tqdm
-from torchvision.utils import make_grid
-from pytorch_lightning.utilities.distributed import rank_zero_only
-from omegaconf import ListConfig
 
-from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
-from ldm.modules.ema import LitEma
-from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
-from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
-from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
+import numpy as np
+import pytorch_lightning as pl
+import torch
+import torch.nn as nn
+from einops import rearrange, repeat
+from ldm.models.autoencoder import AutoencoderKL, IdentityFirstStage, VQModelInterface
 from ldm.models.diffusion.ddim import DDIMSampler
-
+from ldm.modules.diffusionmodules.util import (
+    extract_into_tensor,
+    make_beta_schedule,
+    noise_like,
+)
+from ldm.modules.distributions.distributions import (
+    DiagonalGaussianDistribution,
+    normal_kl,
+)
+from ldm.modules.ema import LitEma
+from ldm.util import (
+    count_params,
+    default,
+    exists,
+    instantiate_from_config,
+    isimage,
+    ismap,
+    log_txt_as_img,
+    mean_flat,
+)
+from omegaconf import ListConfig
+from pytorch_lightning.utilities.distributed import rank_zero_only
+from torch.optim.lr_scheduler import LambdaLR
+from torchvision.utils import make_grid
+from tqdm import tqdm
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -227,7 +242,7 @@ class DDPM(pl.LightningModule):
                     desc="Fitting old weights to new weights",
                     total=n_params
             ):
-                if not name in sd:
+                if name not in sd:
                     continue
                 old_shape = sd[name].shape
                 new_shape = param.shape
@@ -1073,7 +1088,7 @@ class LatentDiffusion(DDPM):
         iterator = tqdm(reversed(range(0, timesteps)), desc='Progressive Generation',
                         total=timesteps) if verbose else reversed(
             range(0, timesteps))
-        if type(temperature) == float:
+        if isinstance(temperature, float):
             temperature = [temperature] * timesteps
 
         for i in iterator:
@@ -1302,7 +1317,7 @@ class LatentDiffusion(DDPM):
 
         if inpaint:
             # make a simple center square
-            b, h, w = z.shape[0], z.shape[2], z.shape[3]
+            h, w = z.shape[2], z.shape[3]
             mask = torch.ones(N, h, w).to(self.device)
             # zeros will be filled in
             mask[:, h // 4:3 * h // 4, w // 4:3 * w // 4] = 0.

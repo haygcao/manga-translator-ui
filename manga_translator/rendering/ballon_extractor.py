@@ -1,5 +1,6 @@
+from typing import List, Tuple
+
 import cv2
-from typing import Tuple, List
 import numpy as np
 
 WHITE = (255, 255, 255)

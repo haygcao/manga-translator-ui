@@ -3,28 +3,25 @@ Copyright (c) 2019-present NAVER Corp.
 MIT License
 """
 
+import os
+import shutil
+
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-import os
-import shutil
-import numpy as np
-import torch
-import cv2
-# import einops
-from typing import List, Tuple
-
-from .default_utils.DBNet_resnet34 import TextDetection as TextDetectionDefault
-from .default_utils import imgproc, dbnet_utils, craft_utils
-from .common import OfflineDetector
-from ..utils import TextBlock, Quadrilateral, det_rearrange_forward
-from shapely.geometry import Polygon, MultiPoint
 from shapely import affinity
+from shapely.geometry import MultiPoint
 
-from .craft_utils.vgg16_bn import vgg16_bn, init_weights
+from ..utils import Quadrilateral
+from .common import OfflineDetector
 from .craft_utils.refiner import RefineNet
+from .craft_utils.vgg16_bn import init_weights, vgg16_bn
+
+# import einops
+from .default_utils import craft_utils, imgproc
+
 
 class double_conv(nn.Module):
     def __init__(self, in_ch, mid_ch, out_ch):
@@ -97,6 +94,8 @@ class CRAFT(nn.Module):
 
 
 from collections import OrderedDict
+
+
 def copyStateDict(state_dict):
     if list(state_dict.keys())[0].startswith("module"):
         start_idx = 1

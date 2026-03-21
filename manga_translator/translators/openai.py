@@ -1,13 +1,20 @@
+import asyncio
 import os
 import re
-import asyncio
-# import json
-from typing import List, Dict, Any
-# import openai
 
-from .common import CommonTranslator, VALID_LANGUAGES, parse_json_or_text_response, parse_hq_response, get_glossary_extraction_prompt, merge_glossary_to_file, validate_openai_response, AsyncOpenAICurlCffi
-from .keys import OPENAI_API_KEY, OPENAI_MODEL
-from ..utils import Context
+# import json
+from typing import Any, Dict, List
+
+# import openai
+from .common import (
+    VALID_LANGUAGES,
+    AsyncOpenAICurlCffi,
+    CommonTranslator,
+    merge_glossary_to_file,
+    parse_hq_response,
+    validate_openai_response,
+)
+from .keys import OPENAI_API_KEY
 
 # 浏览器风格的请求头，避免被 CF 拦截
 # 注意：移除 Accept-Encoding 让 httpx 自动处理，避免压缩响应导致的 UTF-8 解码错误
@@ -109,7 +116,6 @@ class OpenAITranslator(CommonTranslator):
         if force_recreate and self.client:
             # 关闭旧客户端，断开连接
             try:
-                import asyncio
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # 如果事件循环正在运行，创建任务异步关闭
@@ -156,7 +162,6 @@ class OpenAITranslator(CommonTranslator):
         """析构函数，确保资源被清理"""
         if self.client:
             try:
-                import asyncio
                 loop = asyncio.get_event_loop()
                 if not loop.is_running() and not loop.is_closed():
                     # 如果事件循环未关闭，同步执行清理

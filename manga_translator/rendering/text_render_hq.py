@@ -13,10 +13,11 @@
 - 对于低分辨率图片效果显著提升
 """
 
+import logging
+from typing import Optional, Tuple
+
 import cv2
 import numpy as np
-from typing import Tuple, Optional
-import logging
 
 from . import text_render
 

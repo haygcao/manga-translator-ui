@@ -1,13 +1,14 @@
 from typing import List
+
 from PIL import Image
 
+from ..config import Upscaler
 from .common import CommonUpscaler, OfflineUpscaler
-from .waifu2x import Waifu2xUpscaler
 from .esrgan import ESRGANUpscaler
 from .esrgan_pytorch import ESRGANUpscalerPytorch
-from .realcugan import RealCUGANUpscaler
 from .mangajanai import MangaJaNaiUpscaler
-from ..config import Upscaler
+from .realcugan import RealCUGANUpscaler
+from .waifu2x import Waifu2xUpscaler
 
 UPSCALERS = {
     Upscaler.waifu2x: Waifu2xUpscaler,

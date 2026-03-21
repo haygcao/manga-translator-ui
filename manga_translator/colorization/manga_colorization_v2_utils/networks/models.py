@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 # import torchvision.models as M
 # import math
-from torch import Tensor
 from torch.nn import Parameter
 
-from .extractor import SEResNeXt_Origin, BottleneckX_Origin
+from .extractor import BottleneckX_Origin, SEResNeXt_Origin
 
 '''https://github.com/orashi/AlacGAN/blob/master/models/standard.py'''
 

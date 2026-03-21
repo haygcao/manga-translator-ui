@@ -4,13 +4,36 @@
 处理应用的核心业务逻辑，与UI层分离
 """
 import asyncio
+import base64
+import io
 import logging
 import os
-import threading
 import textwrap
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
+from PIL import Image
+from PyQt6.QtCore import (
+    QObject,
+    QRunnable,
+    Qt,
+    QTimer,
+    pyqtSignal,
+    pyqtSlot,
+)
+from PyQt6.QtWidgets import QFileDialog
+from services import (
+    get_config_service,
+    get_file_service,
+    get_i18n_manager,
+    get_logger,
+    get_preset_service,
+    get_state_manager,
+    get_translation_service,
+)
+from services.state_manager import AppStateKey
 
 from manga_translator.config import (
     Alignment,
@@ -25,19 +48,7 @@ from manga_translator.config import (
     Upscaler,
 )
 from manga_translator.save import OUTPUT_FORMATS
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot, QTimer, Qt
-from PyQt6.QtWidgets import QFileDialog
-
-from services import (
-    get_config_service,
-    get_file_service,
-    get_i18n_manager,
-    get_logger,
-    get_preset_service,
-    get_state_manager,
-    get_translation_service,
-)
-from services.state_manager import AppStateKey
+from manga_translator.utils import open_pil_image, save_pil_image
 
 
 @dataclass
@@ -52,6 +63,22 @@ class AppConfig:
 
 ARCHIVE_EXTRACT_IMAGE_DIRNAME = 'original_images'
 ARCHIVE_EXTRACT_META_FILENAME = '.extract_meta.json'
+_OPENAI_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7",
+    "Connection": "keep-alive",
+    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+}
+_GEMINI_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7",
+    "Origin": "https://aistudio.google.com",
+    "Referer": "https://aistudio.google.com/",
+}
 
 
 def _resolve_archive_output_dir_from_extracted_image(image_path: str, output_folder: str) -> Optional[str]:
@@ -339,18 +366,13 @@ class MainAppLogic(QObject):
 
             os.makedirs(final_output_folder, exist_ok=True)
 
-            save_kwargs = {}
             image_to_save = result['image_data']
-
-            # Convert RGBA to RGB for JPEG format
-            if final_output_path.lower().endswith(('.jpg', '.jpeg')):
-                if image_to_save.mode == 'RGBA':
-                    image_to_save = image_to_save.convert('RGB')
-                save_kwargs['quality'] = save_quality
-            elif final_output_path.lower().endswith('.webp'):
-                save_kwargs['quality'] = save_quality
-
-            image_to_save.save(final_output_path, **save_kwargs)
+            self._save_image_with_source_metadata(
+                image_to_save,
+                final_output_path,
+                original_path,
+                save_quality,
+            )
 
             # 更新translation_map.json
             self._update_translation_map(original_path, final_output_path)
@@ -362,6 +384,33 @@ class MainAppLogic(QObject):
 
         except Exception as e:
             self.logger.error(self._t("log_file_save_error", path=result['original_path'], error=e))
+
+    def _save_image_with_source_metadata(
+        self,
+        image: Image.Image,
+        output_path: str,
+        source_path: Optional[str],
+        save_quality: int,
+    ):
+        source_image = None
+        try:
+            if source_path and os.path.exists(source_path):
+                try:
+                    source_image = open_pil_image(source_path, eager=True)
+                except Exception as exc:
+                    self.logger.warning(f"读取原图元数据失败，将继续保存但不继承ICC: {source_path}, error={exc}")
+            save_pil_image(
+                image,
+                output_path,
+                source_image=source_image,
+                quality=save_quality,
+            )
+        finally:
+            if source_image is not None:
+                try:
+                    source_image.close()
+                except Exception:
+                    pass
 
     def _update_translation_map(self, source_path: str, translated_path: str):
         """在输出目录创建或更新 translation_map.json"""
@@ -632,113 +681,372 @@ class MainAppLogic(QObject):
     # endregion
     
     # region API测试
+    @staticmethod
+    def _normalize_api_test_target(translator_key: str) -> str:
+        return (translator_key or "").strip().lower()
+
+    @staticmethod
+    def _is_openai_compatible_target(normalized_key: str) -> bool:
+        return any(
+            token in normalized_key
+            for token in ("openai", "custom_openai", "deepseek", "groq")
+        )
+
+    @staticmethod
+    def _build_api_test_image_bytes() -> bytes:
+        buffer = io.BytesIO()
+        Image.new("RGB", (2, 2), (255, 255, 255)).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    @staticmethod
+    def _extract_gemini_image_bytes(response) -> bytes | None:
+        raw = getattr(response, "raw", None) or {}
+
+        def _get_field(obj, *names):
+            if obj is None:
+                return None
+            for name in names:
+                if isinstance(obj, dict):
+                    if name in obj:
+                        return obj[name]
+                elif hasattr(obj, name):
+                    return getattr(obj, name)
+            return None
+
+        candidates = raw.get("candidates") or _get_field(response, "candidates") or []
+        for candidate in candidates:
+            content = _get_field(candidate, "content") or {}
+            parts = _get_field(content, "parts") or []
+            for part in parts:
+                inline_data = _get_field(part, "inlineData", "inline_data")
+                if inline_data is None and hasattr(part, "inline_data"):
+                    inline_data = getattr(part, "inline_data")
+                data = _get_field(inline_data, "data") if inline_data is not None else None
+                if data:
+                    return base64.b64decode(data)
+        return None
+
+    @staticmethod
+    def _get_default_model_for_test(normalized_key: str) -> str | None:
+        defaults = {
+            "openai_ocr": "gpt-4o",
+            "gemini_ocr": "gemini-1.5-flash",
+            "openai_colorizer": "gpt-image-1",
+            "gemini_colorizer": "gemini-2.0-flash-preview-image-generation",
+            "openai_renderer": "gpt-image-1",
+            "gemini_renderer": "gemini-2.0-flash-preview-image-generation",
+        }
+        return defaults.get(normalized_key)
+
+    async def _test_openai_text_api(self, api_key: str, api_base: str | None, model: str | None) -> tuple[bool, str]:
+        try:
+            from manga_translator.translators.common import AsyncOpenAICurlCffi
+            client = AsyncOpenAICurlCffi(
+                api_key=api_key,
+                base_url=api_base or "https://api.openai.com/v1",
+                default_headers=_OPENAI_BROWSER_HEADERS,
+                impersonate="chrome110",
+                timeout=30.0,
+                stream_timeout=30.0,
+            )
+        except ImportError:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=api_base or "https://api.openai.com/v1",
+                timeout=30.0,
+            )
+
+        try:
+            if model and model.strip():
+                await client.chat.completions.create(
+                    model=model.strip(),
+                    messages=[{"role": "user", "content": "test"}],
+                )
+                return True, f"连接成功，模型 {model.strip()} 可用"
+            await client.models.list()
+            return True, "连接成功"
+        finally:
+            await client.close()
+
+    async def _test_openai_ocr_api(self, api_key: str, api_base: str | None, model: str | None) -> tuple[bool, str]:
+        model_name = (model or "").strip() or self._get_default_model_for_test("openai_ocr")
+        image_b64 = base64.b64encode(self._build_api_test_image_bytes()).decode("ascii")
+
+        try:
+            from manga_translator.translators.common import AsyncOpenAICurlCffi
+            client = AsyncOpenAICurlCffi(
+                api_key=api_key,
+                base_url=api_base or "https://api.openai.com/v1",
+                default_headers=_OPENAI_BROWSER_HEADERS,
+                impersonate="chrome110",
+                timeout=30.0,
+                stream_timeout=30.0,
+            )
+        except ImportError:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=api_base or "https://api.openai.com/v1",
+                timeout=30.0,
+            )
+
+        try:
+            await client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Read the image and reply with OK."},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                            },
+                        ],
+                    }
+                ],
+            )
+            return True, f"连接成功，OCR 模型 {model_name} 可用"
+        finally:
+            await client.close()
+
+    async def _test_openai_image_api(self, api_key: str, api_base: str | None, model: str | None, target_label: str) -> tuple[bool, str]:
+        model_name = (model or "").strip() or self._get_default_model_for_test(target_label)
+
+        try:
+            from manga_translator.translators.common import AsyncOpenAICurlCffi
+            from manga_translator.utils.openai_image_interface import (
+                request_openai_image_with_fallback,
+            )
+
+            client = AsyncOpenAICurlCffi(
+                api_key=api_key,
+                base_url=api_base or "https://api.openai.com/v1",
+                default_headers=_OPENAI_BROWSER_HEADERS,
+                impersonate="chrome110",
+                timeout=60.0,
+                stream_timeout=60.0,
+            )
+
+            async def fetch_remote_image(url: str):
+                response = await client.session.get(url, timeout=60.0)
+                if response.status_code != 200:
+                    raise RuntimeError(f"Failed to download generated image: HTTP {response.status_code}")
+                return Image.open(io.BytesIO(response.content)).convert("RGB")
+
+            try:
+                await request_openai_image_with_fallback(
+                    session=client.session,
+                    base_url=(api_base or "https://api.openai.com/v1").rstrip("/"),
+                    api_key=api_key,
+                    default_headers=_OPENAI_BROWSER_HEADERS,
+                    model_name=model_name,
+                    prompt_text="Return a simple test image.",
+                    image_bytes=self._build_api_test_image_bytes(),
+                    filename="test.png",
+                    timeout=60.0,
+                    fetch_remote_image=fetch_remote_image,
+                    provider_name="OpenAI API Test",
+                    logger=self.logger,
+                )
+                return True, f"连接成功，图像模型 {model_name} 可用"
+            finally:
+                await client.close()
+        except ImportError:
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=api_base or "https://api.openai.com/v1",
+                timeout=60.0,
+            )
+            try:
+                await client.images.generate(
+                    model=model_name,
+                    prompt="Generate a simple test image.",
+                    size="1024x1024",
+                )
+                return True, f"连接成功，图像模型 {model_name} 可用"
+            finally:
+                await client.close()
+
+    async def _test_gemini_text_api(self, api_key: str, api_base: str | None, model: str | None) -> tuple[bool, str]:
+        base_url = api_base.strip() if api_base and api_base.strip() else "https://generativelanguage.googleapis.com"
+
+        try:
+            from manga_translator.translators.common import AsyncGeminiCurlCffi
+            client = AsyncGeminiCurlCffi(
+                api_key=api_key,
+                base_url=base_url,
+                default_headers=_GEMINI_BROWSER_HEADERS,
+                impersonate="chrome110",
+                timeout=30.0,
+                stream_timeout=30.0,
+            )
+            try:
+                if model and model.strip():
+                    await client.models.generate_content(model=model.strip(), contents="test")
+                    return True, f"连接成功，模型 {model.strip()} 可用"
+                await client.models.list()
+                return True, "连接成功"
+            finally:
+                await client.close()
+        except ImportError:
+            from google import genai
+            from google.genai import types
+
+            def sync_test():
+                if base_url != "https://generativelanguage.googleapis.com":
+                    client = genai.Client(
+                        api_key=api_key,
+                        http_options=types.HttpOptions(base_url=base_url),
+                    )
+                else:
+                    client = genai.Client(api_key=api_key)
+
+                if model and model.strip():
+                    client.models.generate_content(model=model.strip(), contents="test")
+                    return True, f"连接成功，模型 {model.strip()} 可用"
+                list(client.models.list())
+                return True, "连接成功"
+
+            return await asyncio.get_running_loop().run_in_executor(None, sync_test)
+
+    async def _test_gemini_ocr_api(self, api_key: str, api_base: str | None, model: str | None) -> tuple[bool, str]:
+        model_name = (model or "").strip() or self._get_default_model_for_test("gemini_ocr")
+        base_url = api_base.strip() if api_base and api_base.strip() else "https://generativelanguage.googleapis.com"
+        image_b64 = base64.b64encode(self._build_api_test_image_bytes()).decode("ascii")
+        contents = [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Read the image and reply with OK."},
+                    {"inlineData": {"mimeType": "image/png", "data": image_b64}},
+                ],
+            }
+        ]
+
+        try:
+            from manga_translator.translators.common import AsyncGeminiCurlCffi
+            client = AsyncGeminiCurlCffi(
+                api_key=api_key,
+                base_url=base_url,
+                default_headers=_GEMINI_BROWSER_HEADERS,
+                impersonate="chrome110",
+                timeout=30.0,
+                stream_timeout=30.0,
+            )
+            try:
+                await client.models.generate_content(model=model_name, contents=contents)
+                return True, f"连接成功，OCR 模型 {model_name} 可用"
+            finally:
+                await client.close()
+        except ImportError:
+            from google import genai
+            from google.genai import types
+
+            def sync_test():
+                if base_url != "https://generativelanguage.googleapis.com":
+                    client = genai.Client(
+                        api_key=api_key,
+                        http_options=types.HttpOptions(base_url=base_url),
+                    )
+                else:
+                    client = genai.Client(api_key=api_key)
+                client.models.generate_content(model=model_name, contents=contents)
+                return True, f"连接成功，OCR 模型 {model_name} 可用"
+
+            return await asyncio.get_running_loop().run_in_executor(None, sync_test)
+
+    async def _test_gemini_image_api(self, api_key: str, api_base: str | None, model: str | None, target_label: str) -> tuple[bool, str]:
+        model_name = (model or "").strip() or self._get_default_model_for_test(target_label)
+        base_url = api_base.strip() if api_base and api_base.strip() else "https://generativelanguage.googleapis.com"
+        image_b64 = base64.b64encode(self._build_api_test_image_bytes()).decode("ascii")
+        request_kwargs = {
+            "model": model_name,
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": "Return a simple test image."},
+                        {"inlineData": {"mimeType": "image/png", "data": image_b64}},
+                    ],
+                }
+            ],
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+            ],
+        }
+
+        try:
+            from manga_translator.translators.common import AsyncGeminiCurlCffi
+            client = AsyncGeminiCurlCffi(
+                api_key=api_key,
+                base_url=base_url,
+                default_headers=_GEMINI_BROWSER_HEADERS,
+                impersonate="chrome110",
+                timeout=60.0,
+                stream_timeout=60.0,
+            )
+            try:
+                response = await client.models.generate_content(**request_kwargs)
+                if not self._extract_gemini_image_bytes(response):
+                    raise RuntimeError("Gemini image response did not contain an image.")
+                return True, f"连接成功，图像模型 {model_name} 可用"
+            finally:
+                await client.close()
+        except ImportError:
+            from google import genai
+            from google.genai import types
+
+            def sync_test():
+                if base_url != "https://generativelanguage.googleapis.com":
+                    client = genai.Client(
+                        api_key=api_key,
+                        http_options=types.HttpOptions(base_url=base_url),
+                    )
+                else:
+                    client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=request_kwargs["contents"],
+                    config=types.GenerateContentConfig(
+                        response_modalities=["TEXT", "IMAGE"],
+                        safety_settings=[
+                            types.SafetySetting(category=item["category"], threshold=item["threshold"])
+                            for item in request_kwargs["safetySettings"]
+                        ],
+                    ),
+                )
+                if not self._extract_gemini_image_bytes(response):
+                    raise RuntimeError("Gemini image response did not contain an image.")
+                return True, f"连接成功，图像模型 {model_name} 可用"
+
+            return await asyncio.get_running_loop().run_in_executor(None, sync_test)
+
     async def test_api_connection_async(self, translator_key: str, api_key: str, api_base: str = None, model: str = None) -> tuple[bool, str]:
         """异步测试API连接（如果指定了模型，会测试该模型是否可用）"""
         try:
-            if "openai" in translator_key.lower():
-                # 尝试使用 curl_cffi 客户端绕过 TLS 指纹检测
-                try:
-                    from manga_translator.translators.common import AsyncOpenAICurlCffi
-                    client = AsyncOpenAICurlCffi(
-                        api_key=api_key,
-                        base_url=api_base or "https://api.openai.com/v1",
-                        impersonate="chrome110",
-                        timeout=30.0
-                    )
-                except ImportError:
-                    # 如果 curl_cffi 不可用，回退到标准客户端
-                    from openai import AsyncOpenAI
-                    client = AsyncOpenAI(
-                        api_key=api_key,
-                        base_url=api_base or "https://api.openai.com/v1"
-                    )
+            normalized_key = self._normalize_api_test_target(translator_key)
 
-                try:
-                    # 如果指定了模型，测试该模型是否可用
-                    if model and model.strip():
-                        try:
-                            # 尝试用该模型发送一个简单的测试请求（不传递 max_tokens 以兼容所有模型）
-                            await client.chat.completions.create(
-                                model=model,
-                                messages=[{"role": "user", "content": "test"}]
-                            )
-                            return True, f"连接成功，模型 {model} 可用"
-                        except Exception as e:
-                            # 如果模型测试失败，返回详细错误
-                            return False, f"连接成功但模型 {model} 不可用: {str(e)}"
-                    else:
-                        # 没有指定模型，只测试连接
-                        await client.models.list()
-                        return True, "连接成功"
-                finally:
-                    await client.close()
-            
-            elif "gemini" in translator_key.lower():
-                # 统一使用 AsyncGeminiCurlCffi（Google 认证方式 + curl_cffi TLS 指纹伪装）
-                base_url = api_base.strip() if api_base and api_base.strip() else "https://generativelanguage.googleapis.com"
-
-                try:
-                    from manga_translator.translators.common import AsyncGeminiCurlCffi
-                    client = AsyncGeminiCurlCffi(
-                        api_key=api_key,
-                        base_url=base_url,
-                        impersonate="chrome110",
-                        timeout=30.0
-                    )
-
-                    try:
-                        # 如果指定了模型，测试该模型
-                        if model and model.strip():
-                            try:
-                                await client.models.generate_content(
-                                    model=model,
-                                    contents="test"
-                                )
-                                return True, f"连接成功，模型 {model} 可用"
-                            except Exception as e:
-                                return False, f"连接成功但模型 {model} 不可用: {str(e)}"
-                        else:
-                            # 尝试列出模型
-                            await client.models.list()
-                            return True, "连接成功"
-                    finally:
-                        await client.close()
-
-                except ImportError:
-                    # 如果 curl_cffi 不可用，回退到标准 SDK
-                    from google import genai
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-
-                    def sync_test():
-                        # 新版 SDK 使用 genai.Client
-                        if base_url != "https://generativelanguage.googleapis.com":
-                            from google.genai import types
-                            client = genai.Client(
-                                api_key=api_key,
-                                http_options=types.HttpOptions(base_url=base_url)
-                            )
-                        else:
-                            client = genai.Client(api_key=api_key)
-
-                        # 如果指定了模型，测试该模型
-                        if model and model.strip():
-                            client.models.generate_content(
-                                model=model,
-                                contents="test"
-                            )
-                            return True, f"连接成功，模型 {model} 可用"
-                        else:
-                            # 列出模型
-                            list(client.models.list())
-                            return True, "连接成功"
-
-                    try:
-                        return await loop.run_in_executor(None, sync_test)
-                    except Exception as e:
-                        return False, f"连接失败: {str(e)}"
-            
-            elif "sakura" in translator_key.lower():
+            if normalized_key == "openai_ocr":
+                return await self._test_openai_ocr_api(api_key, api_base, model)
+            if normalized_key in {"openai_colorizer", "openai_renderer"}:
+                return await self._test_openai_image_api(api_key, api_base, model, normalized_key)
+            if normalized_key == "gemini_ocr":
+                return await self._test_gemini_ocr_api(api_key, api_base, model)
+            if normalized_key in {"gemini_colorizer", "gemini_renderer"}:
+                return await self._test_gemini_image_api(api_key, api_base, model, normalized_key)
+            if self._is_openai_compatible_target(normalized_key):
+                return await self._test_openai_text_api(api_key, api_base, model)
+            if "gemini" in normalized_key:
+                return await self._test_gemini_text_api(api_key, api_base, model)
+            if "sakura" in normalized_key:
                 # Sakura使用OpenAI兼容API
                 from openai import AsyncOpenAI
                 if not api_base:
@@ -775,9 +1083,9 @@ class MainAppLogic(QObject):
     async def get_available_models_async(self, translator_key: str, api_key: str, api_base: str = None) -> tuple[bool, List[str], str]:
         """异步获取可用模型列表"""
         try:
-            normalized_key = (translator_key or "").lower()
+            normalized_key = self._normalize_api_test_target(translator_key)
 
-            if "openai" in normalized_key:
+            if self._is_openai_compatible_target(normalized_key):
                 # 尝试使用 curl_cffi 客户端绕过 TLS 指纹检测
                 try:
                     from manga_translator.translators.common import AsyncOpenAICurlCffi
@@ -828,9 +1136,10 @@ class MainAppLogic(QObject):
                         await client.close()
                 except ImportError:
                     # 如果 curl_cffi 不可用，回退到标准客户端
+                    import asyncio
+
                     from google import genai
                     from google.genai import types
-                    import asyncio
                     loop = asyncio.get_event_loop()
 
                     # 检查是否是自定义API
@@ -1026,6 +1335,10 @@ class MainAppLogic(QObject):
                     "original": self._t("translator_original"),
                 },
                 "target_lang": self.translation_service.get_target_languages(),
+                "keep_lang": {
+                    "none": self._t("lang_filter_disabled"),
+                    **self.translation_service.get_keep_languages(),
+                },
                 "ocr_vl_language_hint": {
                     "auto": self._t("ocr_lang_auto"),
                     "multilingual": self._t("ocr_lang_multilingual"),
@@ -1054,6 +1367,7 @@ class MainAppLogic(QObject):
                     "mask_dilation_offset": self._t("label_mask_dilation_offset"),
                     "translator": self._t("label_translator"),
                     "target_lang": self._t("label_target_lang"),
+                    "keep_lang": self._t("label_keep_lang"),
                     "enable_streaming": self._t("label_enable_streaming"),
                     "no_text_lang_skip": self._t("label_no_text_lang_skip"),
                     "high_quality_prompt_path": self._t("label_high_quality_prompt_path"),
@@ -1081,6 +1395,7 @@ class MainAppLogic(QObject):
                     "detector": self._t("label_detector"),
                     "detection_size": self._t("label_detection_size"),
                     "text_threshold": self._t("label_text_threshold"),
+                    "import_yolo_labels": self._t("label_import_yolo_labels"),
                     "use_yolo_obb": self._t("label_use_yolo_obb"),
                     "yolo_obb_conf": self._t("label_yolo_obb_conf"),
                     "yolo_obb_overlap_threshold": self._t("label_yolo_obb_overlap_threshold"),
@@ -1137,6 +1452,7 @@ class MainAppLogic(QObject):
                     "skip_no_text": self._t("label_skip_no_text"),
                     "save_text": self._t("label_save_text"),
                     "load_text": self._t("label_load_text"),
+                    "translate_json_only": self._t("label_translate_json_only"),
                     "template": self._t("label_template"),
                     "save_quality": self._t("label_save_quality"),
                     "batch_size": self._t("label_batch_size"),
@@ -1194,6 +1510,7 @@ class MainAppLogic(QObject):
                 "4x-denoise3x",
             ],
             "translator": [member.value for member in Translator],
+            "keep_lang": ["none"] + list(self.translation_service.get_keep_languages().keys()),
             "detector": [member.value for member in Detector],
             "colorizer": [member.value for member in Colorizer],
             "inpainter": [member.value for member in Inpainter],
@@ -1227,8 +1544,9 @@ class MainAppLogic(QObject):
     @pyqtSlot()
     def export_config(self):
         """导出配置（排除敏感信息）"""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
         import json
+
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
         
         try:
             # 选择保存位置
@@ -1281,8 +1599,9 @@ class MainAppLogic(QObject):
     @pyqtSlot()
     def import_config(self):
         """导入配置（保留现有的敏感信息）"""
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
         import json
+
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
         
         try:
             # 选择要导入的文件
@@ -1856,18 +2175,13 @@ class MainAppLogic(QObject):
                                     final_output_path = os.path.join(output_folder, output_filename)
                                     os.makedirs(output_folder, exist_ok=True)
                                     
-                                    save_kwargs = {}
                                     image_to_save = result['image_data']
-
-                                    # Convert RGBA to RGB for JPEG format
-                                    if file_extension in ['.jpg', '.jpeg']:
-                                        if image_to_save.mode == 'RGBA':
-                                            image_to_save = image_to_save.convert('RGB')
-                                        save_kwargs['quality'] = save_quality
-                                    elif file_extension == '.webp':
-                                        save_kwargs['quality'] = save_quality
-
-                                    image_to_save.save(final_output_path, **save_kwargs)
+                                    self._save_image_with_source_metadata(
+                                        image_to_save,
+                                        final_output_path,
+                                        result.get('original_path'),
+                                        save_quality,
+                                    )
                                     saved_files.append(final_output_path)
                                     self._ui_log(f"成功保存文件: {final_output_path}")
                                 except Exception as e:
@@ -1920,7 +2234,6 @@ class MainAppLogic(QObject):
         
         # 注意：将清理逻辑移出 finally 块，使用 QTimer 延迟执行
         # 这样可以确保信号有足够时间被主线程处理
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(100, self._cleanup_after_task)
     
     def _cleanup_after_task(self):
@@ -1932,7 +2245,9 @@ class MainAppLogic(QObject):
             # 清理压缩包解压的临时文件
             if hasattr(self, 'archive_to_temp_map') and self.archive_to_temp_map:
                 try:
-                    from desktop_qt_ui.utils.archive_extractor import cleanup_archive_temp
+                    from desktop_qt_ui.utils.archive_extractor import (
+                        cleanup_archive_temp,
+                    )
                     for archive_path in list(self.archive_to_temp_map.keys()):
                         cleanup_archive_temp(archive_path)
                     self.archive_to_temp_map.clear()
@@ -1962,7 +2277,7 @@ class MainAppLogic(QObject):
             return
         
         self.state_manager.set_translating(False)
-        self.state_manager.set_status_message(f"任务失败")
+        self.state_manager.set_status_message("任务失败")
         
         # 重置主视图的进度条
         if hasattr(self, 'main_view') and self.main_view:
@@ -2105,14 +2420,18 @@ class MainAppLogic(QObject):
             
             # 关闭缩略图加载线程池
             try:
-                from desktop_qt_ui.widgets.file_list_view import shutdown_thumbnail_executor
+                from desktop_qt_ui.widgets.file_list_view import (
+                    shutdown_thumbnail_executor,
+                )
                 shutdown_thumbnail_executor()
             except Exception:
                 pass
             
             # 关闭轻量级修复器线程池
             try:
-                from desktop_qt_ui.services.lightweight_inpainter import get_lightweight_inpainter
+                from desktop_qt_ui.services.lightweight_inpainter import (
+                    get_lightweight_inpainter,
+                )
                 inpainter = get_lightweight_inpainter()
                 if inpainter:
                     inpainter.shutdown()
@@ -2407,12 +2726,15 @@ class TranslationWorker(QObject):
         remaining_count: int,
         elapsed_seconds: float,
         skipped_count: int = 0,
+        failed_count: int = 0,
         detail: str = "",
     ) -> str:
         parts = [detail] if detail else []
         if completed_count <= 0:
             if skipped_count > 0:
                 parts.append(f"已跳过 {skipped_count} 张")
+            if failed_count > 0:
+                parts.append(f"已失败 {failed_count} 张")
             if remaining_count <= 0:
                 parts.append("无需处理")
                 return " | ".join(parts)
@@ -2424,6 +2746,8 @@ class TranslationWorker(QObject):
         parts.append(f"预计剩余 {self._format_eta_duration(average_seconds * max(remaining_count, 0))}")
         if skipped_count > 0:
             parts.append(f"已跳过 {skipped_count} 张")
+        if failed_count > 0:
+            parts.append(f"已失败 {failed_count} 张")
         return " | ".join(parts)
     
     def _calculate_output_path(self, image_path: str, save_info: dict) -> str:
@@ -2531,7 +2855,7 @@ class TranslationWorker(QObject):
             # 提取真正的错误原因
             try:
                 real_error = error_message.split("最后一次错误:")[1].strip()
-            except:
+            except Exception:
                 pass
         
         # 检查是否是AI断句检查失败
@@ -2643,6 +2967,38 @@ class TranslationWorker(QObject):
             friendly_msg += "      - Grok: grok-4.2\n"
             friendly_msg += "      - 注意：DeepSeek模型不支持多模态\n\n"
         
+        # 检查是否是模型不存在/模型名错误
+        elif (
+            "code=20012" in real_error.lower()
+            or "model does not exist" in real_error.lower()
+            or ("does not exist" in real_error.lower() and "model" in real_error.lower())
+            or "model not found" in real_error.lower()
+            or "invalid model" in real_error.lower()
+            or "no such model" in real_error.lower()
+            or "模型不存在" in real_error
+            or "模型名称不存在" in real_error
+        ):
+            friendly_msg += "🔍 错误原因：模型不存在，或当前 API 站点不支持该模型\n\n"
+            friendly_msg += "📝 详细说明：\n"
+            friendly_msg += "   API 已经连通，但服务端找不到你填写的模型名称。\n"
+            friendly_msg += "   这通常是模型名拼写不对、大小写不一致、模型已下线，或当前中转/渠道并不提供这个模型。\n\n"
+            friendly_msg += "解决方案：\n"
+            friendly_msg += "   1. ⭐ 检查模型名称是否与服务商提供的名称完全一致（最常见）\n"
+            friendly_msg += "      - 位置：翻译设置 → 环境变量 → MODEL\n"
+            friendly_msg += "      - 注意：模型名称通常区分大小写，不能省略前缀或版本号\n\n"
+            friendly_msg += "   2. 使用「测试连接」或模型列表功能确认当前站点实际支持哪些模型\n"
+            friendly_msg += "      - API管理 → 测试连接 / 获取模型列表\n"
+            friendly_msg += "      - 先确认该站点真的提供你要用的模型\n\n"
+            friendly_msg += "   3. 如果你用的是第三方 OpenAI 兼容站点（如中转、渠道、硅基流动等）\n"
+            friendly_msg += "      - 不要假设它支持 OpenAI 官方的全部模型名\n"
+            friendly_msg += "      - 需要改成该服务商自己的实际模型 ID\n\n"
+            friendly_msg += "   4. 检查 API 地址和翻译器类型是否匹配\n"
+            friendly_msg += "      - OpenAI 兼容接口应使用「OpenAI」或「OpenAI高质量」翻译器\n"
+            friendly_msg += "      - 若站点和翻译器类型不匹配，也可能导致模型判断异常\n\n"
+            friendly_msg += "   5. 若该模型最近改名、下线或迁移渠道\n"
+            friendly_msg += "      - 访问对应服务商的模型广场或官方文档\n"
+            friendly_msg += "      - 换成当前仍可用的模型名后再试\n\n"
+
         # 检查是否是404错误（API地址或模型配置错误）
         elif "API_404_ERROR" in real_error or "404" in real_error or "HTML错误页面" in real_error:
             friendly_msg += "🔍 错误原因：API返回404错误\n\n"
@@ -2682,11 +3038,18 @@ class TranslationWorker(QObject):
         # 检查是否是网络连接错误
         elif (
             "connection" in real_error.lower()
+            or "connect" in real_error.lower()
+            or "failed to connect" in real_error.lower()
+            or "could not connect to server" in real_error.lower()
+            or "connection timed out" in real_error.lower()
+            or "timed out after" in real_error.lower()
             or "连接" in real_error
             or "timeout" in real_error.lower()
             or "超时" in real_error
             or "network" in real_error.lower()
             or "网络" in real_error
+            or "curl: (7)" in real_error.lower()
+            or "curl: (28)" in real_error.lower()
             or "host" in real_error.lower()
             or "hostname" in real_error.lower()
             or "dns" in real_error.lower()
@@ -2935,7 +3298,6 @@ class TranslationWorker(QObject):
                 UpscaleConfig,
             )
             from manga_translator.manga_translator import MangaTranslator
-            from manga_translator.utils import open_pil_image
 
             self._log_info("--- 正在初始化翻译器...")
             translator_params = self.config_dict.get('cli', {})
@@ -2966,6 +3328,7 @@ class TranslationWorker(QObject):
                 "use_backend_hook": True,
                 "batch_concurrent": False,
                 "detail": "处理中",
+                "failed_count": 0,
             }
 
             def emit_eta_progress(current: int, total: int, detail: str | None = None):
@@ -2981,6 +3344,7 @@ class TranslationWorker(QObject):
                     remaining_count=remaining_count,
                     elapsed_seconds=elapsed_seconds,
                     skipped_count=progress_context["offset"],
+                    failed_count=progress_context["failed_count"],
                     detail=detail if detail is not None else progress_context["detail"],
                 )
                 progress_signal.emit(current, total, message)
@@ -2990,11 +3354,18 @@ class TranslationWorker(QObject):
                     if not progress_context["use_backend_hook"]:
                         return
                     if state.startswith("batch:"):
-                        # 解析批次进度: "batch:start:end:total"
+                        # 解析批次进度: "batch:start:end:total[:failed]"
                         parts = state.split(":")
-                        if len(parts) == 4:
+                        if len(parts) >= 4:
                             batch_end = int(parts[2])
                             total = int(parts[3])
+                            failed_count = progress_context["failed_count"]
+                            if len(parts) >= 5:
+                                try:
+                                    failed_count = max(0, int(parts[4]))
+                                except (TypeError, ValueError):
+                                    failed_count = progress_context["failed_count"]
+                            progress_context["failed_count"] = failed_count
                             if progress_context["batch_concurrent"]:
                                 batch_end += progress_context["offset"]
                                 total = progress_context["overall_total"] or (total + progress_context["offset"])
@@ -3099,15 +3470,26 @@ class TranslationWorker(QObject):
                         should_skip = False
                         
                         # 检查导出原文/翻译的TXT文件（如果启用）
-                        if cli_config.get('template', False) and cli_config.get('save_text', False):
+                        if cli_config.get('translate_json_only', False):
+                            from manga_translator.utils.path_manager import (
+                                get_original_txt_path,
+                            )
+                            txt_path = get_original_txt_path(file_path, create_dir=False)
+                            if not os.path.exists(txt_path):
+                                should_skip = True
+                        elif cli_config.get('template', False) and cli_config.get('save_text', False):
                             # 导出原文模式 - 检查TXT文件
-                            from manga_translator.utils.path_manager import get_original_txt_path
+                            from manga_translator.utils.path_manager import (
+                                get_original_txt_path,
+                            )
                             txt_path = get_original_txt_path(file_path, create_dir=False)
                             if os.path.exists(txt_path):
                                 should_skip = True
                         elif cli_config.get('generate_and_export', False):
                             # 导出翻译模式 - 检查TXT文件
-                            from manga_translator.utils.path_manager import get_translated_txt_path
+                            from manga_translator.utils.path_manager import (
+                                get_translated_txt_path,
+                            )
                             txt_path = get_translated_txt_path(file_path, create_dir=False)
                             if os.path.exists(txt_path):
                                 should_skip = True
@@ -3161,7 +3543,10 @@ class TranslationWorker(QObject):
             elif cli_config.get('load_text', False):
                 workflow_mode = self._t("Import Translation and Render")
                 workflow_tip = self._t("Tip: Will read TXT files from manga_translator_work/originals/ or translations/ and render (prioritize _original.txt)")
-                
+            elif cli_config.get('translate_json_only', False):
+                workflow_mode = self._t("Translate JSON Only")
+                workflow_tip = self._t("Tip: Requires existing JSON data. The app reads original text from JSON, translates it, writes results back to JSON, and deletes imagename_original.txt after success")
+                 
                 # TXT导入JSON的预处理已经统一到翻译器入口（manga_translator.py），这里不再需要
 
             # 检查是否启用并发模式
@@ -3169,6 +3554,7 @@ class TranslationWorker(QObject):
             
             # 检查是否有不兼容并行的特殊模式
             load_text = self.config_dict.get('cli', {}).get('load_text', False)
+            translate_json_only = self.config_dict.get('cli', {}).get('translate_json_only', False)
             template = self.config_dict.get('cli', {}).get('template', False)
             save_text = self.config_dict.get('cli', {}).get('save_text', False)
             generate_and_export = self.config_dict.get('cli', {}).get('generate_and_export', False)
@@ -3180,6 +3566,7 @@ class TranslationWorker(QObject):
             is_template_save_mode = template and save_text
             has_incompatible_mode = (
                 load_text or 
+                translate_json_only or
                 is_template_save_mode or 
                 generate_and_export or 
                 colorize_only or 
@@ -3193,6 +3580,8 @@ class TranslationWorker(QObject):
                 incompatible_modes = []
                 if load_text:
                     incompatible_modes.append("导入翻译")
+                if translate_json_only:
+                    incompatible_modes.append("仅翻译(JSON)")
                 if is_template_save_mode:
                     incompatible_modes.append("导出原文")
                 if generate_and_export:
@@ -3212,6 +3601,7 @@ class TranslationWorker(QObject):
             progress_context["offset"] = skipped_count
             progress_context["overall_total"] = total_original_count
             progress_context["batch_concurrent"] = batch_concurrent
+            progress_context["failed_count"] = 0
             if is_hq or (len(self.files) > 0 and batch_size > 1):
                 self._log_info(f"--- 开始批量处理 ({'高质量模式' if is_hq else '批量模式'})")
 
@@ -3397,12 +3787,14 @@ class TranslationWorker(QObject):
                             emit_eta_progress(current_num, total_original_count, f"刚完成: {os.path.basename(file_path)}")
                         else:
                             error_msg = getattr(ctx, 'translation_error', 'Translation returned no result') if ctx else 'Translation failed'
+                            progress_context["failed_count"] += 1
                             self.file_processed.emit({'success': False, 'original_path': file_path, 'error': error_msg})
                             self._log_warning(f"❌ [{current_num}/{total_files}] 失败：{os.path.basename(file_path)}")
                             emit_eta_progress(current_num, total_original_count, f"处理失败: {os.path.basename(file_path)}")
 
                     except Exception as e:
                         self._log_error(f"❌ [{current_num}/{total_files}] 错误：{os.path.basename(file_path)} - {e}")
+                        progress_context["failed_count"] += 1
                         self.file_processed.emit({'success': False, 'original_path': file_path, 'error': str(e)})
                         emit_eta_progress(current_num, total_original_count, f"处理失败: {os.path.basename(file_path)}")
                         # 抛出异常，终止整个翻译流程

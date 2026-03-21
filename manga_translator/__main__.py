@@ -4,10 +4,10 @@
 Manga Translator - 命令行入口
 支持多种运行模式：cli, local, ws, shared
 """
-import os
-import sys
 import asyncio
 import logging
+import os
+import sys
 import warnings
 
 # 在 PyTorch 初始化前设置显存优化，允许使用共享显存
@@ -32,7 +32,7 @@ def main():
         os.environ['MT_DISABLE_ONNX_GPU'] = '1'
     
     # 延迟导入日志工具，避免加载大型库
-    from manga_translator.utils.log import init_logging, set_log_level, get_logger
+    from manga_translator.utils.log import get_logger, init_logging, set_log_level
     
     # 初始化日志
     init_logging()

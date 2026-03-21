@@ -4,10 +4,10 @@
 定义用户账号、权限、会话和审计事件的数据模型类。
 """
 
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from typing import List, Optional, Dict, Any
 import json
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 
 @dataclass

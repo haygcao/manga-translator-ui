@@ -5,14 +5,28 @@ This module contains file management endpoints for the manga translator server.
 """
 
 import os
-from fastapi import APIRouter, Header, UploadFile, File, HTTPException, Depends
+from pathlib import Path
 
-from manga_translator.server.core.config_manager import admin_settings, FONTS_DIR
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+
+from manga_translator.server.core.config_manager import FONTS_DIR, admin_settings
 from manga_translator.server.core.middleware import require_admin
 from manga_translator.server.core.models import Session
 from manga_translator.utils import BASE_PATH
 
 router = APIRouter(tags=["files"])
+PROMPTS_DIR = Path(BASE_PATH) / 'dict'
+
+
+def _resolve_prompt_path(filename: str) -> Path:
+    if not filename or '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(400, detail="Invalid filename")
+
+    prompt_path = (PROMPTS_DIR / filename).resolve()
+    if prompt_path.parent != PROMPTS_DIR.resolve():
+        raise HTTPException(400, detail="Invalid filename")
+
+    return prompt_path
 
 
 # ============================================================================
@@ -116,19 +130,13 @@ async def upload_prompt(
 
 
 @router.get("/prompts")
-async def list_prompts():
+async def list_prompts(session: Session = Depends(require_admin)):
     """List available prompt files (excluding system prompts)"""
     try:
-        dict_dir = os.path.join(BASE_PATH, 'dict')
         prompts = []
-        
-        print(f"[DEBUG] Listing prompts from: {dict_dir}")
-        print(f"[DEBUG] dict_dir exists: {os.path.exists(dict_dir)}")
-        
-        # Read from dict directory (directory used by desktop version)
-        if os.path.exists(dict_dir):
-            files = os.listdir(dict_dir)
-            print(f"[DEBUG] Found {len(files)} files in dict_dir")
+
+        if PROMPTS_DIR.exists():
+            files = os.listdir(PROMPTS_DIR)
             SYSTEM_PROMPT_BASES = {
                 'system_prompt_hq', 'system_prompt_hq_format', 'system_prompt_line_break', 'glossary_extraction_prompt',
             }
@@ -141,31 +149,26 @@ async def list_prompts():
                 if name_without_ext in SYSTEM_PROMPT_BASES:
                     continue
                 prompts.append(f)
-                print(f"[DEBUG] Added prompt: {f}")
-        
-        print(f"[DEBUG] Returning {len(prompts)} prompts")
+
         return sorted(prompts)
     except Exception as e:
-        print(f"[ERROR] Failed to list prompts: {e}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(500, detail=f"Failed to list prompts: {str(e)}")
 
 
 @router.get("/prompts/{filename}")
-async def get_prompt(filename: str, token: str = Header(alias="X-Admin-Token", default=None)):
+async def get_prompt(
+    filename: str,
+    session: Session = Depends(require_admin)
+):
     """Get prompt file content (admin only)"""
-    dict_dir = os.path.join(BASE_PATH, 'dict')
-    
-    # Find in dict directory
-    file_path = os.path.join(dict_dir, filename)
-    
-    if not os.path.exists(file_path):
+    file_path = _resolve_prompt_path(filename)
+
+    if not file_path.exists():
         raise HTTPException(404, detail="Prompt file not found")
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
+
+    with file_path.open('r', encoding='utf-8') as f:
         content = f.read()
-    
+
     return {"filename": filename, "content": content}
 
 
@@ -183,8 +186,6 @@ async def delete_prompt(
     if '..' in filename or '/' in filename or '\\' in filename:
         raise HTTPException(400, detail="Invalid filename")
     
-    dict_dir = os.path.join(BASE_PATH, 'dict')
-    
     # Prohibit deleting system prompts
     SYSTEM_PROMPT_BASES = {
         'system_prompt_hq', 'system_prompt_hq_format', 'system_prompt_line_break', 'glossary_extraction_prompt',
@@ -192,13 +193,12 @@ async def delete_prompt(
     name_without_ext = os.path.splitext(filename)[0]
     if name_without_ext in SYSTEM_PROMPT_BASES:
         raise HTTPException(403, detail="Cannot delete system prompt files")
-    
-    # Find in dict directory
-    file_path = os.path.join(dict_dir, filename)
-    
-    if not os.path.exists(file_path):
+
+    file_path = _resolve_prompt_path(filename)
+
+    if not file_path.exists():
         raise HTTPException(404, detail="Prompt file not found")
-    
+
     try:
         os.remove(file_path)
         return {"success": True, "message": f"Deleted {filename}"}

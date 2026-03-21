@@ -1,17 +1,19 @@
-import numpy as np
-import cv2
 from typing import List, Optional
 
-from .default import DefaultDetector
-from .dbnet_convnext import DBConvNextDetector
-from .ctd import ComicTextDetector
+import cv2
+import numpy as np
+
+from ..config import Detector
+from ..utils import Quadrilateral
+from .common import CommonDetector, OfflineDetector
 from .craft import CRAFTDetector
+from .ctd import ComicTextDetector
+from .dbnet_convnext import DBConvNextDetector
+from .default import DefaultDetector
+
 # from .paddle_rust import PaddleDetector  # 已移除
 from .none import NoneDetector
 from .yolo_obb import YOLOOBBDetector
-from .common import CommonDetector, OfflineDetector
-from ..config import Detector
-from ..utils import Quadrilateral
 
 DETECTORS = {
     Detector.default: DefaultDetector,

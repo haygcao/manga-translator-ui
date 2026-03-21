@@ -4,7 +4,7 @@
 """
 
 from PyQt6.QtCore import QRegularExpression
-from PyQt6.QtGui import QColor, QTextCharFormat, QFont, QSyntaxHighlighter
+from PyQt6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 
 
 class TranslationMarkupHighlighter(QSyntaxHighlighter):

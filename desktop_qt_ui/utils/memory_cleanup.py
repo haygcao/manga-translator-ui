@@ -4,7 +4,6 @@
 提供统一的内存清理功能，用于翻译完成后释放模型占用的内存。
 特别针对CPU模式进行优化，因为CPU模式下模型权重直接占用RAM。
 """
-import gc
 import logging
 
 logger = logging.getLogger(__name__)

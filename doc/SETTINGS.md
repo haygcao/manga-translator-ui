@@ -21,6 +21,18 @@
 - **目标语言 (target_lang)**：翻译的目标语言
   - 简体中文、繁体中文、英语、日语、韩语等
 
+- **保留源语言 (keep_lang)**：文本框合并完成后、进入翻译前，只保留识别为指定源语言的文本区域
+  - 位置：翻译设置 → 翻译器
+  - 默认：`none`（不过滤）
+  - 适用场景：英文版日漫只保留英文文本，尽量跳过保留原样的日文标题、拟声词和装饰字
+  - 工作阶段：仅作用于正常的 OCR → 文本框合并 → 翻译 主流程，在文本框合并后、翻译前执行
+  - 英文规则：纯拉丁字母、数字、空白和常见英文标点会优先判为 `ENG`
+  - 日文规则：含平假名 / 片假名时优先判为 `JPN`
+  - 中日共用汉字规则：如果文本只有汉字、没有假名，不强行细分中日，而是按共享 CJK 文本处理；选择 `CHS`、`CHT` 或 `JPN` 时都会保留，避免把 `開始`、`決戦` 这类文本误过滤掉
+  - 使用建议：
+    - 英文漫画推荐配合 `paddleocr_latin` 使用，并将此项设为 `ENG`
+    - 若希望不过滤任何文本，保持为 `none`
+
 - **启用流式传输 (enable_streaming)**：控制是否优先使用流式翻译响应
   - 适用于：OpenAI、Gemini、高质量翻译 OpenAI、高质量翻译 Gemini 四个翻译器
   - 默认：开启（`true`）
@@ -144,8 +156,22 @@
 - **跳过无文本图像 (skip_no_text)**：跳过没有检测到文本的图片
 
 - **图片可编辑 (save_text)**：保存翻译结果到 JSON 文件（用于后续编辑）
+  - 输出路径：`原图目录/manga_translator_work/json/`
+  - 开启后，程序会额外保存修复图到 `原图目录/manga_translator_work/inpainted/`
+  - `导入翻译并渲染 (load_text)` 模式下，只有实际重新执行了修复时才会生成新的修复图
 
-- **导入翻译 (load_text)**：从 JSON 文件加载翻译结果
+- **导入翻译 (load_text)**：从 JSON 文件加载翻译结果并直接渲染
+  - 需要提前存在对应的 JSON 数据
+  - 此模式固定基于原图处理，不走上色和超分
+  - 若 JSON 已保存蒙版，则直接复用
+  - 若 JSON 缺少蒙版，且开启了 `导入固定YOLO框 (import_yolo_labels)`，会基于原图补跑一次检测来生成蒙版
+  - 已有旧修复图时，不会再参与检测输入；只会在可复用时作为渲染底图使用
+
+- **仅翻译（JSON）(translate_json_only)**：从已有 JSON 提取原文并执行翻译，然后回写 JSON
+  - 需要提前存在对应的 JSON 数据
+  - 不执行检测、OCR、修复和渲染
+  - 适合先导出原文、后续只更新译文内容的流程
+  - 成功回写 JSON 后，会删除对应的 `_original.txt`
 
 - **导出原文 (template)**：导出原文到文本文件（用于手动翻译）
 
@@ -226,6 +252,13 @@
   - 值越大，过滤越严格，小文本框会被移除
   - 值越小，保留更多小文本框
   - 建议范围：0.0005-0.002（0.05%-0.2%）
+
+- **导入固定YOLO框 (import_yolo_labels)**：从固定目录导入 YOLO 标注框
+  - 固定路径：`原图目录/manga_translator_work/yolo_labels/图片同名.txt`
+  - 忽略类别标签，文件中的框会全部导入
+  - 正常翻译流程：保留检测器生成的蒙版，后续 OCR 和文本框合并改用导入框
+  - 导出原文 / 生成并导出：直接使用导入框，不保存蒙版到 JSON
+  - 导入翻译并渲染：不会覆盖 JSON 里的文本框；只在 JSON 缺少蒙版时用于补生成蒙版
 
 - **启用YOLO辅助检测 (use_yolo_obb)**：使用 YOLO 有向边界框辅助检测（提高检测准确率）
 
@@ -395,7 +428,7 @@
 
 - **上色模型 (colorizer)**：上色器类型
   - **none**：不上色（默认）
-  - **openai_colorizer**：调用 OpenAI 图像接口做整页上色
+  - **openai_colorizer**：调用 OpenAI 兼容 / 硅基流动 / 百炼原生图像接口做整页上色，会按 `API Base URL` 自动切换请求格式
   - **gemini_colorizer**：调用 Gemini 图像接口做整页上色
   - 其他上色模型
 
@@ -411,6 +444,7 @@
 - **AI 上色并发数 (ai_colorizer_concurrency)**：OpenAI Colorizer / Gemini Colorizer 的最大并发请求数
   - 批量模式下可限制同时发出的上色请求数量
   - 仅 Qt 桌面端显示，服务端网页配置页不显示
+  - AI 上色多图提示词会自动按图号说明角色：`Image 1` 是当前待上色页，后续图片会分别标注为参考图或历史已上色页
 
 ---
 
@@ -419,15 +453,19 @@
 ### OCR 设置
 
 - **OCR模型 (ocr)**：OCR 识别模型
+  - **32px**：旧版轻量模型，可作兼容性备选
   - **48px**：默认模型（推荐，平衡速度和准确率）
   - **48px_ctc**：CTC 变体模型（可作为备选对比，不代表一定更精确）
-  - **mocr**：Manga OCR 专用模型（专门针对漫画优化）
-  - **paddleocr**：PaddleOCR 引擎（支持多语言）
-  - **paddleocr_korean**：韩漫推荐
-  - **paddleocr_vl**：PaddleOCR-VL-For-Manga 模型（效果最好，最吃配置）
+  - **mocr**：Manga OCR 专用模型（专门针对漫画优化，日漫常用）
+  - **paddleocr**：通用多语言模型
+  - **paddleocr_korean**：韩文 / 韩漫推荐
+  - **paddleocr_latin**：拉丁字母文本推荐，英文建议优先使用
+  - **paddleocr_thai**：泰文推荐
+  - **paddleocr_vl**：PaddleOCR-VL-1.5 通用模型（效果最好，最吃配置），建议配合下方语言提示或自定义提示词使用
   - **openai_ocr**：调用 OpenAI 兼容多模态接口逐框 OCR，文字颜色仍由本地 `48px` 模型提取
   - **gemini_ocr**：调用 Gemini 多模态接口逐框 OCR，文字颜色仍由本地 `48px` 模型提取
-  - **推荐**：日漫推荐 `48px` 或 `mocr`，韩漫推荐 `paddleocr_korean`，英肉推荐原始 `paddleocr`
+  - **AI OCR 提醒**：通常效果最好，但与本地 OCR 的差距往往不大；由于是按文本框逐次请求，十分消耗请求次数，如果是按次收费的站点不建议使用
+  - **推荐**：日漫推荐 `48px` 或 `mocr`，韩漫推荐 `paddleocr_korean`，英文推荐 `paddleocr_latin`，泰文推荐 `paddleocr_thai`
 
 - **AI OCR 提示词**：OpenAI OCR / Gemini OCR 使用的固定提示词文件
   - Qt 界面中点击"编辑"即可修改
@@ -445,11 +483,18 @@
   - OpenAI Colorizer：`COLOR_OPENAI_API_KEY`、`COLOR_OPENAI_MODEL`、`COLOR_OPENAI_API_BASE`
   - Gemini Colorizer：`COLOR_GEMINI_API_KEY`、`COLOR_GEMINI_MODEL`、`COLOR_GEMINI_API_BASE`
   - 若未填写上色专用变量，会自动回退到普通 `OPENAI_*` 或 `GEMINI_*`
+  - `COLOR_OPENAI_API_BASE` 命中不同后端时会自动切换请求格式：
+    - 硅基流动 `https://api.siliconflow.cn/v1`
+    - 百炼原生 `https://dashscope.aliyuncs.com/api/v1` / `https://dashscope-intl.aliyuncs.com/api/v1`
+    - 火山引擎 / 其他 OpenAI 兼容接口
+  - 若启用 `use_custom_api_params`，`colorizer` 分组参数会自动映射到对应后端请求体
 
 - **AI 渲染环境变量**：API 渲染优先读取独立的渲染接口配置
   - OpenAI Renderer：`RENDER_OPENAI_API_KEY`、`RENDER_OPENAI_MODEL`、`RENDER_OPENAI_API_BASE`
   - Gemini Renderer：`RENDER_GEMINI_API_KEY`、`RENDER_GEMINI_MODEL`、`RENDER_GEMINI_API_BASE`
   - 若未填写渲染专用变量，会自动回退到普通 `OPENAI_*` 或 `GEMINI_*`
+  - `RENDER_OPENAI_API_BASE` 命中不同后端时也会自动切换请求格式，规则与 OpenAI Colorizer 一致
+  - 若启用 `use_custom_api_params`，`render` 分组参数会自动映射到对应后端请求体
 
 - **启用混合OCR (use_hybrid_ocr)**：启用混合 OCR（同时使用两个模型，提高准确率）
   - **日漫推荐组合**：`48px + mocr`

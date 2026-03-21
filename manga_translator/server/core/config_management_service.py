@@ -5,19 +5,23 @@ Manages .env configuration files, presets, and user configurations.
 Provides backup, encryption, and validation capabilities.
 """
 
-import os
-import shutil
-import logging
-from typing import Dict, List, Optional
-from datetime import datetime, timezone
-from pathlib import Path
-from cryptography.fernet import Fernet
 import base64
 import hashlib
+import logging
+import os
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
 
-from manga_translator.server.repositories.config_repository import ConfigRepository, UserConfigRepository
-from manga_translator.server.models.config_models import ConfigPreset, UserConfig
+from cryptography.fernet import Fernet
+
 from manga_translator.server.core.env_service import EnvService
+from manga_translator.server.models.config_models import ConfigPreset, UserConfig
+from manga_translator.server.repositories.config_repository import (
+    ConfigRepository,
+    UserConfigRepository,
+)
 
 logger = logging.getLogger(__name__)
 

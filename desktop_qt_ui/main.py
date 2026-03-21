@@ -1,6 +1,6 @@
-import sys
-import os
 import logging
+import os
+import sys
 import warnings
 
 # 抑制第三方库的警告（必须在导入其他库之前设置）
@@ -20,6 +20,7 @@ os.environ['HF_HUB_ENDPOINT'] = 'https://hf-mirror.com'
 
 # 禁用 SSL 验证（解决 hf-mirror.com 证书问题）
 import ssl
+
 ssl._create_default_https_context = ssl._create_unverified_context
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ['REQUESTS_CA_BUNDLE'] = ''
@@ -43,11 +44,12 @@ if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
         if os.path.exists(onnx_capi_dir):
             os.add_dll_directory(onnx_capi_dir)
 
-from PyQt6.QtWidgets import QApplication
 from main_window import MainWindow
+from PyQt6.QtWidgets import QApplication
 from services import init_services
-from utils.resource_helper import load_icon_from_resources
+from utils.resource_helper import iter_existing_resource_paths, load_icon_from_resources
 from widgets.themed_message_box import install_themed_message_boxes
+
 
 # 全局异常处理器，捕获未处理的异常并记录到日志
 def global_exception_handler(exc_type, exc_value, exc_traceback):
@@ -75,14 +77,97 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 # 设置全局异常处理器
 sys.excepthook = global_exception_handler
 
+
+def _set_windows_app_user_model_id():
+    """确保 Windows 将直接脚本启动识别为独立应用，而不是 python.exe。"""
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            'manga.translator.ui.1.0'
+        )
+    except Exception:
+        logging.exception("设置 Windows AppUserModelID 失败")
+
+
+def _apply_windows_native_window_icon(window, icon_path: str):
+    """为 Windows 原生窗口句柄设置大小图标，覆盖 python.exe 默认图标。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        hwnd = wintypes.HWND(int(window.winId()))
+        user32 = ctypes.windll.user32
+        user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+        user32.GetSystemMetrics.restype = ctypes.c_int
+        user32.LoadImageW.argtypes = [
+            wintypes.HINSTANCE,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.LoadImageW.restype = wintypes.HANDLE
+        user32.SendMessageW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.SendMessageW.restype = ctypes.c_ssize_t
+
+        image_icon = 1
+        wm_seticon = 0x0080
+        icon_small = 0
+        icon_big = 1
+        lr_loadfromfile = 0x0010
+
+        sm_cxicon = 11
+        sm_cyicon = 12
+        sm_cxsmicon = 49
+        sm_cysmicon = 50
+
+        big_icon_handle = user32.LoadImageW(
+            None,
+            icon_path,
+            image_icon,
+            user32.GetSystemMetrics(sm_cxicon),
+            user32.GetSystemMetrics(sm_cyicon),
+            lr_loadfromfile,
+        )
+        small_icon_handle = user32.LoadImageW(
+            None,
+            icon_path,
+            image_icon,
+            user32.GetSystemMetrics(sm_cxsmicon),
+            user32.GetSystemMetrics(sm_cysmicon),
+            lr_loadfromfile,
+        )
+
+        if big_icon_handle:
+            user32.SendMessageW(hwnd, wm_seticon, icon_big, big_icon_handle)
+        if small_icon_handle:
+            user32.SendMessageW(hwnd, wm_seticon, icon_small, small_icon_handle)
+
+        if big_icon_handle or small_icon_handle:
+            window._native_icon_handles = (big_icon_handle, small_icon_handle)
+            logging.info(f"Windows 原生窗口图标已设置: {icon_path}")
+            return True
+
+        logging.warning(f"Windows 原生窗口图标加载失败: {icon_path}")
+    except Exception:
+        logging.exception("设置 Windows 原生窗口图标失败")
+    return False
+
 def main():
     """
     应用主入口
     """
     # --- 日志配置（异步优化）---
+    import atexit
     import queue
     import threading
-    import atexit
     
     # 创建异步日志处理器
     class AsyncStreamHandler(logging.Handler):
@@ -111,7 +196,7 @@ def main():
                     # ✅ 即使队列为空也刷新一次，确保之前的输出显示
                     try:
                         self.stream.flush()
-                    except:
+                    except Exception:
                         pass
                     continue
                 except Exception:
@@ -191,13 +276,7 @@ def main():
     # --- 环境设置 ---
     # Windows特殊处理：必须在创建QApplication之前设置AppUserModelID
     if sys.platform == 'win32':
-        try:
-            import ctypes
-            # 设置AppUserModelID，让Windows识别这是独立应用
-            myappid = 'manga.translator.ui.1.0'
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        except Exception:
-            pass
+        _set_windows_app_user_model_id()
     
     # 1. 创建 QApplication 实例
     app = QApplication(sys.argv)
@@ -223,6 +302,7 @@ def main():
     qInstallMessageHandler(qt_message_handler)
     
     app_icon = None
+    native_windows_icon_path = None
 
     icon_candidates = []
     if sys.platform == 'darwin':
@@ -243,6 +323,14 @@ def main():
         logging.info(f"UI 图标加载成功: {icon_source}")
     else:
         logging.warning("UI 图标加载失败：未找到可用的 icon.ico/icon.png/icon.icns")
+
+    if sys.platform == 'win32':
+        native_windows_icon_path = next(
+            iter_existing_resource_paths([os.path.join('doc', 'images', 'icon.ico')]),
+            None,
+        )
+        if not native_windows_icon_path:
+            logging.warning("Windows 原生窗口图标未找到：doc/images/icon.ico")
 
     # 2. 初始化所有服务
     # 设置正确的根目录：打包后指向_internal，开发时指向项目根目录
@@ -265,6 +353,9 @@ def main():
         main_window.setWindowIcon(app_icon)
     
     main_window.show()
+
+    if sys.platform == 'win32' and native_windows_icon_path:
+        _apply_windows_native_window_icon(main_window, native_windows_icon_path)
 
     # 避免在 Windows 初始 show 流程内同步处理事件。
     # 这会触发 Qt/Windows 的重入消息处理，可能导致 RPC_E_CANTCALLOUT_ININPUTSYNCCALL。

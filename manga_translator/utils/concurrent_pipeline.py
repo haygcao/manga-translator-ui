@@ -6,18 +6,22 @@
 import asyncio
 import contextlib
 import logging
-import traceback
 import os
 import queue
 import threading
-from typing import List
-from datetime import datetime, timezone
+import traceback
 from concurrent.futures import ThreadPoolExecutor, wait
+from datetime import datetime, timezone
+from typing import List
 
 from . import Context, load_image, open_pil_image
 
 # 使用 manga_translator 的主 logger，确保日志能被UI捕获
 logger = logging.getLogger('manga_translator')
+
+
+class PipelineAbortError(asyncio.CancelledError):
+    """内部停止信号：用于中止其他工作线程，但不应被当作用户取消。"""
 
 
 class ConcurrentPipeline:
@@ -92,6 +96,7 @@ class ConcurrentPipeline:
         
         # ✅ 线程安全的状态消息队列（用于向主线程报告关键日志）
         self._status_queue = queue.Queue()
+        self.failed_images = set()
     
     def _emit_status(self, message: str):
         """向主线程发送状态消息（线程安全）"""
@@ -105,6 +110,18 @@ class ConcurrentPipeline:
                 logger.info(msg)
             except queue.Empty:
                 break
+
+    def _record_failed_image(self, image_name: str | None):
+        """记录已失败文件数，避免同一文件在多个阶段重复计数。"""
+        normalized_name = str(image_name or "").strip()
+        if not normalized_name:
+            return
+        with self._lock:
+            self.failed_images.add(normalized_name)
+
+    def _get_failed_count(self) -> int:
+        with self._lock:
+            return len(self.failed_images)
 
     def _pop_translation_task(self, timeout: float):
         """从翻译队列取一个任务。"""
@@ -156,9 +173,15 @@ class ConcurrentPipeline:
         raise RuntimeError("并发流水线已停止，无法继续提交翻译任务")
 
     def _check_cancelled_or_raise(self, stage: str, detail: str = ""):
-        """统一取消检查：收到取消后设置停止标记并抛出 CancelledError。"""
+        """统一取消检查：区分用户取消与内部停机。"""
+        if self.has_critical_error:
+            raise PipelineAbortError(self.critical_error_msg or "并发流水线发生严重错误")
+
         try:
             self.translator._check_cancelled()
+        except PipelineAbortError:
+            self.stop_workers = True
+            raise
         except asyncio.CancelledError:
             self.stop_workers = True
             message = f"[{stage}] 用户取消"
@@ -233,8 +256,12 @@ class ConcurrentPipeline:
                     logger.warning(f"[检测+OCR] 收到停止信号，已处理 {idx}/{len(file_paths)} 张图片")
                     break
                 
+                image = None
+                ctx = None
+                current_stage = 'preprocessing'
                 try:
                     # 分批加载：只在需要时加载图片
+                    current_stage = 'preprocessing'
                     logger.debug(f"[检测+OCR] 加载图片: {file_path}")
                     with open(file_path, 'rb') as f:
                         image = open_pil_image(f, eager=True)
@@ -255,6 +282,7 @@ class ConcurrentPipeline:
                     
                     # 预处理：上色、超分
                     if config.colorizer.colorizer.value != 'none':
+                        current_stage = 'colorizing'
                         ctx.img_colorized = await self.translator._run_colorizer(config, ctx)
                     else:
                         ctx.img_colorized = ctx.input
@@ -263,10 +291,12 @@ class ConcurrentPipeline:
                     self._check_cancelled_or_raise("检测+OCR", f"已处理 {idx}/{len(file_paths)} 张图片")
 
                     if config.upscale.upscale_ratio:
+                        current_stage = 'upscaling'
                         ctx.upscaled = await self.translator._run_upscaling(config, ctx)
                     else:
                         ctx.upscaled = ctx.img_colorized
 
+                    current_stage = 'preprocessing'
                     self.translator._save_editor_base_if_needed(ctx, config)
 
                     # 统一转换为 numpy
@@ -276,12 +306,14 @@ class ConcurrentPipeline:
                     self._check_cancelled_or_raise("检测+OCR", f"已处理 {idx}/{len(file_paths)} 张图片")
                     
                     # 检测
+                    current_stage = 'detection'
                     ctx.textlines, ctx.mask_raw, ctx.mask = await self.translator._run_detection(config, ctx)
                     
                     # 检查取消
                     self._check_cancelled_or_raise("检测+OCR", f"已处理 {idx}/{len(file_paths)} 张图片")
                     
                     # OCR
+                    current_stage = 'ocr'
                     ctx.textlines = await self.translator._run_ocr(config, ctx)
                     
                     # 检查取消
@@ -289,6 +321,7 @@ class ConcurrentPipeline:
                     
                     # 文本行合并
                     if ctx.textlines:
+                        current_stage = 'textline_merge'
                         ctx.text_regions = await self.translator._run_textline_merge(config, ctx)
                     
                     self.stats['detection_ocr'] += 1
@@ -328,11 +361,36 @@ class ConcurrentPipeline:
                     
                     logger.error(f"[检测+OCR] 失败: {error_msg}")
                     logger.error(traceback.format_exc())
-                    self.has_critical_error = True
-                    self.critical_error_msg = f"检测+OCR失败: {error_msg}"
-                    self.critical_error_exception = e
-                    self.stop_workers = True
+                    if not self.translator.ignore_errors:
+                        self.has_critical_error = True
+                        self.critical_error_msg = f"检测+OCR失败: {error_msg}"
+                        self.critical_error_exception = e
+                        self.stop_workers = True
+                        break
+
+                    failed_ctx = ctx or Context()
+                    if image is not None and getattr(failed_ctx, 'input', None) is None:
+                        failed_ctx.input = image
+                    failed_ctx.image_name = getattr(failed_ctx, 'image_name', None) or file_path
+                    failed_ctx.config = config
+                    failed_ctx.text_regions = []
+                    failed_ctx = self.translator._mark_context_failure(failed_ctx, e, stage=current_stage)
+                    self._record_failed_image(failed_ctx.image_name)
+
+                    with self._lock:
+                        self.base_contexts[failed_ctx.image_name] = failed_ctx
+                        self.translation_done[failed_ctx.image_name] = []
+                        self.inpaint_done[failed_ctx.image_name] = True
+
+                    self.stats['detection_ocr'] += 1
+                    self._emit_status(f"[检测+OCR] 跳过失败文件 {idx+1}/{self.total_images}: {os.path.basename(file_path)}")
+                    self.render_queue.put((failed_ctx, config))
+                    continue
+                except PipelineAbortError:
+                    logger.info(f"[检测+OCR] 因内部停止信号结束: {os.path.basename(file_path)}")
                     break
+        except PipelineAbortError:
+            self.stop_workers = True
         except asyncio.CancelledError:
             self.stop_workers = True
             raise
@@ -398,6 +456,9 @@ class ConcurrentPipeline:
                         await self._process_translation_batch(batch)
                         batch = []
                     
+                except PipelineAbortError:
+                    logger.info("[翻译] 因内部停止信号结束")
+                    break
                 except asyncio.CancelledError:
                     self.stop_workers = True
                     raise
@@ -422,6 +483,8 @@ class ConcurrentPipeline:
             
             if self.stats['translation'] >= self.total_images:
                 logger.info(f"[翻译线程] 所有图片已翻译 ({self.stats['translation']}/{self.total_images})")
+        except PipelineAbortError:
+            self.stop_workers = True
         finally:
             logger.info("[翻译线程] 停止")
     
@@ -460,6 +523,9 @@ class ConcurrentPipeline:
             else:
                 logger.debug(f"[翻译] 批次中 0/{len(batch)} 张图片完成修复，等待修复完成后加入渲染队列")
             
+        except PipelineAbortError:
+            self.stop_workers = True
+            raise
         except asyncio.CancelledError:
             self.stop_workers = True
             raise
@@ -473,17 +539,26 @@ class ConcurrentPipeline:
             logger.error(f"[翻译] 批次失败: {error_msg}")
             logger.error(f"[翻译] 异常类型: {type(e).__name__}")
             logger.error(traceback.format_exc())
-            
-            self.has_critical_error = True
-            self.critical_error_msg = f"翻译批次失败: {error_msg}"
-            self.critical_error_exception = e
-            self.stop_workers = True
-            
+
+            self.stats['translation'] += len(batch)
+            self._emit_status(f"[翻译] 跳过失败批次 ({self.stats['translation']}/{self.total_images})")
+
             for ctx, config in batch:
-                ctx.translation_error = error_msg
+                self.translator._mark_context_failure(ctx, e, stage='translation')
+                self._record_failed_image(ctx.image_name)
                 with self._lock:
                     self.translation_done[ctx.image_name] = []
+                    if ctx.image_name in self.base_contexts:
+                        self.base_contexts[ctx.image_name].text_regions = []
+                    if self.translator.ignore_errors and ctx.image_name in self.inpaint_done:
+                        self.render_queue.put((ctx, config))
                 ctx.text_regions = []
+
+            if not self.translator.ignore_errors:
+                self.has_critical_error = True
+                self.critical_error_msg = f"翻译批次失败: {error_msg}"
+                self.critical_error_exception = e
+                self.stop_workers = True
     
     def _inpaint_thread(self):
         """修复工作线程（在独立线程中运行）"""
@@ -503,6 +578,10 @@ class ConcurrentPipeline:
         
         try:
             while not self.stop_workers:
+                current_stage = 'inpainting'
+                image_name = None
+                config = None
+                ctx = None
                 try:
                     self._check_cancelled_or_raise("修复", f"已完成 {inpaint_count}/{self.total_images}")
 
@@ -534,15 +613,28 @@ class ConcurrentPipeline:
                         continue
                     
                     logger.info(f"[修复] 处理: {ctx.image_name}")
+
+                    if getattr(ctx, 'translation_error', None):
+                        self._record_failed_image(ctx.image_name)
+                        with self._lock:
+                            self.inpaint_done[ctx.image_name] = True
+                            if ctx.image_name in self.translation_done:
+                                self.render_queue.put((ctx, config))
+                        self.stats['inpaint'] += 1
+                        inpaint_count += 1
+                        self._emit_status(f"[修复] 跳过失败文件 {inpaint_count}/{self.total_images}: {os.path.basename(ctx.image_name)}")
+                        continue
                     
                     # Mask refinement
                     if ctx.mask is None and ctx.text_regions:
+                        current_stage = 'mask-generation'
                         self._check_cancelled_or_raise("修复", f"处理 {os.path.basename(ctx.image_name)}")
                         ctx.mask = await self.translator._run_mask_refinement(config, ctx)
                         self._check_cancelled_or_raise("修复", f"处理 {os.path.basename(ctx.image_name)}")
                     
                     # Inpainting
                     if ctx.text_regions:
+                        current_stage = 'inpainting'
                         self._check_cancelled_or_raise("修复", f"处理 {os.path.basename(ctx.image_name)}")
                         ctx.img_inpainted = await self.translator._run_inpainting(config, ctx)
                         self._check_cancelled_or_raise("修复", f"处理 {os.path.basename(ctx.image_name)}")
@@ -581,11 +673,37 @@ class ConcurrentPipeline:
                     
                     logger.error(f"[修复线程] 错误: {error_msg}")
                     logger.error(traceback.format_exc())
-                    self.has_critical_error = True
-                    self.critical_error_msg = f"修复线程错误: {error_msg}"
-                    self.critical_error_exception = e
-                    self.stop_workers = True
+                    if not self.translator.ignore_errors:
+                        self.has_critical_error = True
+                        self.critical_error_msg = f"修复线程错误: {error_msg}"
+                        self.critical_error_exception = e
+                        self.stop_workers = True
+                        break
+
+                    if ctx is None:
+                        ctx = Context()
+                        ctx.image_name = image_name
+                        ctx.config = config
+                    ctx = self.translator._mark_context_failure(ctx, e, stage=current_stage)
+                    self._record_failed_image(ctx.image_name)
+                    ctx.text_regions = []
+
+                    with self._lock:
+                        self.inpaint_done[ctx.image_name] = True
+                        if ctx.image_name in self.base_contexts:
+                            self.base_contexts[ctx.image_name] = ctx
+                        if ctx.image_name in self.translation_done:
+                            self.render_queue.put((ctx, config))
+
+                    self.stats['inpaint'] += 1
+                    inpaint_count += 1
+                    self._emit_status(f"[修复] 跳过失败文件 {inpaint_count}/{self.total_images}: {os.path.basename(ctx.image_name)}")
+                    continue
+                except PipelineAbortError:
+                    logger.info("[修复] 因内部停止信号结束")
                     break
+        except PipelineAbortError:
+            self.stop_workers = True
         except asyncio.CancelledError:
             self.stop_workers = True
             raise
@@ -610,6 +728,8 @@ class ConcurrentPipeline:
         
         try:
             while not self.stop_workers or rendered_count < self.total_images:
+                ctx = None
+                config = None
                 try:
                     self._check_cancelled_or_raise("渲染", f"已完成 {rendered_count}/{self.total_images}")
 
@@ -643,11 +763,35 @@ class ConcurrentPipeline:
                     
                     ctx = verified_ctx
                     logger.info(f"[渲染] 开始处理: {ctx.image_name}")
+
+                    if getattr(ctx, 'translation_error', None):
+                        self._record_failed_image(ctx.image_name)
+                        self.stats['rendering'] += 1
+                        rendered_count += 1
+                        self._emit_status(f"[渲染] 跳过失败文件 {rendered_count}/{self.total_images}: {os.path.basename(ctx.image_name)}")
+
+                        with self._results_lock:
+                            self._results.append(ctx)
+                        self.translator._cleanup_context_memory(ctx, keep_result=True)
+                        with self._lock:
+                            if ctx.image_name in self.base_contexts:
+                                del self.base_contexts[ctx.image_name]
+                        continue
                     
                     # 检查渲染所需的数据是否完整
                     if not hasattr(ctx, 'img_rgb') or ctx.img_rgb is None:
                         logger.error("[渲染] ctx.img_rgb 为 None，无法渲染！跳过此图片")
-                        ctx.translation_error = "渲染失败：缺少原始图片数据"
+                        ctx = self.translator._mark_context_failure(ctx, RuntimeError("缺少原始图片数据"), stage='rendering')
+                        self._record_failed_image(ctx.image_name)
+                        self.stats['rendering'] += 1
+                        rendered_count += 1
+                        self._emit_status(f"[渲染] 跳过失败文件 {rendered_count}/{self.total_images}: {os.path.basename(ctx.image_name)}")
+                        with self._results_lock:
+                            self._results.append(ctx)
+                        self.translator._cleanup_context_memory(ctx, keep_result=True)
+                        with self._lock:
+                            if ctx.image_name in self.base_contexts:
+                                del self.base_contexts[ctx.image_name]
                         continue
                     
                     # 备份修复后图片
@@ -684,9 +828,10 @@ class ConcurrentPipeline:
                                 # ✅ 先保存修复图（在PSD导出之前），这样PSD导出时可以找到修复图文件
                                 if img_inpainted_copy is not None:
                                     try:
-                                        from .path_manager import get_inpainted_path
-                                        from .generic import imwrite_unicode
                                         import cv2
+
+                                        from .generic import imwrite_unicode
+                                        from .path_manager import get_inpainted_path
                                         
                                         inpainted_path = get_inpainted_path(ctx.image_name, create_dir=True)
                                         imwrite_unicode(inpainted_path, cv2.cvtColor(img_inpainted_copy, cv2.COLOR_RGB2BGR), logger)
@@ -710,7 +855,8 @@ class ConcurrentPipeline:
                         except Exception as save_err:
                             logger.error(f"[渲染] 保存失败 {os.path.basename(ctx.image_name)}: {save_err}")
                             logger.error(traceback.format_exc())
-                            ctx.translation_error = str(save_err)
+                            ctx = self.translator._mark_context_failure(ctx, save_err, stage='saving')
+                            self._record_failed_image(ctx.image_name)
                     else:
                         logger.error("[渲染] ctx.result 为 None！")
                     
@@ -736,11 +882,37 @@ class ConcurrentPipeline:
                     
                     logger.error(f"[渲染线程] 错误: {error_msg}")
                     logger.error(traceback.format_exc())
+                    if not self.translator.ignore_errors:
+                        self.has_critical_error = True
+                        self.critical_error_msg = f"渲染线程错误: {error_msg}"
+                        self.critical_error_exception = e
+                        self.stop_workers = True
+                        break
+
+                    if ctx is not None:
+                        ctx = self.translator._mark_context_failure(ctx, e, stage='rendering')
+                        self._record_failed_image(ctx.image_name)
+                        self.stats['rendering'] += 1
+                        rendered_count += 1
+                        self._emit_status(f"[渲染] 跳过失败文件 {rendered_count}/{self.total_images}: {os.path.basename(ctx.image_name)}")
+                        with self._results_lock:
+                            self._results.append(ctx)
+                        self.translator._cleanup_context_memory(ctx, keep_result=True)
+                        with self._lock:
+                            if ctx.image_name in self.base_contexts:
+                                del self.base_contexts[ctx.image_name]
+                        continue
+
                     self.has_critical_error = True
                     self.critical_error_msg = f"渲染线程错误: {error_msg}"
                     self.critical_error_exception = e
                     self.stop_workers = True
                     break
+                except PipelineAbortError:
+                    logger.info("[渲染] 因内部停止信号结束")
+                    break
+        except PipelineAbortError:
+            self.stop_workers = True
         except asyncio.CancelledError:
             self.stop_workers = True
             raise
@@ -762,7 +934,7 @@ class ConcurrentPipeline:
         self.start_time = datetime.now(timezone.utc)
         
         logger.info(f"[并发流水线] 开始处理 {self.total_images} 张图片")
-        logger.info(f"[并发流水线] 真正并行模式: 4个独立线程（检测+OCR / 翻译 / 修复 / 渲染）")
+        logger.info("[并发流水线] 真正并行模式: 4个独立线程（检测+OCR / 翻译 / 修复 / 渲染）")
         
         # 重置统计
         for key in self.stats:
@@ -770,6 +942,7 @@ class ConcurrentPipeline:
         self.translation_done.clear()
         self.inpaint_done.clear()
         self.base_contexts.clear()
+        self.failed_images.clear()
         self.detection_ocr_done = False
         self.stop_workers = False
         self.has_critical_error = False
@@ -781,13 +954,16 @@ class ConcurrentPipeline:
         original_cancel_callback = getattr(self.translator, "_cancel_check_callback", None)
         if hasattr(self.translator, "set_cancel_check_callback"):
             def _pipeline_cancel_check():
-                if self.stop_workers:
-                    return True
+                if self.has_critical_error:
+                    raise PipelineAbortError(self.critical_error_msg or "并发流水线发生严重错误")
                 if original_cancel_callback:
                     try:
-                        return bool(original_cancel_callback())
+                        if bool(original_cancel_callback()):
+                            return True
                     except Exception as e:
                         logger.debug(f"[并发流水线] 外部取消回调异常（可忽略）: {e}")
+                if self.stop_workers:
+                    raise PipelineAbortError("并发流水线已停止")
                 return False
             self.translator.set_cancel_check_callback(_pipeline_cancel_check)
         
@@ -813,7 +989,10 @@ class ConcurrentPipeline:
                 current_rendered = self.stats['rendering']
                 if current_rendered > last_rendered:
                     try:
-                        await self.translator._report_progress(f"batch:1:{current_rendered}:{self.total_images}")
+                        current_failed = self._get_failed_count()
+                        await self.translator._report_progress(
+                            f"batch:1:{current_rendered}:{self.total_images}:{current_failed}"
+                        )
                     except Exception:
                         pass
                     last_rendered = current_rendered
@@ -827,6 +1006,20 @@ class ConcurrentPipeline:
                 # 让出控制权，检查取消
                 await asyncio.sleep(0)
                 
+        except PipelineAbortError as e:
+            logger.info(f"[并发流水线] 因内部停止信号结束等待: {e}")
+            self.stop_workers = True
+            done, not_done = wait(futures, timeout=10.0)
+            self._flush_status_to_logger()
+            if not_done:
+                thread_names = []
+                for i, future in enumerate(futures):
+                    if future in not_done:
+                        names = ["检测+OCR", "翻译", "修复", "渲染"]
+                        thread_names.append(names[i])
+                logger.warning(f"[并发流水线] {len(not_done)} 个线程未能在10秒内停止: {', '.join(thread_names)}")
+            else:
+                logger.info("[并发流水线] 所有线程已停止")
         except asyncio.CancelledError:
             # 用户取消了任务
             logger.info("[并发流水线] 收到取消信号")

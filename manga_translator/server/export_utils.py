@@ -2,6 +2,7 @@ import argparse
 import os
 from urllib.parse import unquote
 
+
 def url_decode(s):
     s = unquote(s)
     if s.startswith('file:///'):

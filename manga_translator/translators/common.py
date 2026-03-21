@@ -1,19 +1,19 @@
-import re
-import time
 import asyncio
-import json
-import sys
-import inspect
 import contextlib
-import textwrap
+import inspect
+import json
+import re
 import shutil
-from typing import Callable, Awaitable, Optional
-from typing import List, Tuple, Dict, Any
+import sys
+import textwrap
+import time
 from abc import abstractmethod
-import numpy as np
-import cv2
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
-from ..utils import InfererModule, ModelWrapper, repeating_sequence, is_valuable_text
+import cv2
+import numpy as np
+
+from ..utils import InfererModule, ModelWrapper, is_valuable_text, repeating_sequence
 from ..utils.retry import (
     get_retry_attempts_from_config,
     normalize_retry_attempts,
@@ -55,6 +55,16 @@ VALID_LANGUAGES = {
     'FIL': 'Filipino (Tagalog)'
 }
 
+KEEP_LANGUAGES = {
+    **VALID_LANGUAGES,
+    'SWE': 'Swedish',
+    'DAN': 'Danish',
+    'NOR': 'Norwegian',
+    'FIN': 'Finnish',
+    'MSA': 'Malay',
+    'CAT': 'Catalan',
+}
+
 ISO_639_1_TO_VALID_LANGUAGES = {
     'zh': 'CHS',
     'ja': 'JPN',
@@ -74,7 +84,6 @@ ISO_639_1_TO_VALID_LANGUAGES = {
     'es': 'ESP',
     'tr': 'TRK',
     'uk': 'UKR',
-    'vi': 'VIN',
     'ar': 'ARA',
     'cnr': 'CNR',
     'sr': 'SRP',
@@ -84,8 +93,71 @@ ISO_639_1_TO_VALID_LANGUAGES = {
     'tl': 'FIL'
 }
 
+ISO_639_1_TO_KEEP_LANGUAGES = {
+    **ISO_639_1_TO_VALID_LANGUAGES,
+    'sv': 'SWE',
+    'da': 'DAN',
+    'no': 'NOR',
+    'nb': 'NOR',
+    'nn': 'NOR',
+    'fi': 'FIN',
+    'ms': 'MSA',
+    'ca': 'CAT',
+}
+
 class InvalidServerResponse(Exception):
     pass
+
+
+def _extract_http_error_details(response) -> str:
+    raw_text = summarize_response_text(
+        getattr(response, "text", ""),
+        empty_placeholder="(empty response)",
+    )
+    try:
+        payload = response.json()
+    except Exception:
+        return raw_text
+
+    if not isinstance(payload, dict):
+        return raw_text
+
+    details: List[str] = []
+    error_obj = payload.get("error")
+    if isinstance(error_obj, dict):
+        for key in ("code", "type", "param"):
+            value = error_obj.get(key)
+            if value not in (None, ""):
+                details.append(f"{key}={value}")
+        message = error_obj.get("message")
+        if message:
+            details.append(str(message))
+    else:
+        for key in ("code", "type"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                details.append(f"{key}={value}")
+        for key in ("message", "msg", "detail"):
+            value = payload.get(key)
+            if value:
+                details.append(str(value))
+                break
+        data_value = payload.get("data")
+        if data_value not in (None, "", [], {}):
+            try:
+                data_text = json.dumps(data_value, ensure_ascii=False)
+            except Exception:
+                data_text = str(data_value)
+            details.append(f"data={summarize_response_text(data_text, limit=400)}")
+
+    try:
+        raw_json = json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        raw_json = raw_text
+
+    if details:
+        return f"{'; '.join(details)} | raw={summarize_response_text(raw_json, limit=800)}"
+    return summarize_response_text(raw_json, limit=800, empty_placeholder="(empty response)")
 
 
 
@@ -181,13 +253,10 @@ class AsyncOpenAICurlCffi:
                 print(f"[AsyncOpenAICurlCffi] Error - URL: {url}")
                 print(f"[AsyncOpenAICurlCffi] Error - Status: {response.status_code}")
                 print(f"[AsyncOpenAICurlCffi] Error - Response: {summarize_response_text(response.text)}")
-                error_msg = f"API request failed with status {response.status_code}"
-                try:
-                    error_data = response.json()
-                    if "error" in error_data:
-                        error_msg = f"{error_msg}: {error_data['error'].get('message', '')}"
-                except:
-                    error_msg = f"{error_msg}: {summarize_response_text(response.text)}"
+                error_msg = (
+                    f"API request failed with status {response.status_code}: "
+                    f"{_extract_http_error_details(response)}"
+                )
                 raise Exception(error_msg)
 
             result = response.json()
@@ -266,13 +335,10 @@ class AsyncOpenAICurlCffi:
                 print(f"[AsyncOpenAICurlCffi] List Error - URL: {url}")
                 print(f"[AsyncOpenAICurlCffi] List Error - Status: {response.status_code}")
                 print(f"[AsyncOpenAICurlCffi] List Error - Response: {summarize_response_text(response.text)}")
-                error_msg = f"API request failed with status {response.status_code}"
-                try:
-                    error_data = response.json()
-                    if "error" in error_data:
-                        error_msg = f"{error_msg}: {error_data['error'].get('message', '')}"
-                except:
-                    error_msg = f"{error_msg}: {summarize_response_text(response.text)}"
+                error_msg = (
+                    f"API request failed with status {response.status_code}: "
+                    f"{_extract_http_error_details(response)}"
+                )
                 raise Exception(error_msg)
 
             # 检查响应内容类型
@@ -594,7 +660,7 @@ class AsyncGeminiCurlCffi:
                     error_data = response.json()
                     if "error" in error_data:
                         error_msg = f"{error_msg}: {error_data['error'].get('message', '')}"
-                except:
+                except Exception:
                     error_msg = (
                         f"{error_msg}: "
                         f"{summarize_response_text(response.text, empty_placeholder='(empty response)')}"
@@ -692,7 +758,7 @@ class AsyncGeminiCurlCffi:
                     error_data = response.json()
                     if "error" in error_data:
                         error_msg = f"{error_msg}: {error_data['error'].get('message', '')}"
-                except:
+                except Exception:
                     error_msg = f"{error_msg}: {summarize_response_text(response.text)}"
                 raise Exception(error_msg)
 
@@ -1359,7 +1425,10 @@ class CommonTranslator(InfererModule):
         根据配置决定是否加载自定义 API 参数，并统一日志输出格式。
         返回值表示是否启用。
         """
-        from ..custom_api_params import is_custom_api_params_enabled, load_enabled_custom_api_params
+        from ..custom_api_params import (
+            is_custom_api_params_enabled,
+            load_enabled_custom_api_params,
+        )
 
         use_custom_params = is_custom_api_params_enabled(args)
         if not use_custom_params:
@@ -1757,9 +1826,10 @@ class CommonTranslator(InfererModule):
             line_break_prompt_str = line_break_prompt_json['line_break_prompt']
 
         # --- 加载 HQ System Prompt（优先 YAML，兼容 JSON） ---
+        import os
+
         from ..utils import BASE_PATH
         from .prompt_loader import load_system_prompt_hq
-        import os
         dict_dir = os.path.join(BASE_PATH, 'dict')
         base_prompt = load_system_prompt_hq(dict_dir)
 
@@ -2423,7 +2493,8 @@ class CommonTranslator(InfererModule):
         translations = [self._clean_translation_output(q, r, to_lang) for q, r in zip(queries, translations)]
 
         if to_lang == 'ARA':
-            import arabic_reshaper , bidi.algorithm
+            import arabic_reshaper
+            import bidi.algorithm
             translations = [bidi.algorithm.get_display(arabic_reshaper.reshape(t)) for t in translations]
 
         if use_mtpe:
@@ -2618,8 +2689,8 @@ def extract_json_payload_from_mixed_text(text: str) -> Tuple[str, bool]:
     通用 JSON 提取器：从混杂文本中优先提取最可能的 JSON 负载。
     返回 (payload, extracted)，extracted=True 表示确实抽取到了 JSON 片段。
     """
-    import re
     import json
+    import re
 
     if text is None:
         return "", False
@@ -2965,6 +3036,7 @@ def merge_glossary_to_file(file_path: str, new_terms: List[Dict[str, str]]) -> b
     """
     import json
     import os
+
     from .prompt_loader import load_prompt_file
     
     if not new_terms:
@@ -3072,9 +3144,10 @@ def get_glossary_extraction_prompt(target_lang: str) -> str:
     获取术语提取的追加提示词
     Get the additional prompt for glossary extraction
     """
+    import os
+
     from ..utils import BASE_PATH
     from .prompt_loader import load_glossary_extraction_prompt as _load_glossary
-    import os
     
     dict_dir = os.path.join(BASE_PATH, 'dict')
     return _load_glossary(dict_dir, target_lang)
@@ -3086,9 +3159,10 @@ def get_system_prompt_hq_format_prompt(target_lang: str, extract_glossary: bool 
     extract_glossary=False: 仅要求 translations
     extract_glossary=True: 要求 translations + new_terms
     """
+    import os
+
     from ..utils import BASE_PATH
     from .prompt_loader import load_system_prompt_hq_format as _load_hq_format
-    import os
 
     dict_dir = os.path.join(BASE_PATH, 'dict')
     return _load_hq_format(dict_dir, target_lang, extract_glossary=extract_glossary)

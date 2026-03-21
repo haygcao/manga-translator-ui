@@ -1,9 +1,10 @@
 from typing import List, Optional
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import numpy as np
 
 def relu_nf(x):
     return F.relu(x) * 1.7139588594436646

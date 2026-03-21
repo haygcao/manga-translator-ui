@@ -5,13 +5,18 @@ This module contains Web UI related endpoints for the manga translator server.
 """
 
 import os
-import shutil
-from fastapi import APIRouter, Form, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from datetime import timedelta
+
+from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse
 
 from manga_translator.server.core.config_manager import admin_settings
+from manga_translator.server.core.request_rate_limiter import SlidingWindowRateLimiter
 
 router = APIRouter(tags=["web"])
+USER_LOGIN_WINDOW = timedelta(minutes=10)
+USER_LOGIN_MAX_ATTEMPTS = 10
+_user_login_rate_limiter = SlidingWindowRateLimiter()
 
 # Static directory path
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -59,168 +64,37 @@ async def api_info():
         }
     }
 
-
-# ============================================================================
-# Result File Management Endpoints
-# ============================================================================
-
-@router.api_route("/result/{folder_name}/final.png", methods=["GET", "HEAD"])
-async def get_result_by_folder(folder_name: str):
-    """Get translation result image by folder name"""
-    result_dir = "../result"
-    if not os.path.exists(result_dir):
-        raise HTTPException(404, detail="Result directory not found")
-
-    folder_path = os.path.join(result_dir, folder_name)
-    if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
-        raise HTTPException(404, detail=f"Folder {folder_name} not found")
-
-    final_png_path = os.path.join(folder_path, "final.png")
-    if not os.path.exists(final_png_path):
-        raise HTTPException(404, detail="final.png not found in folder")
-
-    async def file_iterator():
-        with open(final_png_path, "rb") as f:
-            yield f.read()
-
-    return StreamingResponse(
-        file_iterator(),
-        media_type="image/png",
-        headers={"Content-Disposition": "inline; filename=final.png"}
-    )
-
-
-@router.get("/results/list")
-async def list_results():
-    """List all result directories"""
-    result_dir = "../result"
-    if not os.path.exists(result_dir):
-        return {"directories": []}
-    
-    try:
-        directories = []
-        for item in os.listdir(result_dir):
-            item_path = os.path.join(result_dir, item)
-            if os.path.isdir(item_path):
-                # Check if final.png exists in this directory
-                final_png_path = os.path.join(item_path, "final.png")
-                if os.path.exists(final_png_path):
-                    directories.append(item)
-        return {"directories": directories}
-    except Exception as e:
-        raise HTTPException(500, detail=f"Error listing results: {str(e)}")
-
-
-@router.delete("/results/clear")
-async def clear_results():
-    """Delete all result directories"""
-    result_dir = "../result"
-    if not os.path.exists(result_dir):
-        return {"message": "No results directory found"}
-    
-    try:
-        deleted_count = 0
-        for item in os.listdir(result_dir):
-            item_path = os.path.join(result_dir, item)
-            if os.path.isdir(item_path):
-                # Check if final.png exists in this directory
-                final_png_path = os.path.join(item_path, "final.png")
-                if os.path.exists(final_png_path):
-                    shutil.rmtree(item_path)
-                    deleted_count += 1
-        
-        return {"message": f"Deleted {deleted_count} result directories"}
-    except Exception as e:
-        raise HTTPException(500, detail=f"Error clearing results: {str(e)}")
-
-
-@router.delete("/results/{folder_name}")
-async def delete_result(folder_name: str):
-    """Delete a specific result directory"""
-    result_dir = "../result"
-    folder_path = os.path.join(result_dir, folder_name)
-    
-    if not os.path.exists(folder_path):
-        raise HTTPException(404, detail="Result directory not found")
-    
-    try:
-        # Check if final.png exists in this directory
-        final_png_path = os.path.join(folder_path, "final.png")
-        if not os.path.exists(final_png_path):
-            raise HTTPException(404, detail="Result file not found")
-        
-        shutil.rmtree(folder_path)
-        return {"message": f"Deleted result directory: {folder_name}"}
-    except Exception as e:
-        raise HTTPException(500, detail=f"Error deleting result: {str(e)}")
-
-
-# ============================================================================
-# Cleanup Endpoint
-# ============================================================================
-
-@router.post("/cleanup/temp")
-async def cleanup_temp_files(max_age_hours: int = 24):
-    """
-    Clean up temporary files
-    
-    Args:
-        max_age_hours: Clean up temporary files older than this many hours (default 24 hours)
-    
-    Returns:
-        Cleanup result statistics
-    """
-    import time
-    
-    result_dir = "result"
-    if not os.path.exists(result_dir):
-        return {"deleted": 0, "message": "No temp directory found"}
-    
-    deleted_count = 0
-    current_time = time.time()
-    max_age_seconds = max_age_hours * 3600
-    
-    try:
-        for filename in os.listdir(result_dir):
-            if filename.startswith("temp_"):
-                filepath = os.path.join(result_dir, filename)
-                try:
-                    # Check file age
-                    file_age = current_time - os.path.getmtime(filepath)
-                    if file_age > max_age_seconds:
-                        if os.path.isfile(filepath):
-                            os.unlink(filepath)
-                            deleted_count += 1
-                        elif os.path.isdir(filepath):
-                            shutil.rmtree(filepath)
-                            deleted_count += 1
-                except Exception as _e:
-                    # Ignore individual file deletion errors (may be in use)
-                    continue
-        
-        return {
-            "deleted": deleted_count,
-            "message": f"Successfully cleaned up {deleted_count} temporary files older than {max_age_hours} hours"
-        }
-    except Exception as e:
-        raise HTTPException(500, detail=f"Error during cleanup: {str(e)}")
-
-
 # ============================================================================
 # User Login Endpoint
 # ============================================================================
 
 @router.post("/user/login")
-async def user_login(password: str = Form(...)):
+async def user_login(req: Request, password: str = Form(...)):
     """User login"""
     user_access = admin_settings.get('user_access', {})
     
     # If no password required, allow access directly
     if not user_access.get('require_password', False):
         return {"success": True, "message": "No password required"}
+
+    client_ip = req.client.host if req.client else "unknown"
+    rate_limit_key = f"web:user-login:ip:{client_ip}"
+    allowed, retry_after = _user_login_rate_limiter.check(
+        rate_limit_key,
+        USER_LOGIN_MAX_ATTEMPTS,
+        USER_LOGIN_WINDOW,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="尝试过于频繁，请稍后再试",
+            headers={"Retry-After": str(retry_after)},
+        )
     
     # Verify password
     if password == user_access.get('user_password', ''):
+        _user_login_rate_limiter.reset(rate_limit_key)
         return {"success": True, "message": "Login successful"}
-    
+
+    _user_login_rate_limiter.record(rate_limit_key, USER_LOGIN_MAX_ATTEMPTS, USER_LOGIN_WINDOW)
     return {"success": False, "message": "Invalid password"}

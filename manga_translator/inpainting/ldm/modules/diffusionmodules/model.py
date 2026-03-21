@@ -1,18 +1,18 @@
 # pytorch_diffusion + derived encoder decoder
 import math
+from typing import Any, Optional
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 from einops import rearrange
-from typing import Optional, Any
-
 from ldm.modules.attention import MemoryEfficientCrossAttention
 
 try:
     import xformers
     import xformers.ops
     XFORMERS_IS_AVAILABLE = True
-except (ImportError, AttributeError) as e:
+except (ImportError, AttributeError):
     XFORMERS_IS_AVAILABLE = False
     print("No module 'xformers' or triton issue. Proceeding without it.")
 
@@ -288,7 +288,7 @@ def make_attn(in_channels, attn_type="vanilla", attn_kwargs=None):
     elif attn_type == "vanilla-xformers":
         print(f"building MemoryEfficientAttnBlock with {in_channels} in_channels...")
         return MemoryEfficientAttnBlock(in_channels)
-    elif type == "memory-efficient-cross-attn":
+    elif attn_type == "memory-efficient-cross-attn":
         attn_kwargs["query_dim"] = in_channels
         return MemoryEfficientCrossAttentionWrapper(**attn_kwargs)
     elif attn_type == "none":
@@ -560,7 +560,6 @@ class Decoder(nn.Module):
         self.tanh_out = tanh_out
 
         # compute in_ch_mult, block_in and curr_res at lowest res
-        _in_ch_mult = (1,)+tuple(ch_mult)
         block_in = ch*ch_mult[self.num_resolutions-1]
         curr_res = resolution // 2**(self.num_resolutions-1)
         self.z_shape = (1,z_channels,curr_res,curr_res)

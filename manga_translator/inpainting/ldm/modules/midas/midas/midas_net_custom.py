@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 from .base_model import BaseModel
-from .blocks import FeatureFusionBlock, FeatureFusionBlock_custom, Interpolate, _make_encoder
+from .blocks import FeatureFusionBlock_custom, Interpolate, _make_encoder
 
 
 class MidasNet_small(BaseModel):
@@ -39,7 +39,7 @@ class MidasNet_small(BaseModel):
         features3=features
         features4=features
         self.expand = False
-        if "expand" in self.blocks and self.blocks['expand'] == True:
+        if "expand" in self.blocks and self.blocks['expand'] is True:
             self.expand = True
             features1=features
             features2=features*2
@@ -79,7 +79,7 @@ class MidasNet_small(BaseModel):
         Returns:
             tensor: depth
         """
-        if self.channels_last==True:
+        if self.channels_last:
             print("self.channels_last = ", self.channels_last)
             x.contiguous(memory_format=torch.channels_last)
 
@@ -112,7 +112,7 @@ def fuse_model(m):
     previous_type = nn.Identity()
     previous_name = ''
     for name, module in m.named_modules():
-        if prev_previous_type == nn.Conv2d and previous_type == nn.BatchNorm2d and type(module) == nn.ReLU:
+        if prev_previous_type == nn.Conv2d and previous_type == nn.BatchNorm2d and isinstance(module, nn.ReLU):
             # print("FUSED ", prev_previous_name, previous_name, name)
             torch.quantization.fuse_modules(m, [prev_previous_name, previous_name, name], inplace=True)
         elif prev_previous_type == nn.Conv2d and previous_type == nn.BatchNorm2d:

@@ -14,6 +14,16 @@ try:
 except Exception:
     unidic_datas = []
 
+try:
+    pythainlp_datas, pythainlp_binaries, pythainlp_hiddenimports = collect_all('pythainlp')
+except Exception:
+    pythainlp_datas, pythainlp_binaries, pythainlp_hiddenimports = [], [], []
+
+try:
+    nlpo3_datas, nlpo3_binaries, nlpo3_hiddenimports = collect_all('nlpo3')
+except Exception:
+    nlpo3_datas, nlpo3_binaries, nlpo3_hiddenimports = [], [], []
+
 # 使用collect_all自动收集onnxruntime的所有内容
 try:
     onnx_datas, onnx_binaries, onnx_hiddenimports = collect_all('onnxruntime')
@@ -33,8 +43,8 @@ except Exception:
 a = Analysis(
     ['../desktop_qt_ui/main.py'],  # 相对于packaging目录
     pathex=[],
-    binaries=onnx_binaries,
-    datas=py3langid_datas + unidic_datas + onnx_datas,  # 添加所有数据文件
+    binaries=onnx_binaries + pythainlp_binaries + nlpo3_binaries,
+    datas=py3langid_datas + unidic_datas + pythainlp_datas + nlpo3_datas + onnx_datas,  # 添加所有数据文件
     hiddenimports=[
         'pydensecrf.eigen', 
         'bsdiff4.core', 
@@ -49,7 +59,7 @@ a = Analysis(
         'manga_translator.ocr.paddleocr_vl_model.modeling_paddleocr_vl',
         'manga_translator.ocr.paddleocr_vl_model.processing_paddleocr_vl',
         'manga_translator.ocr.paddleocr_vl_model.image_processing',
-    ] + onnx_hiddenimports,  # 添加隐式导入
+    ] + pythainlp_hiddenimports + nlpo3_hiddenimports + onnx_hiddenimports,  # 添加隐式导入
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[os.path.join(SPECPATH, 'pyi_rth_onnxruntime.py')],

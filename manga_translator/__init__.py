@@ -8,7 +8,7 @@ load_dotenv()
 def __getattr__(name):
     """延迟导入 MangaTranslator 等类"""
     if name in ['MangaTranslator', 'Config', 'Context']:
-        from .manga_translator import MangaTranslator, Config, Context
+        from .manga_translator import Config, Context, MangaTranslator
         globals()[name] = locals()[name]
         return locals()[name]
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

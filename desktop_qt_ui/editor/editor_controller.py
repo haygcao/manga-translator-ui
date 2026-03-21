@@ -8,11 +8,9 @@ from typing import Optional
 import cv2
 import numpy as np
 import torch
-from PIL import Image
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
-
 from editor.commands import MaskEditCommand, UpdateRegionCommand
-from manga_translator.utils import open_pil_image
+from PIL import Image
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from services import (
     get_async_service,
     get_config_service,
@@ -26,8 +24,9 @@ from services import (
 )
 from widgets.themed_message_box import apply_message_box_style
 
+from manga_translator.utils import open_pil_image
+
 from .editor_model import EditorModel
-from .desktop_ui_geometry import get_polygon_center
 
 # 添加项目根目录到路径以便导入path_manager
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
@@ -94,9 +93,6 @@ class EditorController(QObject):
         self._translation_completed.connect(self._on_translation_completed)
         self._load_result_ready.connect(self._apply_load_result)  # 连接加载结果信号
         
-        # 设置model的controller引用，用于命令模式
-        self.model.controller = self
-
         self._connect_model_signals()
         if hasattr(self.history_service, "undo_redo_state_changed"):
             self.history_service.undo_redo_state_changed.connect(self._on_history_undo_redo_state_changed)
@@ -114,29 +110,28 @@ class EditorController(QObject):
         # 向后兼容：如果ResourceManager没有，尝试从Model获取
         return self.model.get_image()
     
-    def _get_current_mask(self, mask_type: str = "raw") -> Optional[np.ndarray]:
-        """获取当前蒙版
-        
-        Args:
-            mask_type: 蒙版类型，"raw" 或 "refined"
-        
-        Returns:
-            Optional[np.ndarray]: 蒙版数据，如果不存在返回None
-        """
-        from desktop_qt_ui.editor.core.types import MaskType
-        
-        mask_type_enum = MaskType.RAW if mask_type == "raw" else MaskType.REFINED
-        mask_resource = self.resource_manager.get_mask(mask_type_enum)
-        
-        if mask_resource:
-            return mask_resource.data
-        
-        # 向后兼容
-        if mask_type == "raw":
-            return self.model.get_raw_mask()
-        elif mask_type == "refined":
-            return self.model.get_refined_mask()
-        return None
+    @staticmethod
+    def _normalize_image_path(path: Optional[str]) -> Optional[str]:
+        if not path:
+            return None
+        return os.path.normcase(os.path.normpath(path))
+
+    def _is_same_source_image(self, left: Optional[str], right: Optional[str]) -> bool:
+        left_path = self._normalize_image_path(left)
+        right_path = self._normalize_image_path(right)
+        return bool(left_path and right_path and left_path == right_path)
+
+    def _snapshot_image_for_export(self, image_obj, label: str) -> Optional[Image.Image]:
+        """为导出创建独立的图像副本，避免切图时原图被关闭。"""
+        if image_obj is None:
+            return None
+        try:
+            if isinstance(image_obj, Image.Image):
+                return image_obj.copy()
+            return Image.fromarray(np.array(image_obj))
+        except Exception as e:
+            self.logger.error(f"Failed to snapshot {label} for export: {e}", exc_info=True)
+            raise
     
     def _get_regions(self):
         """获取所有区域
@@ -174,21 +169,6 @@ class EditorController(QObject):
             return regions[index]
         return None
     
-    def _update_region(self, index: int, updates: dict):
-        """更新区域数据
-        
-        Args:
-            index: 区域索引
-            updates: 要更新的数据
-        """
-        regions = self._get_regions()
-        if 0 <= index < len(regions):
-            regions[index].update(updates)
-            # 重新设置所有区域以同步
-            self._set_regions(regions)
-        # 同步到Model
-        self.model.update_region_silent(index, updates)
-
     def set_view(self, view):
         """设置view引用，用于更新UI状态"""
         self.view = view
@@ -302,23 +282,6 @@ class EditorController(QObject):
 
         self._update_undo_redo_buttons()
 
-    def _run_on_main_thread(self, func, *args):
-        """确保一个函数在主GUI线程上运行"""
-        def wrapper():
-            try:
-                result = func(*args)
-                return result
-            except Exception as e:
-                self.logger.error(f"Error executing {func.__name__}: {e}")
-                raise
-        QTimer.singleShot(0, wrapper)
-
-    # --- 公共槽函数 (Public Slots) ---
-
-    def has_unsaved_changes(self) -> bool:
-        """检查是否有未保存的编辑"""
-        return self.history_service.can_undo()
-    
     def _generate_export_snapshot(self) -> dict:
         """生成当前状态的快照，用于检测导出后是否有更改
         
@@ -386,8 +349,6 @@ class EditorController(QObject):
         Args:
             release_image_cache: 是否同时释放图片缓存（切换文件时通常不需要）
         """
-        import gc
-        
         # 关闭加载提示（如果存在）
         if hasattr(self, '_loading_toast') and self._loading_toast:
             try:
@@ -461,52 +422,6 @@ class EditorController(QObject):
         
         self.logger.debug("Editor state cleared and memory released")
 
-    def _is_translated_image(self, image_path: str) -> bool:
-        """
-        检查图片是否是翻译后的图片（通过translation_map.json）
-
-        Args:
-            image_path: 图片路径
-
-        Returns:
-            True if 是翻译后的图片, False otherwise
-        """
-        try:
-            import json
-            from pathlib import Path
-            
-            # 使用 pathlib 规范化路径
-            path_obj = Path(image_path)
-            norm_path = str(path_obj.resolve())
-            output_dir = path_obj.parent
-            map_path = output_dir / 'translation_map.json'
-
-            self.logger.debug(f"Checking if translated image: {image_path}")
-            self.logger.debug(f"Normalized path: {norm_path}")
-            self.logger.debug(f"Looking for translation_map.json at: {map_path}")
-
-            if map_path.exists():
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    translation_map = json.load(f)
-                self.logger.debug(f"Found translation_map.json with {len(translation_map)} entries")
-                self.logger.debug(f"Translation map keys: {list(translation_map.keys())[:3]}...")  # 只显示前3个
-                
-                # 规范化 translation_map 中的所有键
-                normalized_map = {str(Path(k).resolve()): v for k, v in translation_map.items()}
-                
-                # 如果当前路径是translation_map的key，说明是翻译后的图片
-                if norm_path in normalized_map:
-                    self.logger.debug(f"✓ Found translation mapping for: {image_path}")
-                    return True
-                else:
-                    self.logger.debug(f"✗ No translation mapping found for: {norm_path}")
-            else:
-                self.logger.debug(f"✗ translation_map.json not found at: {map_path}")
-        except Exception as e:
-            self.logger.error(f"Error checking translation map: {e}")
-
-        return False
-
     def _find_source_from_translation_map(self, image_path: str) -> Optional[str]:
         """从 translation_map.json 中解析翻译结果对应的原图路径。"""
         try:
@@ -531,9 +446,9 @@ class EditorController(QObject):
 
     def _resolve_editor_image_paths(self, image_path: str) -> tuple[str, str]:
         """
-        解析编辑器需要的两张图：
+        解析编辑器加载用的路径：
         1. source_path: 逻辑原图路径（用于 JSON / 输出路径）
-        2. display_image_path: 编辑器里的原图层路径（优先使用上色/超分底图）
+        2. display_image_path: 编辑器底图（优先使用 work/editor_base）
         """
         source_path = self._find_source_from_translation_map(image_path)
         if not source_path:
@@ -559,7 +474,7 @@ class EditorController(QObject):
             # 添加按钮
             export_btn = msg_box.addButton("导出图片", QMessageBox.ButtonRole.YesRole)
             cancel_btn = msg_box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-            no_btn = msg_box.addButton("不保存", QMessageBox.ButtonRole.NoRole)
+            msg_box.addButton("不保存", QMessageBox.ButtonRole.NoRole)
             
             msg_box.setDefaultButton(cancel_btn)
             apply_message_box_style(msg_box)
@@ -599,15 +514,14 @@ class EditorController(QObject):
             try:
                 source_path, display_image_path = self._resolve_editor_image_paths(image_path)
 
-                # 1. 加载图片
+                # 1. 加载编辑底图
                 image_resource = self.resource_manager.load_image(display_image_path)
                 image = image_resource.image
                 compare_image = image
 
                 if os.path.normpath(source_path) != os.path.normpath(display_image_path):
                     try:
-                        compare_resource = self.resource_manager.load_image(source_path)
-                        compare_image = compare_resource.image
+                        compare_image = self.resource_manager.load_detached_image(source_path)
                         if compare_image.size != image.size:
                             compare_image = compare_image.resize(image.size, Image.Resampling.LANCZOS)
                     except Exception as compare_error:
@@ -615,11 +529,9 @@ class EditorController(QObject):
                         compare_image = image
 
                 # 2. 加载JSON
-                # 检查JSON是否存在
                 json_path = find_json_path(source_path)
 
                 if not json_path:
-                    # 如果没有JSON，作为可编辑的空白图片加载（允许用户添加编辑）
                     regions = []
                     raw_mask = None
                     inpainted_path = find_inpainted_path(source_path)
@@ -634,7 +546,7 @@ class EditorController(QObject):
                             inpainted_path = None
                             inpainted_image = None
                 else:
-                    regions, raw_mask, original_size = self.file_service.load_translation_json(display_image_path)
+                    regions, raw_mask, _ = self.file_service.load_translation_json(source_path)
     
                     # 3. 查找和加载inpainted图片
                     inpainted_path = find_inpainted_path(source_path)
@@ -652,7 +564,6 @@ class EditorController(QObject):
                 return {
                     'type': 'normal',
                     'source_path': source_path,
-                    'display_image_path': display_image_path,
                     'image': image,
                     'compare_image': compare_image,
                     'regions': regions,
@@ -682,14 +593,9 @@ class EditorController(QObject):
         try:
             if result['type'] == 'error':
                 self._handle_load_error(result['error'])
-            elif result['type'] == 'translated':
-                self._apply_translated_image_to_model(result['image_path'], result['image'])
-            elif result['type'] == 'untranslated':
-                self._apply_untranslated_image_to_model(result['image_path'], result['image'])
             else:
                 self._apply_loaded_data_to_model(
                     result['source_path'],
-                    result['display_image_path'],
                     result['image'],
                     result.get('compare_image'),
                     result['regions'],
@@ -700,64 +606,7 @@ class EditorController(QObject):
         except Exception as e:
             self.logger.error(f"Exception in _apply_load_result: {e}", exc_info=True)
     
-    def _apply_translated_image_to_model(self, image_path: str, image):
-        """在主线程应用翻译后图片到Model"""
-        try:
-            # 关闭加载提示
-            if hasattr(self, '_loading_toast') and self._loading_toast:
-                self._loading_toast.close()
-                self._loading_toast = None
-            
-            self.model.set_source_image_path(image_path)
-
-            # 翻译后的图片应该显示在inpainted层，原图层保持透明
-            if not hasattr(self, '_user_adjusted_alpha') or not self._user_adjusted_alpha:
-                self.model.set_original_image_alpha(0.0)
-
-            # 将翻译后的图片同时设置为原图和inpainted图
-            # 这样无论原图透明度如何调整，都能看到翻译后的图
-            self.model.set_image(image)
-            self.model.set_compare_image(image)
-            self.model.set_inpainted_image(image)
-            
-            self._set_regions([])
-            self.model.set_raw_mask(None)
-            self.model.set_refined_mask(None)
-            self.model.set_inpainted_image_path(image_path)
-
-            # 禁用导出功能
-            if self.view and hasattr(self.view, 'toolbar'):
-                self.view.toolbar.set_export_enabled(False)
-        except Exception as e:
-            self.logger.error(f"Error applying translated image to model: {e}")
-    
-    def _apply_untranslated_image_to_model(self, image_path: str, image):
-        """在主线程应用未翻译图片到Model"""
-        try:
-            # 关闭加载提示
-            if hasattr(self, '_loading_toast') and self._loading_toast:
-                self._loading_toast.close()
-                self._loading_toast = None
-            
-            self.model.set_source_image_path(image_path)
-
-            if not hasattr(self, '_user_adjusted_alpha') or not self._user_adjusted_alpha:
-                self.model.set_original_image_alpha(1.0)
-
-            self.model.set_image(image)
-            self.model.set_compare_image(image)
-            self._set_regions([])
-            self.model.set_raw_mask(None)
-            self.model.set_refined_mask(None)
-            self.model.set_inpainted_image_path(None)
-
-            # 禁用导出功能
-            if self.view and hasattr(self.view, 'toolbar'):
-                self.view.toolbar.set_export_enabled(False)
-        except Exception as e:
-            self.logger.error(f"Error applying untranslated image to model: {e}")
-    
-    def _apply_loaded_data_to_model(self, source_path, display_image_path, image, compare_image, regions, raw_mask, inpainted_path, inpainted_image):
+    def _apply_loaded_data_to_model(self, source_path, image, compare_image, regions, raw_mask, inpainted_path, inpainted_image):
         """在主线程应用加载的数据到Model"""
         try:
             # 关闭加载提示
@@ -779,7 +628,8 @@ class EditorController(QObject):
             self.model.set_source_image_path(source_path)
 
             if not hasattr(self, '_user_adjusted_alpha') or not self._user_adjusted_alpha:
-                self.model.set_original_image_alpha(0.0)
+                default_alpha = 0.0 if inpainted_image is not None else 1.0
+                self.model.set_original_image_alpha(default_alpha)
 
             self.model.set_image(image)
             self.model.set_compare_image(compare_image if compare_image is not None else image)
@@ -887,6 +737,8 @@ class EditorController(QObject):
                     inpainted_image_np = np.array(inpainted_image.convert("RGB"))
 
                     self.model.set_inpainted_image(inpainted_image)
+                    if not getattr(self, '_user_adjusted_alpha', False):
+                        self.model.set_original_image_alpha(0.0)
 
                     # 缓存完整修复结果，用于后续增量修复
                     self.resource_manager.set_cache(self.CACHE_LAST_INPAINTED, inpainted_image_np.copy())
@@ -925,6 +777,8 @@ class EditorController(QObject):
                     use_gpu = cli_config.use_gpu
                     device = 'cuda' if use_gpu and torch.cuda.is_available() else 'cpu'
 
+                    image_np = np.array(image.convert("RGB"))
+
                     inpainted_image_np = await inpaint_dispatch(
                         inpainter_key=inpainter_key,
                         image=image_np,
@@ -937,6 +791,8 @@ class EditorController(QObject):
                     if inpainted_image_np is not None:
                         inpainted_image = Image.fromarray(inpainted_image_np)
                         self.model.set_inpainted_image(inpainted_image)
+                        if not getattr(self, '_user_adjusted_alpha', False):
+                            self.model.set_original_image_alpha(0.0)
 
                         # 缓存完整修复结果，用于后续增量修复
                         self.resource_manager.set_cache(self.CACHE_LAST_INPAINTED, inpainted_image_np.copy())
@@ -1138,10 +994,6 @@ class EditorController(QObject):
         except Exception as e:
             self.logger.error(f"Error during full inpainting with cache: {e}", exc_info=True)
 
-    @pyqtSlot(list)
-    def select_region(self, region_indices):
-        self.model.set_selection(region_indices)
-
     @pyqtSlot(str, bool)
     def set_display_mask_type(self, mask_type: str, visible: bool):
         """Slot to control which mask is displayed ('raw' or 'refined') or if none is."""
@@ -1149,11 +1001,6 @@ class EditorController(QObject):
             self.model.set_display_mask_type(mask_type)
         else:
             self.model.set_display_mask_type('none')
-
-    @pyqtSlot(bool)
-    def set_removed_mask_visible(self, visible: bool):
-        """Slot to control visibility of removed mask parts."""
-        self.model.set_removed_mask_visible(visible)
 
     @pyqtSlot(str)
     def set_active_tool(self, tool: str):
@@ -1196,13 +1043,6 @@ class EditorController(QObject):
             self.logger.info("Cleared all masks for current image.")
         except Exception as e:
             self.logger.error(f"Failed to clear all masks: {e}", exc_info=True)
-
-    @pyqtSlot(dict)
-    def update_mask_config(self, new_settings: dict):
-        """Slot to update mask settings in the config service."""
-        self.config_service.update_config(new_settings)
-
-
 
     @pyqtSlot(int, str)
     def update_translated_text(self, region_index: int, text: str):
@@ -1388,6 +1228,7 @@ class EditorController(QObject):
             font_filename: Font filename (e.g., 'Arial.ttf') or empty string for default
         """
         import os
+
         from manga_translator.utils import BASE_PATH
         
         old_region_data = self._get_region_by_index(region_index)
@@ -1693,7 +1534,10 @@ class EditorController(QObject):
                         old_angle = region_data.get('angle', 0)
 
                         # 重新计算新的 center (基于剩余的多边形)
-                        from .desktop_ui_geometry import get_polygon_center, rotate_point
+                        from .desktop_ui_geometry import (
+                            get_polygon_center,
+                            rotate_point,
+                        )
                         all_pts = [pt for ln in new_lines_model for pt in ln]
                         new_cx, new_cy = get_polygon_center(all_pts)
 
@@ -1864,40 +1708,12 @@ class EditorController(QObject):
         self._on_history_undo_redo_state_changed(can_undo, can_redo)
 
     @pyqtSlot()
-    def open_file_dialog_and_load(self):
-        """Opens a file dialog and loads the selected image into the editor."""
-        from PyQt6.QtWidgets import QFileDialog
-
-        from services import ServiceManager
-
-        config_service = get_config_service()
-        last_dir = config_service.get_config().app.last_open_dir
-
-        file_path, _ = QFileDialog.getOpenFileName(
-            None,
-            "打开图片文件",
-            last_dir,
-            "Image Files (*.png *.jpg *.jpeg *.bmp *.webp *.avif *.heic *.heif)"
-        )
-        if file_path:
-            new_dir = os.path.dirname(file_path)
-            app_logic = ServiceManager.get_service('app_logic')
-            if app_logic:
-                app_logic.set_last_open_dir(new_dir)
-            self.load_image_and_regions(file_path)
-
-    # --- Toolbar Slots ---
-
-    @pyqtSlot()
-    def go_back(self):
-        pass  # This should likely signal the main window to switch views
-
-    @pyqtSlot()
     def export_image(self):
         """导出基于编辑器当前数据的图片（使用编辑器的蒙版和样式设置）"""
         try:
             image = self._get_current_image()
             regions = self._get_regions()
+            source_path = self.model.get_source_image_path()
             
             if not image:
                 self.logger.warning("Cannot export: missing image data")
@@ -1923,8 +1739,24 @@ class EditorController(QObject):
             self._export_toast = None
             if hasattr(self, 'toast_manager'):
                 self._export_toast = self.toast_manager.show_info("正在导出...", duration=0)
-            
-            self.async_service.submit_task(self._async_export_with_desktop_ui_service(image, regions, mask))
+
+            image_snapshot = self._snapshot_image_for_export(image, "base image")
+            inpainted_snapshot = self._snapshot_image_for_export(
+                self.model.get_inpainted_image(),
+                "inpainted image",
+            )
+            regions_snapshot = copy.deepcopy(regions)
+            mask_snapshot = None if mask is None else np.array(mask, copy=True)
+
+            self.async_service.submit_task(
+                self._async_export_with_desktop_ui_service(
+                    image_snapshot,
+                    regions_snapshot,
+                    mask_snapshot,
+                    source_path,
+                    inpainted_snapshot,
+                )
+            )
         except Exception as e:
             self.logger.error(f"Error during export request: {e}", exc_info=True)
             if hasattr(self, 'toast_manager'):
@@ -1938,7 +1770,6 @@ class EditorController(QObject):
         为原点、angle 为旋转角度的局部坐标 [left, top, right, bottom]。
         白框中心世界坐标 = center + local_to_world(wf_cx, wf_cy)。
         """
-        import math
         wf_local = region.get('white_frame_rect_local')
         base_center = region.get('center')
         if not (
@@ -1969,10 +1800,31 @@ class EditorController(QObject):
             self.logger.info(f"Found existing JSON, will replace: {json_path}")
         return json_path
 
-    def _save_current_inpainted_image(self, source_path: str, config_dict: dict, mask: Optional[np.ndarray]) -> None:
+    def _save_current_inpainted_image(
+        self,
+        source_path: str,
+        config_dict: dict,
+        mask: Optional[np.ndarray],
+        current_inpainted_image: Optional[Image.Image] = None,
+        has_regions: bool = False,
+    ) -> None:
         """将当前修复图同步到工作目录，确保下次打开时能复用。"""
         try:
-            image_to_save = self.model.get_inpainted_image() or self.model.get_image()
+            image_to_save = current_inpainted_image or self.model.get_inpainted_image()
+            if image_to_save is None:
+                # 导出时若修复预览尚未就绪，绝不能把原图误存为 inpainted。
+                if mask is not None or has_regions:
+                    existing_inpainted_path = find_inpainted_path(source_path)
+                    if existing_inpainted_path and os.path.exists(existing_inpainted_path):
+                        self.logger.info(
+                            f"No live inpainted preview during export, keep existing inpainted image: {existing_inpainted_path}"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Skipped updating inpainted image during export because no inpainted preview is available yet: {source_path}"
+                        )
+                    return
+                image_to_save = self.model.get_image()
             if image_to_save is None:
                 return
 
@@ -1993,14 +1845,18 @@ class EditorController(QObject):
                 save_kwargs['quality'] = save_quality
 
             save_image.save(inpainted_path, **save_kwargs)
-            self.model.set_inpainted_image_path(inpainted_path)
-            self.resource_manager.set_cache(
-                self.CACHE_LAST_INPAINTED,
-                np.array(save_image.convert('RGB'))
-            )
-            if mask is not None:
-                mask_to_cache = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY) if len(mask.shape) == 3 else mask
-                self.resource_manager.set_cache(self.CACHE_LAST_MASK, np.array(mask_to_cache, copy=True))
+
+            if self._is_same_source_image(self.model.get_source_image_path(), source_path):
+                self.model.set_inpainted_image_path(inpainted_path)
+                self.resource_manager.set_cache(
+                    self.CACHE_LAST_INPAINTED,
+                    np.array(save_image.convert('RGB'))
+                )
+                if mask is not None:
+                    mask_to_cache = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY) if len(mask.shape) == 3 else mask
+                    self.resource_manager.set_cache(self.CACHE_LAST_MASK, np.array(mask_to_cache, copy=True))
+            else:
+                self.logger.debug("Skipped runtime inpaint cache update because active image changed during export")
 
             self.logger.info(f"已更新修复图片: {inpainted_path}")
         except Exception as e:
@@ -2013,6 +1869,7 @@ class EditorController(QObject):
         regions: list,
         mask: Optional[np.ndarray],
         config_dict: dict,
+        inpainted_image: Optional[Image.Image] = None,
     ) -> str:
         """导出图片前同步当前编辑器状态到 JSON 和工作目录资源。"""
         json_path = self._resolve_editor_json_path(source_path)
@@ -2022,10 +1879,16 @@ class EditorController(QObject):
             self._apply_white_frame_center(region)
         export_service._save_regions_data_with_path(json_regions, json_path, source_path, mask, config_dict)
 
-        self._save_current_inpainted_image(source_path, config_dict, mask)
+        self._save_current_inpainted_image(
+            source_path,
+            config_dict,
+            mask,
+            current_inpainted_image=inpainted_image,
+            has_regions=bool(regions),
+        )
         return json_path
 
-    async def _async_export_with_desktop_ui_service(self, image, regions, mask):
+    async def _async_export_with_desktop_ui_service(self, image, regions, mask, source_path=None, inpainted_image=None):
         """使用desktop-ui导出服务进行异步导出"""
         try:
             import os
@@ -2038,7 +1901,6 @@ class EditorController(QObject):
 
             # 确定输出路径和文件名
             save_to_source_dir = getattr(config.cli, 'save_to_source_dir', False) if hasattr(config, 'cli') else False
-            source_path = self.model.get_source_image_path()
             
             if save_to_source_dir and source_path:
                 # 输出到原图所在目录的 manga_translator_work/result 子目录
@@ -2054,7 +1916,6 @@ class EditorController(QObject):
                         output_dir = os.getcwd()
 
             # 生成输出文件名（保持原文件名和格式）
-            source_path = self.model.get_source_image_path()
             if source_path:
                 base_name = os.path.splitext(os.path.basename(source_path))[0]
                 # 获取输出格式
@@ -2098,6 +1959,7 @@ class EditorController(QObject):
                     regions=regions,
                     mask=mask,
                     config_dict=config_dict,
+                    inpainted_image=inpainted_image,
                 )
             else:
                 self.logger.warning("Exporting without source image path, skipped JSON persistence")
@@ -2111,12 +1973,15 @@ class EditorController(QObject):
                 if persisted_json_path:
                     success_message += "\n已同步 JSON"
                 self._show_toast_signal.emit(success_message, 5000, True, output_path)
-                
-                # 保存导出快照，用于检测后续是否有更改
-                self._save_export_snapshot()
-                
-                # 导出成功后释放内存
-                self.resource_manager.release_memory_after_export()
+
+                if self._is_same_source_image(self.model.get_source_image_path(), source_path):
+                    # 保存导出快照，用于检测后续是否有更改
+                    self._save_export_snapshot()
+
+                    # 导出成功后释放内存
+                    self.resource_manager.release_memory_after_export()
+                else:
+                    self.logger.debug("Skipped export snapshot update because active image changed during export")
 
             def error_callback(message):
                 self.logger.error(f"Export error: {message}")
@@ -2178,48 +2043,13 @@ class EditorController(QObject):
                 success_callback=success_callback,
                 error_callback=error_callback,
                 source_image_path=source_path,  # 传递原图路径用于PSD导出
-                editor_inpainted_image=self.model.get_inpainted_image()
+                editor_inpainted_image=inpainted_image
             )
 
         except Exception as e:
             self.logger.error(f"Error during async export: {e}", exc_info=True)
             err_msg = str(e)
             QTimer.singleShot(0, lambda: QMessageBox.critical(None, "导出失败", f"导出过程中发生意外错误:\n{err_msg}"))
-
-    @pyqtSlot()
-    def edit_source_file(self):
-        """加载当前翻译后图片对应的原图进行编辑"""
-        current_path = self.model.get_source_image_path()
-        if not current_path:
-            self.logger.warning("No image currently loaded")
-            return
-
-        # 检查当前是否是翻译后的图片
-        if not self._is_translated_image(current_path):
-            self.logger.info("Current image is already a source file, no need to switch")
-            return
-
-        # 从translation_map.json中查找原图路径
-        try:
-            import json
-            norm_path = os.path.normpath(current_path)
-            output_dir = os.path.dirname(norm_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
-
-            if os.path.exists(map_path):
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    translation_map = json.load(f)
-
-                source_path = translation_map.get(norm_path)
-                if source_path and os.path.exists(source_path):
-                    self.logger.debug(f"Loading source file for editing: {source_path}")
-                    self.load_image_and_regions(source_path)
-                else:
-                    self.logger.warning(f"Source file not found: {source_path}")
-            else:
-                self.logger.warning(f"translation_map.json not found at: {map_path}")
-        except Exception as e:
-            self.logger.error(f"Error loading source file: {e}")
 
     @pyqtSlot(str)
     def set_display_mode(self, mode: str):
@@ -2236,13 +2066,6 @@ class EditorController(QObject):
             self.view.set_compare_mode(compare_enabled)
         self.model.set_region_display_mode(region_mode)
     
-    def set_white_box_visible(self, visible: bool):
-        """设置白框（手动调整边界）的可见性"""
-        if self.view and hasattr(self.view.graphics_view, '_region_items'):
-            for item in self.view.graphics_view._region_items:
-                if hasattr(item, 'set_white_box_visible'):
-                    item.set_white_box_visible(visible)
-
     @pyqtSlot(int)
     def set_original_image_alpha(self, alpha: int):
         """设置原图的不透明度 (0-100)，值越大越不透明（越显示原图）"""
@@ -2252,11 +2075,6 @@ class EditorController(QObject):
         self.model.set_original_image_alpha(alpha_float)
         # 标记用户已手动调整透明度
         self._user_adjusted_alpha = True
-
-    @pyqtSlot(int)
-    def set_preview_alpha(self, alpha: int):
-        self.logger.info(f"Toolbar: Preview alpha changed to '{alpha}'. (Not Implemented)")
-        # TODO: This should control the opacity of the inpainted image layer in the view
 
     def handle_global_render_setting_change(self):
         """Forces a re-render of all regions when a global render setting has changed."""
@@ -2268,12 +2086,6 @@ class EditorController(QObject):
 
         # A heavy-handed but reliable way to force a full redraw of all regions with new global defaults
         self.model.set_regions(self.model.get_regions())
-
-    @pyqtSlot()
-    def render_inpaint(self):
-        self.logger.info("Toolbar: 'Render Inpaint' requested.")
-        # This can trigger the same async task as the one after loading a json
-        self.async_service.submit_task(self._async_refine_and_inpaint())
 
     @pyqtSlot()
     def run_ocr_for_selection(self):
@@ -2312,7 +2124,7 @@ class EditorController(QObject):
             try:
                 self._ocr_toast.close()
                 self._ocr_toast = None
-            except:
+            except Exception:
                 pass
         
         # 显示完成Toast
@@ -2327,7 +2139,7 @@ class EditorController(QObject):
             try:
                 self._translation_toast.close()
                 self._translation_toast = None
-            except:
+            except Exception:
                 pass
         
         # 显示完成Toast
@@ -2344,7 +2156,7 @@ class EditorController(QObject):
             selected_ocr = self.view.property_panel.get_selected_ocr_model()
             if selected_ocr:
                 # 获取当前的OCR配置并更新ocr字段
-                from manga_translator.config import OcrConfig, Ocr
+                from manga_translator.config import Ocr, OcrConfig
                 full_config = self.config_service.get_config()
                 current_ocr_config = full_config.ocr if hasattr(full_config, 'ocr') else OcrConfig()
                 try:
@@ -2462,30 +2274,4 @@ class EditorController(QObject):
     def set_selection_from_list(self, indices: list):
         """Slot to handle selection changes originating from the RegionListView."""
         self.model.set_selection(indices)
-
-    @pyqtSlot(list)
-    def on_backend_task_completed(self, results: list):
-        """
-        Slot to handle the completion of a backend task (like translation).
-        Reloads the data for the currently active image to show the result.
-        """
-        self.logger.info("Backend task finished, received results. Refreshing current editor view.")
-        current_source_path = self.model.get_source_image_path()
-        if not current_source_path:
-            self.logger.warning("No active image in editor to refresh.")
-            return
-
-        # Find the result for the current file
-        norm_current_path = os.path.normpath(current_source_path)
-        for result in results:
-            if hasattr(result, 'image_path') and os.path.normpath(result.image_path) == norm_current_path:
-                if result.success:
-                    self.logger.info(f"Result for {os.path.basename(current_source_path)} is success. Reloading.")
-                    # Re-load the image. The file service will now find the new translated file.
-                    self.load_image_and_regions(current_source_path)
-                else:
-                    error_message = getattr(result, 'error_message', 'Unknown error')
-                    self.logger.error(f"Backend task failed for {os.path.basename(current_source_path)}: {error_message}")
-                break
-
 

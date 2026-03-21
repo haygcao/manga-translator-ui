@@ -1,12 +1,14 @@
-from typing import List, Optional
-import numpy as np
 import os
 import shutil
+from typing import List, Optional
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .inpainting_lama_mpe import LamaMPEInpainter
+
 
 class AotInpainter(LamaMPEInpainter):
     _MODEL_MAPPING = {
@@ -223,6 +225,8 @@ class ResBlockDis(nn.Module):
         x = self.conv2(F.leaky_relu(self.bn2(x), 0.2))
         return sc + x
 from torch.nn.utils import spectral_norm
+
+
 class Discriminator(nn.Module):
     def __init__(self, in_ch = 3, in_planes = 64, blocks = [2, 2, 2], alpha = 0.2):
         super(Discriminator, self).__init__()

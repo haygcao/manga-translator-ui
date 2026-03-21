@@ -5,16 +5,27 @@ Provides user authentication functionality including login, logout, password cha
 session checking, initial setup, and user registration.
 """
 
+import logging
+from datetime import timedelta
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-from typing import Optional
-import logging
 
 from manga_translator.server.core.config_manager import admin_settings
+from manga_translator.server.core.request_rate_limiter import SlidingWindowRateLimiter
 
 logger = logging.getLogger('manga_translator.server.routes.auth')
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+LOGIN_WINDOW = timedelta(minutes=10)
+LOGIN_IP_MAX_ATTEMPTS = 15
+LOGIN_USER_MAX_ATTEMPTS = 8
+REGISTER_WINDOW = timedelta(minutes=10)
+REGISTER_IP_MAX_ATTEMPTS = 5
+
+_auth_rate_limiter = SlidingWindowRateLimiter()
 
 # Service instances (will be injected by middleware)
 _account_service = None
@@ -28,6 +39,54 @@ def init_auth_services(account_service, session_service, audit_service):
     _account_service = account_service
     _session_service = session_service
     _audit_service = audit_service
+
+
+def _client_ip(req: Request) -> str:
+    return req.client.host if req.client else "unknown"
+
+
+def _normalized_username(username: Optional[str]) -> str:
+    return (username or "").strip().lower()
+
+
+def _raise_rate_limit(detail: str, retry_after: int) -> None:
+    raise HTTPException(
+        status_code=429,
+        detail=detail,
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _check_login_rate_limit(client_ip: str, username: str) -> None:
+    keys = (
+        (f"auth:login:ip:{client_ip}", LOGIN_IP_MAX_ATTEMPTS),
+        (f"auth:login:user:{_normalized_username(username)}", LOGIN_USER_MAX_ATTEMPTS),
+    )
+    for key, max_attempts in keys:
+        allowed, retry_after = _auth_rate_limiter.check(key, max_attempts, LOGIN_WINDOW)
+        if not allowed:
+            _raise_rate_limit("登录尝试过于频繁，请稍后再试", retry_after)
+
+
+def _record_login_failure(client_ip: str, username: str) -> None:
+    _auth_rate_limiter.record(f"auth:login:ip:{client_ip}", LOGIN_IP_MAX_ATTEMPTS, LOGIN_WINDOW)
+    _auth_rate_limiter.record(
+        f"auth:login:user:{_normalized_username(username)}",
+        LOGIN_USER_MAX_ATTEMPTS,
+        LOGIN_WINDOW,
+    )
+
+
+def _clear_login_failure(username: str) -> None:
+    _auth_rate_limiter.reset(f"auth:login:user:{_normalized_username(username)}")
+
+
+def _consume_registration_attempt(client_ip: str) -> None:
+    key = f"auth:register:ip:{client_ip}"
+    allowed, retry_after = _auth_rate_limiter.check(key, REGISTER_IP_MAX_ATTEMPTS, REGISTER_WINDOW)
+    if not allowed:
+        _raise_rate_limit("注册尝试过于频繁，请稍后再试", retry_after)
+    _auth_rate_limiter.record(key, REGISTER_IP_MAX_ATTEMPTS, REGISTER_WINDOW)
 
 
 class LoginRequest(BaseModel):
@@ -76,11 +135,13 @@ async def login(request: LoginRequest, req: Request):
         raise HTTPException(500, detail="Services not initialized")
     
     # Get client IP
-    client_ip = req.client.host if req.client else "unknown"
+    client_ip = _client_ip(req)
     user_agent = req.headers.get("user-agent", "unknown")
+    _check_login_rate_limit(client_ip, request.username)
     
     # Verify credentials
     if not _account_service.verify_password(request.username, request.password):
+        _record_login_failure(client_ip, request.username)
         # Log failed login attempt
         _audit_service.log_event(
             event_type="login",
@@ -98,12 +159,14 @@ async def login(request: LoginRequest, req: Request):
     # Get user account
     user = _account_service.get_user(request.username)
     if not user:
+        _record_login_failure(client_ip, request.username)
         return LoginResponse(
             success=False,
             message="用户不存在"
         )
     
     if not user.is_active:
+        _record_login_failure(client_ip, request.username)
         return LoginResponse(
             success=False,
             message="账号已被禁用"
@@ -125,6 +188,7 @@ async def login(request: LoginRequest, req: Request):
         details={"session_id": session.session_id},
         result="success"
     )
+    _clear_login_failure(request.username)
     
     return LoginResponse(
         success=True,
@@ -385,6 +449,9 @@ async def register_user(request: RegisterRequest, req: Request):
     """
     if not _account_service or not _session_service or not _audit_service:
         raise HTTPException(500, detail="Services not initialized")
+
+    client_ip = _client_ip(req)
+    _consume_registration_attempt(client_ip)
     
     # 检查是否开启注册
     registration_config = admin_settings.get('registration', {})
@@ -416,7 +483,6 @@ async def register_user(request: RegisterRequest, req: Request):
             detail="用户名已存在"
         )
     
-    client_ip = req.client.host if req.client else "unknown"
     user_agent = req.headers.get("user-agent", "unknown")
     
     try:

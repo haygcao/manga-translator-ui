@@ -4,8 +4,9 @@ Simple external tiling to reduce memory usage
 """
 
 from typing import List, Tuple, Union
-from PIL import Image
+
 import numpy as np
+from PIL import Image
 
 
 def split_image_into_tiles(

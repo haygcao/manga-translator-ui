@@ -5,10 +5,10 @@ from threading import Lock
 import uvicorn
 from fastapi import FastAPI, HTTPException, Path, Request, Response
 from pydantic import BaseModel
-
 from starlette.responses import StreamingResponse
 
 from manga_translator import MangaTranslator
+
 
 class MethodCall(BaseModel):
     method_name: str
@@ -58,8 +58,9 @@ class MangaShare:
             # 检查是否使用占位符，如果是则创建最小化的结果对象
             if hasattr(result, 'use_placeholder') and result.use_placeholder:
                 # 创建一个最小的Context对象，只包含占位符图片，避免传输大量数据
-                from manga_translator import Context
                 from PIL import Image
+
+                from manga_translator import Context
                 minimal_result = Context()
                 minimal_result.result = Image.new('RGB', (1, 1), color='white')
                 minimal_result.use_placeholder = True
@@ -123,7 +124,7 @@ class MangaShare:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.post("/execute/{method_name}")
-        async def execute_method(request: Request, method_name: str = Path(...)):
+        async def execute_method_stream(request: Request, method_name: str = Path(...)):
             self.check_nonce(request)
             self.check_lock()
             method = self.get_fn(method_name)

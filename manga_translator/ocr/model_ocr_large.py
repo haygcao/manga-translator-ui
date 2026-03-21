@@ -1,10 +1,11 @@
 import math
-from typing import List
 from collections import defaultdict
+from typing import List
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 
 class ResNet(nn.Module):
 
@@ -527,13 +528,9 @@ class OCR(nn.Module):
         return run(final_tokens, char_only = False), beams[0].logprobs.mean().exp().item()
 
 def test():
-    with open('../SynthText/alphabet-all-v2.txt', 'r') as fp:
-        _dictionary = [s[:-1] for s in fp.readlines()]
     img = torch.randn(4, 3, 32, 1224)
-    _idx = torch.zeros(4, 32).long()
-    _mask = torch.zeros(4, 32).bool()
     model = ResNet_FeatureExtractor(3, 256)
-    _out = model(img)
+    model(img)
 
 def test_inference():
     with torch.no_grad():

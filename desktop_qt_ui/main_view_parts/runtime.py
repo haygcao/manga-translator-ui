@@ -30,21 +30,23 @@ def update_workflow_mode_description(self, index: int | None = None):
         0: "Normal Translation",
         1: "Export Translation",
         2: "Export Original Text",
-        3: "Import Translation and Render",
-        4: "Colorize Only",
-        5: "Upscale Only",
-        6: "Inpaint Only",
-        7: "Replace Translation",
+        3: "Translate JSON Only",
+        4: "Import Translation and Render",
+        5: "Colorize Only",
+        6: "Upscale Only",
+        7: "Inpaint Only",
+        8: "Replace Translation",
     }
     tip_keys = {
         0: "Tip: Standard translation pipeline with detection, OCR, translation and rendering",
         1: "Tip: After exporting, check manga_translator_work/translations/ for imagename_translated.txt files",
         2: "Tip: After exporting, manually translate imagename_original.txt in manga_translator_work/originals/, then use 'Import Translation and Render' mode",
-        3: "Tip: Will read TXT files from manga_translator_work/originals/ or translations/ and render (prioritize _original.txt)",
-        4: "Tip: Only colorize images, no detection, OCR, translation or rendering",
-        5: "Tip: Only upscale images, no detection, OCR, translation or rendering",
-        6: "Tip: Detect text regions and inpaint to output clean images, no translation or rendering",
-        7: "Tip: Place translated images in manga_translator_work/translated_images with matching filenames. The app extracts translated text, matches regions on raw images, inpaints originals, and renders translated text.",
+        3: "Tip: Requires existing JSON data. The app reads original text from JSON, translates it, writes results back to JSON, and deletes imagename_original.txt after success",
+        4: "Tip: Will read TXT files from manga_translator_work/originals/ or translations/ and render (prioritize _original.txt)",
+        5: "Tip: Only colorize images, no detection, OCR, translation or rendering",
+        6: "Tip: Only upscale images, no detection, OCR, translation or rendering",
+        7: "Tip: Detect text regions and inpaint to output clean images, no translation or rendering",
+        8: "Tip: Place translated images in manga_translator_work/translated_images with matching filenames. The app extracts translated text, matches regions on raw images, inpaints originals, and renders translated text.",
     }
     mode_key = mode_keys.get(index, mode_keys[0])
     tip_key = tip_keys.get(index, tip_keys[0])
@@ -141,14 +143,16 @@ def sync_workflow_mode_from_config(self):
         self.workflow_mode_combo.blockSignals(True)
 
         if config.cli.replace_translation:
-            self.workflow_mode_combo.setCurrentIndex(7)
+            self.workflow_mode_combo.setCurrentIndex(8)
         elif config.cli.inpaint_only:
-            self.workflow_mode_combo.setCurrentIndex(6)
+            self.workflow_mode_combo.setCurrentIndex(7)
         elif config.cli.upscale_only:
-            self.workflow_mode_combo.setCurrentIndex(5)
+            self.workflow_mode_combo.setCurrentIndex(6)
         elif config.cli.colorize_only:
-            self.workflow_mode_combo.setCurrentIndex(4)
+            self.workflow_mode_combo.setCurrentIndex(5)
         elif config.cli.load_text:
+            self.workflow_mode_combo.setCurrentIndex(4)
+        elif config.cli.translate_json_only:
             self.workflow_mode_combo.setCurrentIndex(3)
         elif config.cli.template:
             self.workflow_mode_combo.setCurrentIndex(2)
@@ -168,6 +172,7 @@ def on_workflow_mode_changed(self, index: int):
     config = self.config_service.get_config()
 
     config.cli.load_text = False
+    config.cli.translate_json_only = False
     config.cli.template = False
     config.cli.generate_and_export = False
     config.cli.colorize_only = False
@@ -180,14 +185,16 @@ def on_workflow_mode_changed(self, index: int):
     elif index == 2:
         config.cli.template = True
     elif index == 3:
-        config.cli.load_text = True
+        config.cli.translate_json_only = True
     elif index == 4:
-        config.cli.colorize_only = True
+        config.cli.load_text = True
     elif index == 5:
-        config.cli.upscale_only = True
+        config.cli.colorize_only = True
     elif index == 6:
-        config.cli.inpaint_only = True
+        config.cli.upscale_only = True
     elif index == 7:
+        config.cli.inpaint_only = True
+    elif index == 8:
         config.cli.replace_translation = True
 
     self.config_service.set_config(config)
@@ -211,6 +218,8 @@ def update_start_button_text(self):
             self.start_button.setText(self._t("Start Upscaling"))
         elif config.cli.colorize_only:
             self.start_button.setText(self._t("Start Colorizing"))
+        elif config.cli.translate_json_only:
+            self.start_button.setText(self._t("Start JSON Translation"))
         elif config.cli.load_text:
             self.start_button.setText(self._t("Import Translation and Render"))
         elif config.cli.template:

@@ -2,22 +2,24 @@
 # original implementation https://github.com/pkumivision/FFC/blob/main/model_zoo/ffc.py
 # paper https://proceedings.neurips.cc/paper/2020/file/2fd5d41ec6cfab47e32164d5624269b1-Paper.pdf
 
-from typing import List, Tuple
+import abc
 import os
+import random
+from typing import List, Tuple
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import abc
-import random
 from kornia.geometry.transform import rotate
 
-from .inpainting_lama_mpe import LamaMPEInpainter
 from ..utils.onnx_runtime import (
     create_inference_session,
     create_session_options,
     import_onnxruntime,
 )
+from .inpainting_lama_mpe import LamaMPEInpainter
+
 
 # Currently not used
 class LamaInpainter(LamaMPEInpainter):
@@ -126,10 +128,8 @@ class LamaInpainter(LamaMPEInpainter):
         if max(image.shape[0: 2]) > inpainting_size:
             from ..utils import resize_keep_aspect
             image = resize_keep_aspect(image, inpainting_size)
-            mask_resized = resize_keep_aspect(mask, inpainting_size)
             mask_original_resized = resize_keep_aspect(mask_original, inpainting_size)
         else:
-            _mask_resized = mask
             mask_original_resized = mask_original
         
         pad_size = 8
@@ -448,7 +448,6 @@ class FourierUnit(nn.Module):
             orig_size = x.shape[-2:]
             x = F.interpolate(x, scale_factor=self.spatial_scale_factor, mode=self.spatial_scale_mode, align_corners=False)
 
-        _r_size = x.size()
         # (batch, c, h, w/2+1, 2)
         fft_dim = (-3, -2, -1) if self.ffc3d else (-2, -1)
         ffted = torch.fft.rfftn(x, dim=fft_dim, norm=self.fft_norm)
@@ -832,8 +831,6 @@ def get_discriminator():
         'enable_lfu': False,
     }
     return FFCNLayerDiscriminator(3, norm_layer = nn.Identity, init_conv_kwargs = init_conv_kwargs, conv_kwargs = conv_kwargs)
-
-from torchsummary import summary
 
 def test_model():
     dis = get_generator()

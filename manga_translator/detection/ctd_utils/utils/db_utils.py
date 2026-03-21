@@ -1,10 +1,11 @@
+import warnings
+
 import cv2
 import numpy as np
 import pyclipper
-from shapely.geometry import Polygon
-from collections import namedtuple
-import warnings
 import torch
+from shapely.geometry import Polygon
+
 warnings.filterwarnings('ignore')
 
 
@@ -276,13 +277,8 @@ class DetectionIoUEvaluator(object):
 
         matchedSum = 0
 
-        _Rectangle = namedtuple('Rectangle', 'xmin ymin xmax ymax')
-
         numGlobalCareGt = 0
         numGlobalCareDet = 0
-
-        _arrGlobalConfidences = []
-        _arrGlobalMatches = []
 
         recall = 0
         precision = 0
@@ -305,9 +301,6 @@ class DetectionIoUEvaluator(object):
 
         pairs = []
         detMatchedNums = []
-
-        _arrSampleConfidences = []
-        _arrSampleMatch = []
 
         evaluationLog = ""
 
@@ -515,8 +508,8 @@ def shrink_polygon_py(polygon, shrink_ratio):
 
 
 def shrink_polygon_pyclipper(polygon, shrink_ratio):
-    from shapely.geometry import Polygon
     import pyclipper
+    from shapely.geometry import Polygon
     polygon_shape = Polygon(polygon)
     distance = polygon_shape.area * (1 - np.power(shrink_ratio, 2)) / polygon_shape.length
     subject = [tuple(l) for l in polygon]

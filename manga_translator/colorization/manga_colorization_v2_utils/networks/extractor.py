@@ -1,6 +1,7 @@
 # import torch
-import torch.nn as nn
 import math
+
+import torch.nn as nn
 
 '''https://github.com/blandocs/Tag2Pix/blob/master/model/pretrained.py'''
 

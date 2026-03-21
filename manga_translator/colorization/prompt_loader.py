@@ -3,8 +3,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from ..utils import BASE_PATH
 from ..translators.prompt_loader import load_prompt_file
+from ..utils import BASE_PATH
 
 DEFAULT_AI_COLORIZER_PROMPT = (
     "You are a manga colorization engine. Colorize the provided manga page while preserving "

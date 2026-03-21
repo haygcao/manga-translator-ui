@@ -12,7 +12,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
 from widgets.filter_list_editor import _dialog_stylesheet, _monospace_font
 
 

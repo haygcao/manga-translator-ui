@@ -3,15 +3,16 @@ Photoshop PSD 导出模块
 使用 ExtendScript (.jsx) 生成可编辑的 PSD 文件
 """
 
-import os
-import tempfile
-import subprocess
-import platform
 import logging
+import os
+import platform
+import subprocess
+import tempfile
+
 # import math
 from typing import Optional
+
 from . import Context
-from .generic import imwrite_unicode
 
 logger = logging.getLogger(__name__)
 

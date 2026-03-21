@@ -6,10 +6,11 @@
 
 import logging
 from typing import Dict, Optional
-from fastapi import APIRouter, HTTPException, Depends
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from manga_translator.server.core.middleware import require_auth, require_admin
+from manga_translator.server.core.middleware import require_admin, require_auth
 from manga_translator.server.core.models import Session
 from manga_translator.server.core.quota_service import QuotaManagementService
 

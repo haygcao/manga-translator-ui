@@ -229,6 +229,8 @@ Google Gemini 是 Google 最新的多模态 AI 模型，性能强劲。
 
 - OpenAI OCR / Gemini OCR 是逐个文本框调用 API
 - 文本识别完成后，文字颜色仍由本地 `48px` 模型提取
+- 通常识别效果最好，但和本地 OCR 的差距往往不大
+- 因为是按文本框逐次请求，会非常消耗请求次数；如果是按次收费的站点，不建议使用
 
 ---
 
@@ -270,6 +272,14 @@ Google Gemini 是 Google 最新的多模态 AI 模型，性能强劲。
 
 - OpenAI Colorizer / Gemini Colorizer 是整页调用 API
 - 并发由 `ai_colorizer_concurrency` 控制，仅 Qt 桌面端显示
+- `openai_colorizer` 会根据 `COLOR_OPENAI_API_BASE` / `OPENAI_API_BASE` 自动适配图像接口：
+  - `https://api.siliconflow.cn/v1`：自动使用硅基流动 `images/generations` 风格，请求体支持 `image` / `image2` / `image3`
+  - `https://dashscope.aliyuncs.com/api/v1` 或 `https://dashscope-intl.aliyuncs.com/api/v1`：自动切换到百炼原生 `services/aigc/multimodal-generation/generation`
+  - 火山引擎 / 其他 OpenAI 兼容图像接口：继续使用 OpenAI 兼容格式
+- AI 上色多图提示词会自动按图号说明角色：`Image 1` 为当前待上色页，`Image 2+` 会分别标注为提示词参考图或历史已上色页
+- 若启用 `use_custom_api_params`，上色器会自动把 `examples/custom_api_params.json` 中 `colorizer` 分组的自定义参数并入对应后端请求体；例如：
+  - 硅基流动：`cfg`、`num_inference_steps`、`image_size`、`guidance_scale`
+  - 百炼原生：`n`、`watermark`、`negative_prompt`、`prompt_extend`、`size`
 
 ---
 
@@ -316,6 +326,8 @@ Google Gemini 是 Google 最新的多模态 AI 模型，性能强劲。
   - 对应编号的翻译文本列表
 - 拟声词 / 音效也会按翻译结果一起发送给渲染模型
 - 并发由 `ai_renderer_concurrency` 控制，仅 Qt 桌面端显示
+- `openai_renderer` 也会根据 `RENDER_OPENAI_API_BASE` / `OPENAI_API_BASE` 自动适配图像接口，规则与 `openai_colorizer` 一致
+- 若启用 `use_custom_api_params`，渲染器会自动把 `examples/custom_api_params.json` 中 `render` 分组的自定义参数并入对应后端请求体
 
 ---
 

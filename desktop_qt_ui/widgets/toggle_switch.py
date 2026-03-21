@@ -2,11 +2,18 @@
 自定义 Toggle Switch 控件，替代 QCheckBox 实现更现代的滑块开关。
 """
 
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, pyqtSignal, QRectF, QPointF
+from main_view_parts.theme import _to_qcolor, get_current_theme_colors
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    Qt,
+    pyqtProperty,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QWidget
-
-from main_view_parts.theme import _to_qcolor, get_current_theme_colors
 
 
 class ToggleSwitch(QWidget):

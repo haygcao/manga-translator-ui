@@ -10,16 +10,21 @@ Security Features:
 - Ownership-based access control
 """
 
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
 import uuid
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from manga_translator.server.core.permission_service_v2 import EnhancedPermissionService
 
 # Flask imports removed - using FastAPI now
-
-from manga_translator.server.models.session_models import SessionOwnership, SessionAccessAttempt
+from manga_translator.server.models.session_models import (
+    SessionAccessAttempt,
+    SessionOwnership,
+)
+from manga_translator.server.repositories.permission_repository import (
+    PermissionRepository,
+)
 from manga_translator.server.repositories.session_repository import SessionRepository
-from manga_translator.server.core.permission_service_v2 import EnhancedPermissionService
-from manga_translator.server.repositories.permission_repository import PermissionRepository
 
 
 class SessionSecurityService:
@@ -95,8 +100,8 @@ class SessionSecurityService:
         Returns:
             True if user is admin, False otherwise
         """
-        import os
         import json
+        import os
         
         # Try to read accounts file to get user's role
         # 首先尝试项目根目录的 accounts.json

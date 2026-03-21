@@ -1,13 +1,25 @@
-import os
 # import re
 import asyncio
+import os
+
 # import json
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 from google.genai import types
 
-from .common import CommonTranslator, VALID_LANGUAGES, parse_json_or_text_response, parse_hq_response, get_glossary_extraction_prompt, merge_glossary_to_file, validate_gemini_response, AsyncGeminiCurlCffi, extract_gemini_response_diagnostics, format_gemini_response_diagnostics, gemini_diagnostics_indicate_safety, gemini_error_message_indicates_safety
+from .common import (
+    VALID_LANGUAGES,
+    AsyncGeminiCurlCffi,
+    CommonTranslator,
+    extract_gemini_response_diagnostics,
+    format_gemini_response_diagnostics,
+    gemini_diagnostics_indicate_safety,
+    gemini_error_message_indicates_safety,
+    merge_glossary_to_file,
+    parse_hq_response,
+    validate_gemini_response,
+)
 from .keys import GEMINI_API_KEY
-from ..utils import Context
 
 # 浏览器风格的请求头，避免被 CF 拦截
 BROWSER_HEADERS = {

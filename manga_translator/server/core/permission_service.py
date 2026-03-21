@@ -5,12 +5,12 @@
 """
 
 import logging
-from typing import Dict, Optional, Any
-from datetime import date
 from collections import defaultdict
+from datetime import date
+from typing import Any, Dict, Optional
 
-from manga_translator.server.core.models import UserPermissions
 from manga_translator.server.core.account_service import AccountService
+from manga_translator.server.core.models import UserPermissions
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,9 @@ class PermissionService:
         
         # 3. 获取用户组的翻译器配置
         try:
-            from manga_translator.server.core.group_management_service import get_group_management_service
+            from manga_translator.server.core.group_management_service import (
+                get_group_management_service,
+            )
             group_service = get_group_management_service()
             group = group_service.get_group(account.group)
             
@@ -170,7 +172,9 @@ class PermissionService:
         
         # 检查用户组权限
         try:
-            from manga_translator.server.core.group_management_service import get_group_management_service
+            from manga_translator.server.core.group_management_service import (
+                get_group_management_service,
+            )
             group_service = get_group_management_service()
             group = group_service.get_group(account.group)
             
@@ -232,7 +236,9 @@ class PermissionService:
         
         # 优先从用户组获取并发限制
         try:
-            from manga_translator.server.core.group_management_service import get_group_management_service
+            from manga_translator.server.core.group_management_service import (
+                get_group_management_service,
+            )
             group_service = get_group_management_service()
             group = group_service.get_group(account.group)
             if group:
@@ -265,7 +271,9 @@ class PermissionService:
         # 获取用户组的配额设置
         daily_quota = -1  # 默认无限制
         try:
-            from manga_translator.server.core.group_management_service import get_group_management_service
+            from manga_translator.server.core.group_management_service import (
+                get_group_management_service,
+            )
             group_service = get_group_management_service()
             group = group_service.get_group(account.group)
             if group:
@@ -473,7 +481,9 @@ class PermissionService:
         
         # 优先从用户组获取配额
         try:
-            from manga_translator.server.core.group_management_service import get_group_management_service
+            from manga_translator.server.core.group_management_service import (
+                get_group_management_service,
+            )
             group_service = get_group_management_service()
             group = group_service.get_group(account.group)
             if group:
@@ -535,7 +545,9 @@ class PermissionService:
         
         # 优先从用户组获取权限
         try:
-            from manga_translator.server.core.group_management_service import get_group_management_service
+            from manga_translator.server.core.group_management_service import (
+                get_group_management_service,
+            )
             group_service = get_group_management_service()
             group = group_service.get_group(account.group)
             if group:

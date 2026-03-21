@@ -9,12 +9,14 @@ This service provides:
 """
 
 import logging
-from typing import List, Optional, Dict, Any
-from datetime import datetime
 import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from manga_translator.server.models import TranslationResult
-from manga_translator.server.repositories.translation_repository import TranslationRepository
+from manga_translator.server.repositories.translation_repository import (
+    TranslationRepository,
+)
 
 logger = logging.getLogger(__name__)
 

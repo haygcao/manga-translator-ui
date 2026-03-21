@@ -2,11 +2,11 @@ import json
 import os
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QFontDatabase
+from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
     QButtonGroup,
-    QFrame,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -21,12 +21,11 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from main_view_parts.theme import THEME_OPTIONS, get_current_theme_colors
 from utils.resource_helper import resource_path
 from utils.wheel_filter import NoWheelComboBox as QComboBox
 from widgets.file_list_view import FileListView
 
+from main_view_parts.theme import THEME_OPTIONS, get_current_theme_colors
 
 _SETTINGS_TAB_LAYOUT_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -268,6 +267,7 @@ def create_translation_page(self) -> QWidget:
         self._t("Normal Translation"),
         self._t("Export Translation"),
         self._t("Export Original Text"),
+        self._t("Translate JSON Only"),
         self._t("Import Translation and Render"),
         self._t("Colorize Only"),
         self._t("Upscale Only"),
@@ -837,18 +837,6 @@ def switch_content_page(self, page_key: str):
             nav_button.setChecked(True)
 
 
-def on_nav_add_folder_clicked(self):
-    self.controller.add_folder()
-    self._switch_content_page("translation")
-
-
-def on_nav_mode_clicked(self):
-    self._switch_content_page("translation")
-    if hasattr(self, "workflow_mode_combo"):
-        self.workflow_mode_combo.setFocus()
-        self.workflow_mode_combo.showPopup()
-
-
 def on_nav_prompt_clicked(self):
     self._switch_content_page("prompts")
     self._refresh_prompt_manager()
@@ -862,14 +850,6 @@ def on_nav_editor_clicked(self):
 def on_nav_font_clicked(self):
     self._switch_content_page("fonts")
     self._refresh_font_manager()
-
-
-def on_env_translator_combo_changed(self, display_name: str):
-    if not display_name:
-        return
-    translator_combo = self.findChild(QComboBox, "translator.translator")
-    if translator_combo and translator_combo.currentText() != display_name:
-        translator_combo.setCurrentText(display_name)
 
 
 def populate_theme_combo(self):
@@ -920,14 +900,6 @@ def on_language_combo_changed(self, index: int):
     locale_code = self.language_combo.itemData(index)
     if locale_code:
         self.language_change_requested.emit(locale_code)
-
-
-def sync_env_translator_combo_selection(self, display_name: str):
-    if not hasattr(self, "env_translator_combo"):
-        return
-    self.env_translator_combo.blockSignals(True)
-    self.env_translator_combo.setCurrentText(display_name)
-    self.env_translator_combo.blockSignals(False)
 
 
 def refresh_prompt_manager(self):

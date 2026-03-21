@@ -5,9 +5,9 @@
 当 .yaml 和 .json 同名文件同时存在时，优先使用 .yaml。
 """
 
-import os
 import json
 import logging
+import os
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger('manga_translator')

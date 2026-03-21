@@ -6,9 +6,9 @@ Repository for translation history management.
 import json
 import os
 import threading
-from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from manga_translator.server.models import TranslationResult
 

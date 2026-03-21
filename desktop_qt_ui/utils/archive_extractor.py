@@ -2,13 +2,12 @@
 压缩包/文档格式图片提取工具
 支持 PDF、EPUB、CBZ 格式
 """
-import os
 import json
+import os
+import shutil
 import tempfile
 import zipfile
-import shutil
 from typing import List, Optional, Tuple
-
 
 # 支持的压缩包/文档格式
 ARCHIVE_EXTENSIONS = {'.pdf', '.epub', '.cbz', '.cbr', '.zip'}

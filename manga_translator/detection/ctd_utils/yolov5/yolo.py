@@ -1,8 +1,37 @@
-from operator import mod
-from cv2 import imshow
 # from utils.yolov5_utils import scale_img
+import math
 from copy import deepcopy
-from .common import *
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+
+from ..utils.yolov5_utils import (
+    check_anchor_order,
+    check_version,
+    fuse_conv_and_bn,
+    initialize_weights,
+    make_divisible,
+)
+from .common import (
+    C3,
+    C3SPP,
+    C3TR,
+    SPP,
+    SPPF,
+    Bottleneck,
+    BottleneckCSP,
+    C3Ghost,
+    Concat,
+    Contract,
+    Conv,
+    DWConv,
+    Expand,
+    Focus,
+    GhostBottleneck,
+    GhostConv,
+)
+
 
 class Detect(nn.Module):
     stride = None  # strides computed during build
@@ -180,7 +209,7 @@ class Model(nn.Module):
     def _print_biases(self):
         m = self.model[-1]  # Detect() module
         for mi in m.m:  # from
-            _b = mi.bias.detach().view(m.na, -1).T  # conv.bias(255) to (3,85)
+            _ = mi.bias.detach().view(m.na, -1).T  # conv.bias(255) to (3,85)
 
     def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
         for m in self.model.modules():
@@ -220,7 +249,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             except NameError:
                 pass
 
-        n = _n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
+        n = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in [Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, Focus,
                  BottleneckCSP, C3, C3TR, C3SPP, C3Ghost]:
             c1, c2 = ch[f], args[0]

@@ -6,12 +6,13 @@ This module contains all /users/* endpoints for user account management.
 
 import logging
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from manga_translator.server.core.models import Session, UserPermissions
-from manga_translator.server.core.middleware import require_admin, get_services
 from manga_translator.server.core.audit_service import AuditService
+from manga_translator.server.core.middleware import get_services, require_admin
+from manga_translator.server.core.models import Session, UserPermissions
 
 logger = logging.getLogger('manga_translator.server')
 

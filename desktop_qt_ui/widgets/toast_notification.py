@@ -3,13 +3,13 @@ Toast通知组件
 用于显示操作状态的非阻塞通知
 """
 import os
-import subprocess
 import platform
-from PyQt6.QtWidgets import QLabel, QGraphicsDropShadowEffect
-from PyQt6.QtCore import QTimer, Qt, QPropertyAnimation, QEasingCurve, pyqtSignal
-from PyQt6.QtGui import QColor, QCursor, QFont
+import subprocess
 
 from main_view_parts.theme import get_current_theme, get_current_theme_colors
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor, QFont
+from PyQt6.QtWidgets import QGraphicsDropShadowEffect, QLabel
 
 
 class ToastNotification(QLabel):
@@ -172,7 +172,7 @@ class ToastNotification(QLabel):
         # 断开之前的连接，避免重复连接
         try:
             self.fade_animation.finished.disconnect()
-        except:
+        except Exception:
             pass
         self.fade_animation.finished.connect(self.close)  # 用close替代hide，确保销毁
         self.fade_animation.start()

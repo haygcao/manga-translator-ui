@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PyQt6.QtCore import pyqtSignal
+from main_view_parts.theme import (
+    apply_native_title_bar_theme,
+    apply_widget_stylesheet,
+    generate_application_stylesheet,
+    get_current_theme,
+)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -14,126 +21,33 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from main_view_parts.theme import apply_widget_stylesheet, get_current_theme_colors
-
-
-def _tokens() -> dict[str, str]:
-    colors = get_current_theme_colors()
-    return {
-        **colors,
-        "fg": colors["text_primary"],
-        "fg_dim": colors["text_muted"],
-        "fg_bright": colors["text_page_title"],
-        "bg_dialog": colors["bg_panel"],
-        "bg_card": colors["bg_surface_raised"],
-        "bg_input": colors["bg_input"],
-        "border": colors["border_input"],
-        "border_hover": colors["border_input_hover"],
-        "border_focus": colors["border_input_focus"],
-        "soft_bg": colors["btn_soft_bg"],
-        "soft_hover": colors["btn_soft_hover"],
-        "soft_pressed": colors["btn_soft_pressed"],
-        "soft_border": colors["btn_soft_border"],
-        "soft_text": colors["btn_soft_text"],
-        "primary_bg": colors["btn_primary_bg"],
-        "primary_hover": colors["btn_primary_hover"],
-        "primary_pressed": colors["btn_primary_pressed"],
-        "primary_border": colors["btn_primary_border"],
-        "primary_text": colors["btn_primary_text"],
-        "list_hover": colors["tab_hover"],
-        "list_selected": colors["dropdown_selection"],
-        "list_selected_text": colors["list_item_selected_text"],
-    }
-
 
 def _dialog_stylesheet() -> str:
-    t = _tokens()
-    return f"""
-        QDialog#modelSelectorDialog {{
-            background: {t["bg_dialog"]};
-        }}
-        QLabel {{
-            background: transparent;
-            color: {t["fg"]};
-        }}
-        QLabel#promptLabel {{
-            color: {t["fg_bright"]};
+    return """
+        QLabel#promptLabel {
             font-size: 13px;
             font-weight: 700;
-        }}
-        QLineEdit#searchInput {{
+        }
+        QLineEdit#searchInput {
             min-height: 34px;
-            background: {t["bg_input"]};
-            border: 1px solid {t["border"]};
-            border-radius: 10px;
-            color: {t["fg"]};
             padding: 7px 12px;
-        }}
-        QLineEdit#searchInput:hover {{
-            border-color: {t["border_hover"]};
-        }}
-        QLineEdit#searchInput:focus {{
-            border-color: {t["border_focus"]};
-        }}
-        QListWidget#modelList {{
-            background: {t["bg_card"]};
-            border: 1px solid {t["border"]};
-            border-radius: 12px;
-            color: {t["fg"]};
-            outline: 0;
+        }
+        QListWidget#modelList {
             padding: 6px;
-        }}
-        QListWidget#modelList::item {{
+        }
+        QListWidget#modelList::item {
             min-height: 30px;
             padding: 6px 10px;
-            border-radius: 8px;
-            background: transparent;
-            color: {t["fg"]};
-        }}
-        QListWidget#modelList::item:hover {{
-            background: {t["list_hover"]};
-            color: {t["fg_bright"]};
-        }}
-        QListWidget#modelList::item:selected {{
-            background: {t["list_selected"]};
-            color: {t["list_selected_text"]};
-        }}
-        QPushButton {{
-            min-width: 0;
-            min-height: 30px;
-            border-radius: 10px;
-            padding: 5px 12px;
-            font-size: 12px;
-            font-weight: 700;
-        }}
-        QPushButton#secondaryButton {{
-            background: {t["soft_bg"]};
-            border: 1px solid {t["soft_border"]};
-            color: {t["soft_text"]};
-        }}
-        QPushButton#secondaryButton:hover {{
-            background: {t["soft_hover"]};
-        }}
-        QPushButton#secondaryButton:pressed {{
-            background: {t["soft_pressed"]};
-        }}
-        QPushButton#primaryButton {{
-            background: {t["primary_bg"]};
-            border: 1px solid {t["primary_border"]};
-            color: {t["primary_text"]};
-        }}
-        QPushButton#primaryButton:hover {{
-            background: {t["primary_hover"]};
-        }}
-        QPushButton#primaryButton:pressed {{
-            background: {t["primary_pressed"]};
-        }}
-        QPushButton#primaryButton:disabled {{
-            background: {t["btn_disabled_bg"]};
-            border: 1px solid {t["btn_disabled_border"]};
-            color: {t["text_disabled"]};
-        }}
+        }
     """
+
+
+def _global_dialog_stylesheet(extra_stylesheet: str = "") -> str:
+    app = QApplication.instance()
+    base_stylesheet = app.styleSheet() if app is not None else generate_application_stylesheet(get_current_theme())
+    if not extra_stylesheet:
+        return base_stylesheet
+    return f"{base_stylesheet}\n{extra_stylesheet}"
 
 
 def _default_t(text: str, **kwargs) -> str:
@@ -165,10 +79,13 @@ class ModelSelectorDialog(QDialog):
         self.setMinimumWidth(520)
         self.setMinimumHeight(420)
         self.setModal(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
 
         self._setup_ui(prompt)
         self._populate_list()
-        apply_widget_stylesheet(self, _dialog_stylesheet())
+        apply_widget_stylesheet(self, _global_dialog_stylesheet(_dialog_stylesheet()))
+        QTimer.singleShot(0, lambda: apply_native_title_bar_theme(self, get_current_theme()))
 
     def _setup_ui(self, prompt: str):
         layout = QVBoxLayout(self)
@@ -196,13 +113,12 @@ class ModelSelectorDialog(QDialog):
         button_layout.addStretch()
 
         self.ok_button = QPushButton(self._t("OK"))
-        self.ok_button.setObjectName("primaryButton")
+        self.ok_button.setProperty("variant", "accent")
         self.ok_button.setFixedSize(112, 38)
         self.ok_button.clicked.connect(self._on_ok_clicked)
         self.ok_button.setEnabled(False)
 
         cancel_button = QPushButton(self._t("Cancel"))
-        cancel_button.setObjectName("secondaryButton")
         cancel_button.setFixedSize(112, 38)
         cancel_button.clicked.connect(self.reject)
 

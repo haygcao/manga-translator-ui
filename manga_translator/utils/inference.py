@@ -1,24 +1,25 @@
+import filecmp
 import os
+import re
+import shutil
 import stat
 import sys
 import tempfile
-import re
-import torch
-import shutil
-import filecmp
 from abc import ABC, abstractmethod
 from functools import cached_property
 
+import torch
+
+from ..config import TranslatorConfig
 from .generic import (
     BASE_PATH,
     download_url_with_progressbar,
-    prompt_yes_no,
-    replace_prefix,
     get_digest,
     get_filename_from_url,
+    prompt_yes_no,
+    replace_prefix,
 )
 from .log import get_logger
-from ..config import TranslatorConfig
 
 
 class InfererModule(ABC):

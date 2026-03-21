@@ -1,12 +1,13 @@
-import cv2
 import copy
+
+import cv2
 import torch
 import torch.nn as nn
 
-from .utils.yolov5_utils import fuse_conv_and_bn
 from .utils.weight_init import init_weights
-from .yolov5.yolo import load_yolov5_ckpt
+from .utils.yolov5_utils import fuse_conv_and_bn
 from .yolov5.common import C3, Conv
+from .yolov5.yolo import load_yolov5_ckpt
 
 TEXTDET_MASK = 0
 TEXTDET_DET = 1

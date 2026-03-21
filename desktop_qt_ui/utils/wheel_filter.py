@@ -3,8 +3,8 @@
 解决Qt控件（如QComboBox、QSpinBox等）捕获滚轮事件导致页面无法滚动的问题
 """
 
-from PyQt6.QtCore import QEvent, QObject, Qt
-from PyQt6.QtWidgets import QComboBox, QSpinBox, QDoubleSpinBox
+from PyQt6.QtCore import QEvent, QObject
+from PyQt6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
 
 
 class NoWheelComboBox(QComboBox):

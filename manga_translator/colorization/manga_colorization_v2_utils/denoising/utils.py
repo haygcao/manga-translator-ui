@@ -11,8 +11,8 @@ version 3 of the License, or (at your option) any later
 version. You should have received a copy of this license along
 this program. If not, see <http://www.gnu.org/licenses/>.
 """
-import numpy as np
 import cv2
+import numpy as np
 
 
 def variable_to_cv2_image(varim):

@@ -7,17 +7,17 @@
 3. 使用 REFINEMASK_INPAINT 模式（会进行5x5膨胀）
 """
 
+from typing import List, Tuple
+
+import cv2
 import numpy as np
-from typing import List, Tuple, Optional
+import torch
 
 from ..detection.ctd import ComicTextDetector
-from ..detection.ctd_utils.textmask import refine_mask, REFINEMASK_INPAINT
-from ..utils import det_rearrange_forward
-from ..detection.ctd_utils.utils.imgproc_utils import preprocess_img
+from ..detection.ctd_utils.textmask import REFINEMASK_INPAINT, refine_mask
 from ..detection.ctd_utils.utils.db_utils import postprocess_mask
-from ..utils import Quadrilateral
-import cv2
-import torch
+from ..detection.ctd_utils.utils.imgproc_utils import preprocess_img
+from ..utils import Quadrilateral, det_rearrange_forward
 
 
 class ReplaceTranslationCTD:

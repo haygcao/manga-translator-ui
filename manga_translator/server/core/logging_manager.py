@@ -4,14 +4,13 @@
 负责日志队列管理、任务日志隔离和日志导出功能。
 """
 
+import contextvars
 import logging
 import threading
 import uuid
-from collections import deque, defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Optional
-import contextvars
-
 
 # 基于任务ID的日志队列（每个任务有独立的日志队列）
 task_logs = defaultdict(lambda: deque(maxlen=1000))  # 每个任务最多保存1000条日志

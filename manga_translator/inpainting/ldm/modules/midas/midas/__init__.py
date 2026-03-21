@@ -1,11 +1,13 @@
-import os
 import math
+import os
 import random
+from datetime import datetime
+
+import cv2
 import numpy as np
 import torch
-import cv2
 from torchvision.utils import make_grid
-from datetime import datetime
+
 from manga_translator.utils.generic import imwrite_unicode
 
 try:

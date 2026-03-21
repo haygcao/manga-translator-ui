@@ -1,6 +1,7 @@
 import json
 from typing import Any, Callable
 
+from main_view_parts.theme import get_current_theme, get_current_theme_colors
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
@@ -9,6 +10,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -17,14 +19,13 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
 from utils.wheel_filter import NoWheelComboBox as QComboBox
+
 from manga_translator.custom_api_params import (
     CUSTOM_API_PARAM_SECTIONS,
     build_custom_api_params_payload,
     normalize_custom_api_params_payload,
 )
-from main_view_parts.theme import get_current_theme, get_current_theme_colors
 
 
 def _identity_translate(text: str, **kwargs) -> str:
@@ -44,11 +45,13 @@ def _tokens() -> dict[str, str]:
         "fg_dim": colors["text_muted"],
         "fg_bright": colors["text_page_title"],
         "bg_dialog": colors["bg_panel"],
+        "bg_dropdown": colors["bg_dropdown"],
         "bg_card": colors["bg_surface_raised"],
         "bg_soft": colors["bg_surface_soft"],
         "bg_input": colors["bg_input"],
         "border": colors["border_input"],
         "border_focus": colors["border_input_focus"],
+        "dropdown_selection": colors["dropdown_selection"],
         "soft_bg": colors["btn_soft_bg"],
         "soft_hover": colors["btn_soft_hover"],
         "soft_pressed": colors["btn_soft_pressed"],
@@ -70,29 +73,34 @@ def _dialog_stylesheet() -> str:
         QDialog {{
             background: {t["bg_dialog"]};
         }}
+
         QLabel {{
             color: {t["fg"]};
-            background: transparent;
         }}
+
         QLabel#dialog_title {{
             color: {t["fg_bright"]};
             font-size: 16px;
             font-weight: 700;
         }}
+
         QLabel#dialog_subtitle {{
             color: {t["fg_dim"]};
             font-size: 12px;
         }}
+
         QLabel#section_label {{
             color: {t["fg_bright"]};
             font-size: 12px;
             font-weight: 600;
         }}
+
         QLabel#hint_label {{
             color: {t["fg_dim"]};
             font-size: 12px;
             padding: 2px 0;
         }}
+
         QLabel#null_value_label {{
             color: {t["fg_dim"]};
             background: {t["bg_soft"]};
@@ -100,43 +108,95 @@ def _dialog_stylesheet() -> str:
             border-radius: 8px;
             padding: 7px 10px;
         }}
+
         QFrame#divider {{
             background: {t["border"]};
             max-height: 1px;
             border: none;
         }}
+
         QWidget#params_card,
         QWidget#path_card {{
             background: {t["bg_card"]};
             border: 1px solid {t["border"]};
             border-radius: 12px;
         }}
+
         QWidget#param_row {{
             background: {t["bg_soft"]};
             border: 1px solid {t["border"]};
             border-radius: 12px;
         }}
+
+        QWidget#section_content {{
+            background: transparent;
+        }}
+
         QLineEdit,
-        QPlainTextEdit {{
+        QPlainTextEdit,
+        QComboBox {{
             background: {t["bg_input"]};
             border: 1px solid {t["border"]};
             border-radius: 8px;
             color: {t["fg"]};
             padding: 7px 10px;
+            selection-background-color: {t["dropdown_selection"]};
         }}
+
         QLineEdit:focus,
-        QPlainTextEdit:focus {{
+        QPlainTextEdit:focus,
+        QComboBox:focus {{
             border-color: {t["border_focus"]};
         }}
+
+        QComboBox {{
+            padding-right: 24px;
+            min-height: 22px;
+        }}
+
+        QComboBox::drop-down {{
+            border: none;
+            width: 24px;
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+        }}
+
+        /* 只样式化实际的列表视图，避免 QComboBoxPrivateContainer 在部分平台出现重绘/重影 */
+        QListView#combo_popup_view,
+        QComboBox QAbstractItemView {{
+            background: {t["bg_dropdown"]};
+            color: {t["fg"]};
+            border: 1px solid {t["border"]};
+            selection-background-color: {t["dropdown_selection"]};
+            selection-color: {t["fg"]};
+            outline: none;
+        }}
+
+        QListView#combo_popup_view::item,
+        QComboBox QAbstractItemView::item {{
+            padding: 6px 10px;
+            min-height: 24px;
+            background: transparent;
+            color: {t["fg"]};
+        }}
+
+        QListView#combo_popup_view::item:selected,
+        QComboBox QAbstractItemView::item:selected {{
+            background: {t["dropdown_selection"]};
+            color: {t["fg"]};
+        }}
+
         QPlainTextEdit {{
             padding: 10px;
         }}
+
         QTabWidget::pane {{
             border: 1px solid {t["border"]};
             border-radius: 10px;
             background: {t["bg_card"]};
             padding: 6px;
         }}
+
         QTabBar::tab {{
             background: {t["soft_bg"]};
             border: 1px solid {t["soft_border"]};
@@ -149,18 +209,22 @@ def _dialog_stylesheet() -> str:
             font-size: 12px;
             font-weight: 600;
         }}
+
         QTabBar::tab:selected {{
             background: {t["primary_bg"]};
             border-color: {t["primary_border"]};
             color: {t["primary_text"]};
         }}
+
         QTabBar::tab:hover:!selected {{
             background: {t["soft_hover"]};
         }}
+
         QScrollArea {{
             border: none;
             background: transparent;
         }}
+
         QPushButton {{
             min-height: 34px;
             border-radius: 8px;
@@ -168,25 +232,31 @@ def _dialog_stylesheet() -> str:
             font-size: 12px;
             font-weight: 600;
         }}
+
         QPushButton[role="soft"] {{
             background: {t["soft_bg"]};
             border: 1px solid {t["soft_border"]};
             color: {t["soft_text"]};
         }}
+
         QPushButton[role="soft"]:hover {{
             background: {t["soft_hover"]};
         }}
+
         QPushButton[role="soft"]:pressed {{
             background: {t["soft_pressed"]};
         }}
+
         QPushButton[role="primary"] {{
             background: {t["primary_bg"]};
             border: 1px solid {t["primary_border"]};
             color: {t["primary_text"]};
         }}
+
         QPushButton[role="primary"]:hover {{
             background: {t["primary_hover"]};
         }}
+
         QPushButton[role="primary"]:pressed {{
             background: {t["primary_pressed"]};
         }}
@@ -211,10 +281,18 @@ def _infer_type(value: Any) -> str:
     return "json"
 
 
+def _create_combo_popup_view(parent: QWidget | None = None) -> QListView:
+    view = QListView(parent)
+    view.setObjectName("combo_popup_view")
+    view.setUniformItemSizes(True)
+    view.setAlternatingRowColors(False)
+    return view
+
+
 class CustomApiParamRow(QWidget):
     remove_requested = pyqtSignal(QWidget)
 
-    def __init__(self, t_func: Callable[[str], str] | None = None, parent=None):
+    def __init__(self, t_func: Callable[..., str] | None = None, parent=None):
         super().__init__(parent)
         self._t = t_func or _identity_translate
         self.setObjectName("param_row")
@@ -242,6 +320,7 @@ class CustomApiParamRow(QWidget):
         type_label = QLabel(self._t("Type"))
         type_label.setObjectName("section_label")
         self.type_combo = QComboBox()
+        self.type_combo.setView(_create_combo_popup_view(self.type_combo))
         self.type_combo.setMinimumWidth(118)
         for label, value in [
             (self._t("String"), "string"),
@@ -269,6 +348,7 @@ class CustomApiParamRow(QWidget):
         self.number_input.setFont(_monospace_font(10))
 
         self.boolean_input = QComboBox()
+        self.boolean_input.setView(_create_combo_popup_view(self.boolean_input))
         self.boolean_input.addItem("true", True)
         self.boolean_input.addItem("false", False)
 
@@ -383,7 +463,7 @@ class CustomApiParamRow(QWidget):
 
 
 class CustomApiParamsEditorDialog(QDialog):
-    def __init__(self, file_path: str, t_func: Callable[[str], str] | None = None, parent=None):
+    def __init__(self, file_path: str, t_func: Callable[..., str] | None = None, parent=None):
         super().__init__(parent)
         self._t = t_func or _identity_translate
         self._file_path = file_path
@@ -406,7 +486,9 @@ class CustomApiParamsEditorDialog(QDialog):
 
         title = QLabel(self._t("Edit Custom API Params"))
         title.setObjectName("dialog_title")
-        subtitle = QLabel(self._t("Edit custom API request parameters passed directly to the translator backend."))
+        subtitle = QLabel(
+            self._t("Edit custom API request parameters passed directly to the translator backend.")
+        )
         subtitle.setObjectName("dialog_subtitle")
         subtitle.setWordWrap(True)
         root.addWidget(title)
@@ -458,6 +540,7 @@ class CustomApiParamsEditorDialog(QDialog):
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(14, 12, 14, 12)
         card_layout.setSpacing(4)
+
         title = QLabel(self._t("Grouped API Params"))
         title.setObjectName("section_label")
         hint = QLabel(
@@ -468,6 +551,7 @@ class CustomApiParamsEditorDialog(QDialog):
         )
         hint.setObjectName("hint_label")
         hint.setWordWrap(True)
+
         card_layout.addWidget(title)
         card_layout.addWidget(hint)
         page_layout.addWidget(card)
@@ -484,11 +568,13 @@ class CustomApiParamsEditorDialog(QDialog):
             scroll.setFrameShape(QFrame.Shape.NoFrame)
 
             content = QWidget()
-            content.setStyleSheet("background: transparent;")
+            content.setObjectName("section_content")
+
             layout = QVBoxLayout(content)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(10)
             layout.addStretch(1)
+
             scroll.setWidget(content)
 
             add_row = QHBoxLayout()
@@ -506,7 +592,6 @@ class CustomApiParamsEditorDialog(QDialog):
             self.section_tabs.addTab(section_page, self._section_title(section))
 
         page_layout.addWidget(self.section_tabs, 1)
-
         self.tabs.addTab(page, self._t("Template Edit"))
 
     def _build_raw_tab(self):
@@ -608,11 +693,15 @@ class CustomApiParamsEditorDialog(QDialog):
                 self._append_row(section, key, value)
 
     def _collect_structured_data(self) -> dict[str, Any]:
-        section_data: dict[str, dict[str, Any]] = {section: {} for section in CUSTOM_API_PARAM_SECTIONS}
+        section_data: dict[str, dict[str, Any]] = {
+            section: {} for section in CUSTOM_API_PARAM_SECTIONS
+        }
+
         for section in CUSTOM_API_PARAM_SECTIONS:
             container = self.section_contents.get(section)
             if container is None:
                 continue
+
             row_widgets = container.findChildren(
                 CustomApiParamRow,
                 options=Qt.FindChildOption.FindDirectChildrenOnly,
@@ -624,6 +713,7 @@ class CustomApiParamsEditorDialog(QDialog):
                 if key in section_data[section]:
                     raise ValueError(self._t("Duplicate parameter name: {name}", name=key))
                 section_data[section][key] = value
+
         return build_custom_api_params_payload(section_data)
 
     def _collect_raw_data(self) -> dict[str, Any]:
@@ -640,6 +730,7 @@ class CustomApiParamsEditorDialog(QDialog):
             color = _tokens()["status_error"]
         else:
             color = _tokens()["fg_dim"]
+
         self.status_label.setStyleSheet(f"color: {color};")
         self.status_label.setText(message)
 

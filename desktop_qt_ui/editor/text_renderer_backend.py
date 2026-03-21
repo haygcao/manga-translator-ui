@@ -1,17 +1,17 @@
 import logging
 import os
-import re
 
 import cv2
 import numpy as np
+from PyQt6.QtCore import QPointF
+from PyQt6.QtGui import QImage, QPixmap, QPolygonF
+
 from manga_translator.config import Config, RenderConfig
 from manga_translator.rendering import text_render
 from manga_translator.rendering.text_render import (
     set_font,
 )
 from manga_translator.utils import TextBlock
-from PyQt6.QtCore import QPointF
-from PyQt6.QtGui import QImage, QPixmap, QPolygonF
 
 logger = logging.getLogger('manga_translator')
 
@@ -67,10 +67,6 @@ def apply_font_for_render(font_path: str) -> str:
         set_font(text_render.DEFAULT_FONT)
         return ''
     return resolved_font_path
-
-def update_font_config(font_filename: str):
-    """兼容旧调用：更新字体配置（现转为按路径解析设置）。"""
-    apply_font_for_render(font_filename)
 
 def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transform, render_params: dict, pure_zoom: float = 1.0, total_regions: int = 1):
     """
@@ -149,17 +145,18 @@ def render_text_for_region(text_block: TextBlock, dst_points: np.ndarray, transf
         if hasattr(text_block, 'lines') and text_block.lines is not None:
             try:
                 region_count = len(text_block.lines)
-            except:
+            except Exception:
                 region_count = 1
 
         # 将当前text_block传递给config，用于方向不匹配检测
         if config_obj:
             config_obj._current_region = text_block
 
-        # 渲染文本预处理：不在 UI 层自动添加 <H> 标签
-        text_for_render = text_block.get_translation_for_rendering()
-        if text_block.horizontal:
-            text_for_render = re.sub(r'<H>(.*?)</H>', r'\1', text_for_render, flags=re.IGNORECASE | re.DOTALL)
+        text_for_render = text_render.prepare_text_for_direction_rendering(
+            text_block.get_translation_for_rendering(),
+            is_horizontal=text_block.horizontal,
+            auto_rotate_symbols=bool(render_params.get('auto_rotate_symbols')),
+        )
 
         # 使用 freetype 渲染器（稳定可靠）
         if text_block.horizontal:

@@ -6,10 +6,10 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-from .async_service import AsyncService
-
 # 导入编辑器核心模块（使用绝对导入）
 from desktop_qt_ui.editor.core import ResourceManager
+
+from .async_service import AsyncService
 
 # 导入所有服务
 from .config_service import ConfigService

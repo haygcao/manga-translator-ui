@@ -1,9 +1,12 @@
 import re
-from typing import List, Dict
-from omegaconf import OmegaConf
+from typing import Dict, List
+
 from langcodes import Language, closest_supported_match
-from .common import VALID_LANGUAGES
+from omegaconf import OmegaConf
 from pydantic import BaseModel
+
+from .common import VALID_LANGUAGES
+
 
 # Define the schema for the response
 class TextValue(BaseModel):
@@ -268,7 +271,7 @@ class ConfigGPT:
                                 ],
                                 max_distance=max_distance 
                             )
-        except:
+        except Exception:
             self.logger.error(f"Requested chat sample of unknown language: {to_lang}")
             return self.langSamples
         

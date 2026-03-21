@@ -9,9 +9,10 @@
 """
 
 import logging
-from typing import List, Set, Dict, Any, Optional
-from manga_translator.server.core.models import UserAccount
+from typing import Any, Dict, List, Optional, Set
+
 from manga_translator.server.core.group_service import get_group_service
+from manga_translator.server.core.models import UserAccount
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class PermissionCalculator:
             return ['*']
         
         # 获取用户组配置
-        _group_config = self.group_service.get_group(user.group)
+        self.group_service.get_group(user.group)
         
         # 基础集合：从用户组获取（目前用户组不限制翻译器，所以默认全部）
         base_translators: Set[str] = {'*'}

@@ -1,6 +1,7 @@
 import os
-from PIL import Image
 from abc import abstractmethod
+
+from PIL import Image
 
 from .utils import Context
 

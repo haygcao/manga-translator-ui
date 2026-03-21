@@ -2,10 +2,11 @@
 Repository for permission management.
 """
 
-from typing import Optional, Dict, Any
 from datetime import datetime, timezone
-from manga_translator.server.repositories.base_repository import BaseJSONRepository
+from typing import Any, Dict, Optional
+
 from manga_translator.server.models import UserPermission
+from manga_translator.server.repositories.base_repository import BaseJSONRepository
 
 
 class PermissionRepository(BaseJSONRepository):

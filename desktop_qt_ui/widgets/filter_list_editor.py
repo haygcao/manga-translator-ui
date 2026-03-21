@@ -1,7 +1,7 @@
 import json
 from typing import Any, Callable
 
-from PyQt6.QtCore import Qt
+from main_view_parts.theme import get_current_theme, get_current_theme_colors
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QDialog,
@@ -15,8 +15,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from main_view_parts.theme import get_current_theme, get_current_theme_colors
-from manga_translator.utils.text_filter import ensure_filter_list_exists, save_filter_list_config
+from manga_translator.utils.text_filter import (
+    ensure_filter_list_exists,
+    save_filter_list_config,
+)
 
 
 def _tokens() -> dict[str, str]:

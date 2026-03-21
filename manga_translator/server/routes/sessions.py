@@ -4,13 +4,13 @@ Session Management Routes
 This module provides API endpoints for session management with ownership-based access control.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
-from fastapi.responses import JSONResponse
 from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from manga_translator.server.core.session_security_service import SessionSecurityService
-
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -26,18 +26,7 @@ class UpdateStatusRequest(BaseModel):
     status: str
 
 
-# Dependency to get current user from session token
-async def get_current_user(x_session_token: str = Query(None, alias="X-Session-Token", include_in_schema=False)):
-    """Get current user from session token."""
-    from fastapi import Header
-    # 这个函数会被重新定义，使用Header而不是Query
-    pass
-
-
-# 正确的依赖注入
-from fastapi import Header
-
-async def get_current_user_from_header(
+async def get_current_user(
     x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
 ):
     """Get current user from session token header."""
@@ -56,10 +45,6 @@ async def get_current_user_from_header(
         "user_id": session.username,
         "is_admin": session.role == "admin"
     }
-
-
-# 使用正确的依赖
-get_current_user = get_current_user_from_header
 
 
 @router.post("/")

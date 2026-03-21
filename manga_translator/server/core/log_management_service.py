@@ -11,8 +11,8 @@
 """
 
 import json
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 from manga_translator.server.models import LogEntry
 from manga_translator.server.repositories.log_repository import LogRepository
@@ -408,7 +408,7 @@ class LogManagementService:
         需求: 33.6
         """
         # 先验证权限
-        _logs = self.get_session_logs(session_token, user_id, is_admin)
+        self.get_session_logs(session_token, user_id, is_admin)
         
         # 删除日志
         deleted_count = self.log_repo.delete_session_logs(session_token)

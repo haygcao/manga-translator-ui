@@ -1,5 +1,6 @@
 import logging
 import sys
+
 import colorama
 
 from .generic import replace_prefix
@@ -41,15 +42,15 @@ def init_logging():
     _initialized = True
     
     # ✅ 强制刷新标准输出（解决日志卡住问题）
-    import sys
     import os
+    import sys
     # 设置环境变量，禁用 Python 输出缓冲
     os.environ['PYTHONUNBUFFERED'] = '1'
     # 如果 stdout 有 reconfigure 方法，设置为无缓冲
     if hasattr(sys.stdout, 'reconfigure'):
         try:
             sys.stdout.reconfigure(line_buffering=True)
-        except:
+        except Exception:
             pass
     
     # 强制添加 handler（不依赖 basicConfig）

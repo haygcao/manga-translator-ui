@@ -1,9 +1,10 @@
 
-import pyclipper
 import cv2
 import numpy as np
-from shapely.geometry import Polygon
+import pyclipper
 import torch
+from shapely.geometry import Polygon
+
 
 class SegDetectorRepresenter():
     def __init__(self, thresh=0.6, box_thresh=0.8, max_candidates=1000, unclip_ratio=2.2):

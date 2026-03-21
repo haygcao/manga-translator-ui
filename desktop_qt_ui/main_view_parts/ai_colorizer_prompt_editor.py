@@ -1,35 +1,47 @@
+import logging
 import json
 import os
 from typing import Callable, Dict, List, Optional
 
+from PyQt6.QtCore import QSize
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMenu,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
+from widgets.filter_list_editor import _dialog_stylesheet as _base_dialog_stylesheet
+from widgets.hover_hint import install_hover_hint
+from widgets.filter_list_editor import _monospace_font
+from widgets.themed_text_input_dialog import themed_get_text
 
 from main_view_parts.theme import (
     apply_widget_stylesheet,
+    build_section_icon_button_stylesheet,
+    build_shared_button_stylesheet,
+    build_tooltip_stylesheet,
     get_current_theme,
     get_current_theme_colors,
     repolish_widget,
 )
-from manga_translator.colorization.prompt_loader import load_ai_colorizer_prompt_template
-from widgets.filter_list_editor import _dialog_stylesheet as _base_dialog_stylesheet, _monospace_font
-from widgets.themed_text_input_dialog import themed_get_text
+from manga_translator.colorization.prompt_loader import (
+    load_ai_colorizer_prompt_template,
+)
+
+logger = logging.getLogger("manga_translator")
 
 
 def is_ai_colorizer_prompt_data(data) -> bool:
@@ -70,6 +82,9 @@ def _dialog_stylesheet() -> str:
     status_success = "#2E9D57" if is_light else "#6BCB77"
     status_error = "#D94C4C" if is_light else "#FF7B7B"
     return _base_dialog_stylesheet() + f"""
+        {build_tooltip_stylesheet(colors)}
+        {build_shared_button_stylesheet(colors)}
+        {build_section_icon_button_stylesheet(colors)}
         QScrollArea#editor_scroll {{
             background: transparent;
             border: none;
@@ -81,13 +96,6 @@ def _dialog_stylesheet() -> str:
             border-style: dashed;
             padding-left: 20px;
             padding-right: 20px;
-        }}
-        QPushButton#section_icon_button {{
-            min-width: 28px;
-            max-width: 28px;
-            min-height: 24px;
-            max-height: 24px;
-            padding: 0px;
         }}
         QTableWidget#reference_images_table {{
             background: {colors["bg_input"]};
@@ -274,6 +282,10 @@ class AIColorizerPromptEditorDialog(QDialog):
         layout.setSpacing(10)
 
         self._template_layout = layout
+        self._template_sections_layout = QVBoxLayout()
+        self._template_sections_layout.setContentsMargins(0, 0, 0, 0)
+        self._template_sections_layout.setSpacing(10)
+        layout.addLayout(self._template_sections_layout)
         self._insert_section("prompt_text", text=str(self._data.get("ai_colorizer_prompt", "")))
         self._insert_section(
             "colorization_rules",
@@ -321,26 +333,28 @@ class AIColorizerPromptEditorDialog(QDialog):
         header.addWidget(_section_label(self._t(self._SECTION_META.get(key, key))))
         header.addStretch()
 
-        btn_up = QPushButton("^")
-        btn_up.setToolTip(self._t("Move Up"))
-        btn_up.setObjectName("section_icon_button")
-        btn_up.setProperty("chipButton", True)
+        btn_up = QPushButton("▲")
+        btn_up.setProperty("sectionIconButton", True)
         btn_up.setFixedSize(28, 24)
-        btn_up.clicked.connect(lambda: self._move_section(container, -1))
+        btn_up.clicked.connect(lambda checked=False, c=container: self._request_move_section(c, -1))
+        install_hover_hint(btn_up, self._t("Move Up"))
 
-        btn_down = QPushButton("v")
-        btn_down.setToolTip(self._t("Move Down"))
-        btn_down.setObjectName("section_icon_button")
-        btn_down.setProperty("chipButton", True)
+        btn_down = QPushButton("▼")
+        btn_down.setProperty("sectionIconButton", True)
         btn_down.setFixedSize(28, 24)
-        btn_down.clicked.connect(lambda: self._move_section(container, 1))
+        btn_down.clicked.connect(lambda checked=False, c=container: self._request_move_section(c, 1))
+        install_hover_hint(btn_down, self._t("Move Down"))
 
-        btn_delete = QPushButton("x")
-        btn_delete.setToolTip(self._t("Delete"))
-        btn_delete.setObjectName("section_icon_button")
+        btn_delete = QPushButton("")
         btn_delete.setProperty("variant", "danger")
+        btn_delete.setProperty("sectionIconButton", True)
+        btn_delete.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton))
+        btn_delete.setIconSize(QSize(12, 12))
         btn_delete.setFixedSize(28, 24)
         btn_delete.clicked.connect(lambda: self._remove_section(container, key))
+        install_hover_hint(btn_delete, self._t("Delete"))
+        container._move_up_button = btn_up
+        container._move_down_button = btn_down
 
         header.addWidget(btn_up)
         header.addWidget(btn_down)
@@ -363,19 +377,14 @@ class AIColorizerPromptEditorDialog(QDialog):
         elif key == "reference_images":
             self._fill_reference_images(body, kwargs.get("images", []))
 
+        section_layout = self._template_sections_layout
         if idx < 0:
-            if hasattr(self, "_add_section_btn") and self._add_section_btn is not None:
-                button_index = self._template_layout.indexOf(self._add_section_btn)
-                if button_index >= 0:
-                    self._template_layout.insertWidget(button_index, container)
-                else:
-                    self._template_layout.addWidget(container)
-            else:
-                self._template_layout.addWidget(container)
+            section_layout.addWidget(container)
             self._section_containers.append((key, container))
         else:
-            self._template_layout.insertWidget(idx, container)
+            section_layout.insertWidget(idx, container)
             self._section_containers.insert(idx, (key, container))
+        self._refresh_section_move_buttons()
 
     def _fill_prompt_text(self, layout: QVBoxLayout, text: str):
         self._prompt_text_edit = _styled_text_edit(text)
@@ -444,6 +453,44 @@ class AIColorizerPromptEditorDialog(QDialog):
         self._reference_images_table.setItem(row, 0, QTableWidgetItem(display_path.replace("\\", "/")))
         self._reference_images_table.setItem(row, 1, QTableWidgetItem(description.strip()))
 
+    def _refresh_section_move_buttons(self):
+        total = len(self._section_containers)
+        for index, (_, container) in enumerate(self._section_containers):
+            up_button = getattr(container, "_move_up_button", None)
+            down_button = getattr(container, "_move_down_button", None)
+            if up_button is not None:
+                up_button.setEnabled(total > 1 and index > 0)
+            if down_button is not None:
+                down_button.setEnabled(total > 1 and index < total - 1)
+
+    def _section_order_snapshot(self) -> List[str]:
+        return [key for key, _ in self._section_containers]
+
+    def _layout_section_order_snapshot(self) -> List[str]:
+        order: List[str] = []
+        layout = getattr(self, "_template_sections_layout", None)
+        if layout is None:
+            return order
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None:
+                continue
+            order.append(str(widget.property("sectionKey") or widget.objectName() or "<unknown>"))
+        return order
+
+    def _request_move_section(self, container: QWidget, direction: int):
+        key = str(container.property("sectionKey") or "<unknown>")
+        logger.info(
+            "AI colorizer prompt move button clicked: file=%s key=%s direction=%s order=%s layout=%s",
+            self._file_path,
+            key,
+            direction,
+            self._section_order_snapshot(),
+            self._layout_section_order_snapshot(),
+        )
+        self._move_section(container, direction)
+
     def _move_section(self, container: QWidget, direction: int):
         index = None
         for idx, (_, current) in enumerate(self._section_containers):
@@ -451,30 +498,71 @@ class AIColorizerPromptEditorDialog(QDialog):
                 index = idx
                 break
         if index is None:
+            logger.warning(
+                "AI colorizer prompt move ignored: file=%s container not found direction=%s order=%s",
+                self._file_path,
+                direction,
+                self._section_order_snapshot(),
+            )
             return
 
         new_index = index + direction
         if new_index < 0 or new_index >= len(self._section_containers):
+            logger.info(
+                "AI colorizer prompt move ignored: file=%s key=%s from=%s to=%s order=%s",
+                self._file_path,
+                self._section_containers[index][0],
+                index,
+                new_index,
+                self._section_order_snapshot(),
+            )
             return
 
+        logger.info(
+            "AI colorizer prompt move apply: file=%s key=%s from=%s to=%s order_before=%s",
+            self._file_path,
+            self._section_containers[index][0],
+            index,
+            new_index,
+            self._section_order_snapshot(),
+        )
         self._section_containers[index], self._section_containers[new_index] = (
             self._section_containers[new_index],
             self._section_containers[index],
         )
+        self._reflow_section_widgets()
 
-        self._template_layout.removeWidget(container)
-        _, other = self._section_containers[index]
-        layout_pos = self._template_layout.indexOf(other)
-        if direction < 0:
-            self._template_layout.insertWidget(layout_pos, container)
-        else:
-            self._template_layout.insertWidget(layout_pos + 1, container)
+    def _reflow_section_widgets(self):
+        layout = self._template_sections_layout
+        logger.info(
+            "AI colorizer prompt reflow start: file=%s order=%s layout_before=%s",
+            self._file_path,
+            self._section_order_snapshot(),
+            self._layout_section_order_snapshot(),
+        )
+        for _, widget in self._section_containers:
+            layout.removeWidget(widget)
+        for _, widget in self._section_containers:
+            layout.addWidget(widget)
+            widget.show()
+        self._refresh_section_move_buttons()
+        layout.invalidate()
+        layout.activate()
+        if self._tabs is not None:
+            self._tabs.update()
+        logger.info(
+            "AI colorizer prompt reflow end: file=%s order=%s layout_after=%s",
+            self._file_path,
+            self._section_order_snapshot(),
+            self._layout_section_order_snapshot(),
+        )
 
     def _remove_section(self, container: QWidget, key: str):
         self._section_containers = [(k, c) for k, c in self._section_containers if c is not container]
-        self._template_layout.removeWidget(container)
+        self._template_sections_layout.removeWidget(container)
         container.setParent(None)
         container.deleteLater()
+        self._refresh_section_move_buttons()
 
         if key == "prompt_text":
             self._prompt_text_edit = None
@@ -525,24 +613,23 @@ class AIColorizerPromptEditorDialog(QDialog):
 
     def _collect_template_data(self) -> Dict[str, object]:
         data: Dict[str, object] = {}
-        existing = {key for key, _ in self._section_containers}
-
-        if "prompt_text" in existing and self._prompt_text_edit is not None:
-            data["ai_colorizer_prompt"] = self._prompt_text_edit.toPlainText()
-        if "colorization_rules" in existing and self._rules_edit is not None:
-            data["colorization_rules"] = [
-                line for line in self._rules_edit.toPlainText().splitlines() if line.strip()
-            ]
-        if "reference_images" in existing and self._reference_images_table is not None:
-            images: List[Dict[str, str]] = []
-            for row in range(self._reference_images_table.rowCount()):
-                path_item = self._reference_images_table.item(row, 0) or QTableWidgetItem("")
-                desc_item = self._reference_images_table.item(row, 1) or QTableWidgetItem("")
-                path = path_item.text().strip()
-                description = desc_item.text().strip()
-                if path:
-                    images.append({"path": path, "description": description})
-            data["reference_images"] = images
+        for key, _ in self._section_containers:
+            if key == "prompt_text" and self._prompt_text_edit is not None:
+                data["ai_colorizer_prompt"] = self._prompt_text_edit.toPlainText()
+            elif key == "colorization_rules" and self._rules_edit is not None:
+                data["colorization_rules"] = [
+                    line for line in self._rules_edit.toPlainText().splitlines() if line.strip()
+                ]
+            elif key == "reference_images" and self._reference_images_table is not None:
+                images: List[Dict[str, str]] = []
+                for row in range(self._reference_images_table.rowCount()):
+                    path_item = self._reference_images_table.item(row, 0) or QTableWidgetItem("")
+                    desc_item = self._reference_images_table.item(row, 1) or QTableWidgetItem("")
+                    path = path_item.text().strip()
+                    description = desc_item.text().strip()
+                    if path:
+                        images.append({"path": path, "description": description})
+                data["reference_images"] = images
         return data
 
     def _set_status(self, text: str, state: str = "default"):

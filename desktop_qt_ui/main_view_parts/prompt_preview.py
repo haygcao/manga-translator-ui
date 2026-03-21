@@ -2,16 +2,17 @@
 提示词预览 & 编辑组件
 Prompt preview & editor components for the Prompt Management page.
 """
+import logging
 import json
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -19,19 +20,28 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSplitter,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
+from widgets.hover_hint import install_hover_hint
 
-from main_view_parts.theme import get_current_theme, get_current_theme_colors
+from main_view_parts.theme import (
+    build_section_icon_button_stylesheet,
+    build_shared_button_stylesheet,
+    build_tooltip_stylesheet,
+    get_current_theme,
+    get_current_theme_colors,
+)
 
+logger = logging.getLogger("manga_translator")
 
 # 模块级翻译函数（由 Panel / Dialog 初始化时设置）
-_current_t = lambda x: x
+def _current_t(text):
+    return text
 
 
 def _theme_tokens() -> Dict[str, str]:
@@ -210,6 +220,9 @@ def _dialog_style() -> str:
             color: {t["fg"]};
             background: transparent;
         }}
+        {build_tooltip_stylesheet(t)}
+        {build_shared_button_stylesheet(t)}
+        {build_section_icon_button_stylesheet(t)}
         QTabWidget::pane {{
             border: 1px solid {t["border_card"]};
             border-radius: 10px;
@@ -864,6 +877,24 @@ def _make_editable_glossary_table(entries: List[Dict[str, str]]) -> QTableWidget
     return table
 
 
+def _set_basic_glossary_row(table: QTableWidget, row: int, entry: Dict[str, Any]):
+    normalized = {
+        "original": str(entry.get("original", "")).strip(),
+        "translation": str(entry.get("translation", "")).strip(),
+    }
+    table.setItem(row, 0, QTableWidgetItem(normalized["original"]))
+    table.setItem(row, 1, QTableWidgetItem(normalized["translation"]))
+
+
+def _get_basic_glossary_row(table: QTableWidget, row: int) -> Dict[str, str]:
+    if row < 0 or row >= table.rowCount():
+        return {"original": "", "translation": ""}
+    return {
+        "original": (table.item(row, 0) or QTableWidgetItem("")).text().strip(),
+        "translation": (table.item(row, 1) or QTableWidgetItem("")).text().strip(),
+    }
+
+
 def _styled_text_edit(text: str = "", read_only: bool = False) -> QPlainTextEdit:
     """统一风格的文本编辑框。"""
     te = QPlainTextEdit(text)
@@ -876,17 +907,34 @@ def _styled_text_edit(text: str = "", read_only: bool = False) -> QPlainTextEdit
     return te
 
 _GLOSSARY_CATEGORIES = ["Person", "Location", "Org", "Item", "Skill", "Creature"]
+_GLOSSARY_CATEGORY_ICONS = {
+    "Person": "👤",
+    "Location": "📍",
+    "Org": "🏢",
+    "Item": "🔮",
+    "Skill": "⚡",
+    "Creature": "🐾",
+}
 
 
 class PersonGlossaryEntryDialog(QDialog):
-    def __init__(self, entry: Optional[Dict[str, Any]] = None, t_func: Callable = None, parent=None):
+    def __init__(
+        self,
+        entry: Optional[Dict[str, Any]] = None,
+        category: str = "Person",
+        available_categories: Optional[List[str]] = None,
+        t_func: Callable = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._t = t_func or (lambda x: x)
         self._entry = _normalize_person_glossary_entry(entry or {})
+        self._category = category if category else "Person"
+        category_options = available_categories or list(_GLOSSARY_CATEGORIES)
+        self._available_categories = list(dict.fromkeys([*category_options, self._category]))
         self._setup_ui()
 
     def _setup_ui(self):
-        self.setWindowTitle(self._t("Person Entry"))
         self.setMinimumSize(520, 420)
         self.resize(560, 460)
         self.setStyleSheet(_dialog_style())
@@ -895,10 +943,20 @@ class PersonGlossaryEntryDialog(QDialog):
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
 
-        title = QLabel(self._t("Person") + " · " + self._t("Edit"))
-        title.setStyleSheet(_title_style(15))
-        root.addWidget(title)
+        self._title_label = QLabel("")
+        self._title_label.setStyleSheet(_title_style(15))
+        root.addWidget(self._title_label)
         root.addWidget(_divider())
+
+        root.addWidget(_dim_label(self._t("Category")))
+        self._category_combo = QComboBox()
+        for item in self._available_categories:
+            self._category_combo.addItem(self._t(item), item)
+        combo_index = self._category_combo.findData(self._category)
+        if combo_index >= 0:
+            self._category_combo.setCurrentIndex(combo_index)
+        self._category_combo.currentIndexChanged.connect(self._sync_category_ui)
+        root.addWidget(self._category_combo)
 
         root.addWidget(_dim_label(self._t("Original")))
         self._original_edit = QLineEdit(self._entry.get("original", ""))
@@ -910,15 +968,21 @@ class PersonGlossaryEntryDialog(QDialog):
         self._translation_edit.setStyleSheet(_line_edit_style())
         root.addWidget(self._translation_edit)
 
-        root.addWidget(_dim_label(self._t("Nicknames")))
+        self._person_fields = QWidget()
+        person_layout = QVBoxLayout(self._person_fields)
+        person_layout.setContentsMargins(0, 0, 0, 0)
+        person_layout.setSpacing(10)
+
+        person_layout.addWidget(_dim_label(self._t("Nicknames")))
         self._nicknames_edit = QLineEdit(", ".join(self._entry.get("nicknames", [])))
         self._nicknames_edit.setStyleSheet(_line_edit_style())
-        root.addWidget(self._nicknames_edit)
+        person_layout.addWidget(self._nicknames_edit)
 
-        root.addWidget(_dim_label(self._t("Introduction")))
+        person_layout.addWidget(_dim_label(self._t("Introduction")))
         self._description_edit = _styled_text_edit(self._entry.get("description", ""))
         self._description_edit.setFixedHeight(160)
-        root.addWidget(self._description_edit, 1)
+        person_layout.addWidget(self._description_edit, 1)
+        root.addWidget(self._person_fields, 1)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -936,6 +1000,20 @@ class PersonGlossaryEntryDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         btn_row.addWidget(save_btn)
         root.addLayout(btn_row)
+        self._sync_category_ui()
+
+    def _current_category(self) -> str:
+        category = self._category_combo.currentData()
+        if not isinstance(category, str) or not category:
+            return self._category
+        return category
+
+    def _sync_category_ui(self):
+        is_person = self._current_category() == "Person"
+        self._person_fields.setVisible(is_person)
+        title_text = self._t(self._current_category()) + " · " + self._t("Edit")
+        self.setWindowTitle(title_text)
+        self._title_label.setText(title_text)
 
     def get_entry(self) -> Dict[str, Any]:
         nicknames = [item.strip() for item in self._nicknames_edit.text().split(",") if item.strip()]
@@ -945,6 +1023,9 @@ class PersonGlossaryEntryDialog(QDialog):
             "nicknames": nicknames,
             "description": self._description_edit.toPlainText(),
         })
+
+    def get_category(self) -> str:
+        return self._current_category()
 
 
 class PromptEditorDialog(QDialog):
@@ -974,6 +1055,8 @@ class PromptEditorDialog(QDialog):
         self._term_table: Optional[QTableWidget] = None
         self._title_edit = None
         self._glossary_tables: Dict[str, QTableWidget] = {}
+        self._glossary_tab_widget: Optional[QTabWidget] = None
+        self._glossary_tab_pages: Dict[str, QWidget] = {}
 
         self._setup_ui()
         self._load_file()
@@ -1060,6 +1143,10 @@ class PromptEditorDialog(QDialog):
 
         # 保存 layout 引用，供动态添加字段用
         self._template_layout = layout
+        self._template_sections_layout = QVBoxLayout()
+        self._template_sections_layout.setContentsMargins(0, 0, 0, 0)
+        self._template_sections_layout.setSpacing(10)
+        layout.addLayout(self._template_sections_layout)
         # 有序容器列表 [(key, container_widget), ...]
         self._section_containers: list = []
 
@@ -1070,27 +1157,27 @@ class PromptEditorDialog(QDialog):
         if isinstance(project, dict):
             title = str(project.get("title", "")).strip()
             if title:
-                self._insert_section("project_title", layout, title=title)
+                self._insert_section("project_title", title=title)
 
             # Terminology
             term = project.get("terminology")
             if isinstance(term, dict):
-                self._insert_section("terminology", layout, term=term)
+                self._insert_section("terminology", term=term)
 
         # Style Guide
         sg = data.get("style_guide")
         if isinstance(sg, list):
-            self._insert_section("style_guide", layout, rules=sg)
+            self._insert_section("style_guide", rules=sg)
 
         # Translation Rules
         tr = data.get("translation_rules")
         if isinstance(tr, list):
-            self._insert_section("translation_rules", layout, rules=tr)
+            self._insert_section("translation_rules", rules=tr)
 
         # Glossary
         glossary = data.get("glossary")
         if isinstance(glossary, dict):
-            self._insert_section("glossary", layout, glossary=glossary)
+            self._insert_section("glossary", glossary=glossary)
 
         # ── "+ 添加字段" 按钮 ──
         self._add_section_btn = QPushButton("＋ " + self._t("Add Section"))
@@ -1133,22 +1220,27 @@ class PromptEditorDialog(QDialog):
         header.addStretch()
 
         btn_up = QPushButton("▲")
-        btn_up.setToolTip(self._t("Move Up"))
-        btn_up.setStyleSheet(_op_button_style())
+        btn_up.setProperty("sectionIconButton", True)
         btn_up.setFixedSize(28, 24)
-        btn_up.clicked.connect(lambda: self._move_section(container, -1))
+        btn_up.clicked.connect(lambda checked=False, c=container: self._request_move_section(c, -1))
+        install_hover_hint(btn_up, self._t("Move Up"))
 
         btn_down = QPushButton("▼")
-        btn_down.setToolTip(self._t("Move Down"))
-        btn_down.setStyleSheet(_op_button_style())
+        btn_down.setProperty("sectionIconButton", True)
         btn_down.setFixedSize(28, 24)
-        btn_down.clicked.connect(lambda: self._move_section(container, 1))
+        btn_down.clicked.connect(lambda checked=False, c=container: self._request_move_section(c, 1))
+        install_hover_hint(btn_down, self._t("Move Down"))
 
-        btn_del = QPushButton("✕")
-        btn_del.setToolTip(self._t("Delete"))
-        btn_del.setStyleSheet(_op_button_style(danger=True))
+        btn_del = QPushButton("")
+        btn_del.setProperty("variant", "danger")
+        btn_del.setProperty("sectionIconButton", True)
+        btn_del.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton))
+        btn_del.setIconSize(QSize(12, 12))
         btn_del.setFixedSize(28, 24)
         btn_del.clicked.connect(lambda: self._remove_section(container, key))
+        install_hover_hint(btn_del, self._t("Delete"))
+        container._move_up_button = btn_up
+        container._move_down_button = btn_down
 
         header.addWidget(btn_up)
         header.addWidget(btn_down)
@@ -1163,7 +1255,7 @@ class PromptEditorDialog(QDialog):
 
         return container, body
 
-    def _insert_section(self, key: str, layout: QVBoxLayout, idx: int = -1, **kwargs):
+    def _insert_section(self, key: str, idx: int = -1, **kwargs):
         """创建并插入一个字段区域到 layout。"""
         container, body = self._make_section_container(key)
 
@@ -1179,20 +1271,14 @@ class PromptEditorDialog(QDialog):
         elif key == "glossary":
             self._fill_glossary(body, kwargs.get("glossary", {}))
 
+        section_layout = self._template_sections_layout
         if idx < 0:
-            # 在"添加字段"按钮之前插入（如果有的话）
-            if hasattr(self, '_add_section_btn') and self._add_section_btn is not None:
-                btn_idx = layout.indexOf(self._add_section_btn)
-                if btn_idx >= 0:
-                    layout.insertWidget(btn_idx, container)
-                else:
-                    layout.addWidget(container)
-            else:
-                layout.addWidget(container)
+            section_layout.addWidget(container)
             self._section_containers.append((key, container))
         else:
-            layout.insertWidget(idx, container)
+            section_layout.insertWidget(idx, container)
             self._section_containers.insert(idx, (key, container))
+        self._refresh_section_move_buttons()
 
     # ─── 各字段的填充方法 ──────────────────────────────
     def _fill_project_title(self, layout: QVBoxLayout, title: str = ""):
@@ -1212,10 +1298,18 @@ class PromptEditorDialog(QDialog):
         add_btn = QPushButton("+ " + self._t("Add Row"))
         add_btn.setProperty("chipButton", True)
         add_btn.clicked.connect(lambda: self._add_table_row(self._term_table, 2))
+        up_btn = QPushButton("↑ " + self._t("Move Up"))
+        up_btn.setProperty("chipButton", True)
+        up_btn.clicked.connect(lambda: self._move_table_row(self._term_table, -1))
+        down_btn = QPushButton("↓ " + self._t("Move Down"))
+        down_btn.setProperty("chipButton", True)
+        down_btn.clicked.connect(lambda: self._move_table_row(self._term_table, 1))
         del_btn = QPushButton("- " + self._t("Delete Row"))
         del_btn.setProperty("chipButton", True)
         del_btn.clicked.connect(lambda: self._del_table_row(self._term_table))
         btn_row.addWidget(add_btn)
+        btn_row.addWidget(up_btn)
+        btn_row.addWidget(down_btn)
         btn_row.addWidget(del_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -1242,11 +1336,8 @@ class PromptEditorDialog(QDialog):
         glossary_tabs.setMinimumHeight(220)
         glossary_tabs.setStyleSheet(_prompt_tabs_style())
         self._glossary_tab_widget = glossary_tabs
-
-        category_icons = {
-            "Person": "👤", "Location": "📍", "Org": "🏢",
-            "Item": "🔮", "Skill": "⚡", "Creature": "🐾",
-        }
+        self._glossary_tables = {}
+        self._glossary_tab_pages = {}
 
         all_cats = list(dict.fromkeys(
             [c for c in _GLOSSARY_CATEGORIES if c in glossary] +
@@ -1259,71 +1350,235 @@ class PromptEditorDialog(QDialog):
             entries = glossary.get(cat_key, [])
             if not isinstance(entries, list):
                 entries = []
-            icon = category_icons.get(cat_key, "📌")
-            tab_page = QWidget()
-            tab_lay = QVBoxLayout(tab_page)
-            tab_lay.setContentsMargins(6, 6, 6, 6)
-            tab_lay.setSpacing(6)
-
-            if cat_key == "Person":
-                tbl = _make_person_glossary_table(entries, editable=True)
-                tbl.itemDoubleClicked.connect(lambda item, t=tbl: self._edit_person_glossary_row(t, item.row()))
-                tab_lay.addWidget(_dim_label(self._t("Double-click a row to edit details")))
-            else:
-                tbl = _make_editable_glossary_table(entries)
-            tbl.setMinimumHeight(120)
-            self._glossary_tables[cat_key] = tbl
-            tab_lay.addWidget(tbl)
-
-            g_btn_row = QHBoxLayout()
-            add_btn = QPushButton("+ " + self._t("Add Row"))
-            add_btn.setProperty("chipButton", True)
-            _tbl = tbl
-            g_btn_row.addWidget(add_btn)
-            if cat_key == "Person":
-                add_btn.clicked.connect(lambda checked=False, t=_tbl: self._add_person_glossary_row(t))
-                edit_btn = QPushButton(self._t("Edit"))
-                edit_btn.setProperty("chipButton", True)
-                edit_btn.clicked.connect(lambda checked=False, t=_tbl: self._edit_selected_person_glossary_row(t))
-                g_btn_row.addWidget(edit_btn)
-            else:
-                add_btn.clicked.connect(lambda checked=False, t=_tbl: self._add_table_row(t, 2))
-            del_btn = QPushButton("- " + self._t("Delete Row"))
-            del_btn.setProperty("chipButton", True)
-            del_btn.clicked.connect(lambda checked=False, t=_tbl: self._del_table_row(t))
-            g_btn_row.addWidget(del_btn)
-            g_btn_row.addStretch()
-            tab_lay.addLayout(g_btn_row)
-
-            glossary_tabs.addTab(tab_page, f"{icon} {self._t(cat_key)} ({len(entries)})")
+            self._add_glossary_category_tab(cat_key, entries)
 
         layout.addWidget(glossary_tabs)
 
-    def _add_person_glossary_row(self, table: QTableWidget):
-        dialog = PersonGlossaryEntryDialog(t_func=self._t, parent=self)
+    def _glossary_tab_title(self, cat_key: str, count: int) -> str:
+        icon = _GLOSSARY_CATEGORY_ICONS.get(cat_key, "📌")
+        return f"{icon} {self._t(cat_key)} ({count})"
+
+    def _glossary_category_options(self) -> List[str]:
+        categories = list(_GLOSSARY_CATEGORIES)
+        for cat_key in self._glossary_tables:
+            if cat_key not in categories:
+                categories.append(cat_key)
+        return categories
+
+    def _add_glossary_category_tab(self, cat_key: str, entries: Optional[List[Dict[str, Any]]] = None) -> QTableWidget:
+        if self._glossary_tab_widget is None:
+            raise RuntimeError("Glossary tab widget is not initialized")
+
+        if cat_key in self._glossary_tables:
+            return self._glossary_tables[cat_key]
+
+        normalized_entries = entries if isinstance(entries, list) else []
+        tab_page = QWidget()
+        tab_lay = QVBoxLayout(tab_page)
+        tab_lay.setContentsMargins(6, 6, 6, 6)
+        tab_lay.setSpacing(6)
+
+        if cat_key == "Person":
+            tbl = _make_person_glossary_table(normalized_entries, editable=True)
+            tbl.itemDoubleClicked.connect(
+                lambda item, category=cat_key, t=tbl: self._edit_person_glossary_row(category, t, item.row())
+            )
+            tab_lay.addWidget(_dim_label(self._t("Double-click a row to edit details")))
+        else:
+            tbl = _make_editable_glossary_table(normalized_entries)
+
+        tbl.setMinimumHeight(120)
+        self._glossary_tables[cat_key] = tbl
+        self._glossary_tab_pages[cat_key] = tab_page
+        tab_lay.addWidget(tbl)
+
+        g_btn_row = QHBoxLayout()
+        add_btn = QPushButton("+ " + self._t("Add Row"))
+        add_btn.setProperty("chipButton", True)
+        g_btn_row.addWidget(add_btn)
+        if cat_key == "Person":
+            add_btn.clicked.connect(lambda checked=False, category=cat_key, t=tbl: self._add_person_glossary_row(category, t))
+            edit_btn = QPushButton(self._t("Edit"))
+            edit_btn.setProperty("chipButton", True)
+            edit_btn.clicked.connect(
+                lambda checked=False, category=cat_key, t=tbl: self._edit_selected_person_glossary_row(category, t)
+            )
+            g_btn_row.addWidget(edit_btn)
+        else:
+            add_btn.clicked.connect(
+                lambda checked=False, category=cat_key, t=tbl: self._add_basic_glossary_row(category, t)
+            )
+        move_up_btn = QPushButton("↑ " + self._t("Move Up"))
+        move_up_btn.setProperty("chipButton", True)
+        move_up_btn.clicked.connect(lambda checked=False, t=tbl: self._move_table_row(t, -1))
+        g_btn_row.addWidget(move_up_btn)
+        move_down_btn = QPushButton("↓ " + self._t("Move Down"))
+        move_down_btn.setProperty("chipButton", True)
+        move_down_btn.clicked.connect(lambda checked=False, t=tbl: self._move_table_row(t, 1))
+        g_btn_row.addWidget(move_down_btn)
+        del_btn = QPushButton("- " + self._t("Delete Row"))
+        del_btn.setProperty("chipButton", True)
+        del_btn.clicked.connect(lambda checked=False, category=cat_key, t=tbl: self._delete_glossary_row(category, t))
+        g_btn_row.addWidget(del_btn)
+        g_btn_row.addStretch()
+        tab_lay.addLayout(g_btn_row)
+
+        self._glossary_tab_widget.addTab(tab_page, self._glossary_tab_title(cat_key, tbl.rowCount()))
+        return tbl
+
+    def _ensure_glossary_category_tab(self, cat_key: str) -> QTableWidget:
+        if cat_key in self._glossary_tables:
+            return self._glossary_tables[cat_key]
+        table = self._add_glossary_category_tab(cat_key, [])
+        self._refresh_glossary_tab_titles()
+        return table
+
+    def _refresh_glossary_tab_titles(self):
+        if self._glossary_tab_widget is None:
+            return
+        for cat_key, page in self._glossary_tab_pages.items():
+            index = self._glossary_tab_widget.indexOf(page)
+            if index >= 0:
+                row_count = self._glossary_tables.get(cat_key).rowCount() if cat_key in self._glossary_tables else 0
+                self._glossary_tab_widget.setTabText(index, self._glossary_tab_title(cat_key, row_count))
+
+    def _delete_glossary_row(self, category: str, table: QTableWidget):
+        self._del_table_row(table)
+        if category in self._glossary_tables:
+            self._refresh_glossary_tab_titles()
+
+    def _add_basic_glossary_row(self, category: str, table: QTableWidget):
+        self._add_table_row(table, 2)
+        if category in self._glossary_tables:
+            self._refresh_glossary_tab_titles()
+
+    def _apply_person_glossary_result(
+        self,
+        source_category: str,
+        source_table: QTableWidget,
+        source_row: Optional[int],
+        dialog: PersonGlossaryEntryDialog,
+    ):
+        target_category = dialog.get_category()
+        entry = dialog.get_entry()
+        target_table = self._ensure_glossary_category_tab(target_category)
+
+        if source_row is not None and source_row >= 0 and source_category == target_category:
+            _set_person_glossary_row(target_table, source_row, entry)
+            target_table.selectRow(source_row)
+        else:
+            target_row = target_table.rowCount()
+            target_table.insertRow(target_row)
+            if target_category == "Person":
+                _set_person_glossary_row(target_table, target_row, entry)
+            else:
+                _set_basic_glossary_row(target_table, target_row, entry)
+
+            if source_row is not None and source_row >= 0:
+                source_table.removeRow(source_row)
+
+            page = self._glossary_tab_pages.get(target_category)
+            if page is not None and self._glossary_tab_widget is not None:
+                self._glossary_tab_widget.setCurrentWidget(page)
+            target_table.selectRow(target_row)
+
+        self._refresh_glossary_tab_titles()
+
+    def _add_person_glossary_row(self, category: str, table: QTableWidget):
+        dialog = PersonGlossaryEntryDialog(
+            category=category,
+            available_categories=self._glossary_category_options(),
+            t_func=self._t,
+            parent=self,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        row = table.rowCount()
-        table.insertRow(row)
-        _set_person_glossary_row(table, row, dialog.get_entry())
-        table.selectRow(row)
+        self._apply_person_glossary_result(category, table, None, dialog)
 
-    def _edit_selected_person_glossary_row(self, table: QTableWidget):
+    def _edit_selected_person_glossary_row(self, category: str, table: QTableWidget):
         row = table.currentRow()
         if row < 0:
             return
-        self._edit_person_glossary_row(table, row)
+        self._edit_person_glossary_row(category, table, row)
 
-    def _edit_person_glossary_row(self, table: QTableWidget, row: int):
+    def _edit_person_glossary_row(self, category: str, table: QTableWidget, row: int):
         if row < 0:
             return
-        dialog = PersonGlossaryEntryDialog(_get_person_glossary_row(table, row), t_func=self._t, parent=self)
+        dialog = PersonGlossaryEntryDialog(
+            _get_person_glossary_row(table, row),
+            category=category,
+            available_categories=self._glossary_category_options(),
+            t_func=self._t,
+            parent=self,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        _set_person_glossary_row(table, row, dialog.get_entry())
-        table.selectRow(row)
+        self._apply_person_glossary_result(category, table, row, dialog)
 
     # ─── 字段操作：移动 & 删除 ─────────────────────────
+    def _refresh_section_move_buttons(self):
+        total = len(self._section_containers)
+        for index, (_, container) in enumerate(self._section_containers):
+            up_button = getattr(container, "_move_up_button", None)
+            down_button = getattr(container, "_move_down_button", None)
+            if up_button is not None:
+                up_button.setEnabled(total > 1 and index > 0)
+            if down_button is not None:
+                down_button.setEnabled(total > 1 and index < total - 1)
+
+    def _section_order_snapshot(self) -> List[str]:
+        return [key for key, _ in self._section_containers]
+
+    def _layout_section_order_snapshot(self) -> List[str]:
+        order: List[str] = []
+        layout = getattr(self, "_template_sections_layout", None)
+        if layout is None:
+            return order
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None:
+                continue
+            order.append(str(widget.property("sectionKey") or widget.objectName() or "<unknown>"))
+        return order
+
+    def _request_move_section(self, container: QWidget, direction: int):
+        key = str(container.property("sectionKey") or "<unknown>")
+        logger.info(
+            "Prompt editor move button clicked: file=%s key=%s direction=%s order=%s layout=%s",
+            self._file_path,
+            key,
+            direction,
+            self._section_order_snapshot(),
+            self._layout_section_order_snapshot(),
+        )
+        self._move_section(container, direction)
+
+    def _reflow_section_widgets(self):
+        layout = self._template_sections_layout
+        logger.info(
+            "Prompt editor reflow start: file=%s order=%s layout_before=%s",
+            self._file_path,
+            self._section_order_snapshot(),
+            self._layout_section_order_snapshot(),
+        )
+        for _, widget in self._section_containers:
+            layout.removeWidget(widget)
+        for _, widget in self._section_containers:
+            layout.addWidget(widget)
+            widget.show()
+        self._refresh_section_move_buttons()
+        layout.invalidate()
+        layout.activate()
+        if self._tabs is not None:
+            self._tabs.update()
+        logger.info(
+            "Prompt editor reflow end: file=%s order=%s layout_after=%s",
+            self._file_path,
+            self._section_order_snapshot(),
+            self._layout_section_order_snapshot(),
+        )
+
     def _move_section(self, container: QWidget, direction: int):
         """direction: -1=上移, +1=下移"""
         idx = None
@@ -1332,27 +1587,37 @@ class PromptEditorDialog(QDialog):
                 idx = i
                 break
         if idx is None:
+            logger.warning(
+                "Prompt editor move ignored: file=%s container not found direction=%s order=%s",
+                self._file_path,
+                direction,
+                self._section_order_snapshot(),
+            )
             return
         new_idx = idx + direction
         if new_idx < 0 or new_idx >= len(self._section_containers):
+            logger.info(
+                "Prompt editor move ignored: file=%s key=%s from=%s to=%s order=%s",
+                self._file_path,
+                self._section_containers[idx][0],
+                idx,
+                new_idx,
+                self._section_order_snapshot(),
+            )
             return
 
         # 交换 list
+        logger.info(
+            "Prompt editor move apply: file=%s key=%s from=%s to=%s order_before=%s",
+            self._file_path,
+            self._section_containers[idx][0],
+            idx,
+            new_idx,
+            self._section_order_snapshot(),
+        )
         self._section_containers[idx], self._section_containers[new_idx] = \
             self._section_containers[new_idx], self._section_containers[idx]
-
-        # 从 layout 中移除并重新插入
-        layout = self._template_layout
-        layout.removeWidget(container)
-        # 计算 new_idx 对应的 layout 位置
-        _, other = self._section_containers[idx]  # 交换后 idx 位置是原来的邻居
-        layout_pos = layout.indexOf(other)
-        if direction < 0:
-            # 上移：插到邻居前面
-            layout.insertWidget(layout_pos, container)
-        else:
-            # 下移：插到邻居后面
-            layout.insertWidget(layout_pos + 1, container)
+        self._reflow_section_widgets()
 
     def _remove_section(self, container: QWidget, key: str):
         """删除字段区域并清空对应控件引用。"""
@@ -1360,9 +1625,10 @@ class PromptEditorDialog(QDialog):
         self._section_containers = [(k, c) for k, c in self._section_containers if c is not container]
 
         # 从 layout 中移除
-        self._template_layout.removeWidget(container)
+        self._template_sections_layout.removeWidget(container)
         container.setParent(None)
         container.deleteLater()
+        self._refresh_section_move_buttons()
 
         # 清空控件引用
         if key == "project_title":
@@ -1376,6 +1642,7 @@ class PromptEditorDialog(QDialog):
         elif key == "glossary":
             self._glossary_tables.clear()
             self._glossary_tab_widget = None
+            self._glossary_tab_pages.clear()
 
     # ─── 添加字段菜单 ──────────────────────────────────
     _SECTION_DEFS = [
@@ -1390,8 +1657,8 @@ class PromptEditorDialog(QDialog):
         return {k for k, _ in self._section_containers}
 
     def _show_add_section_menu(self):
-        from PyQt6.QtWidgets import QMenu
         from PyQt6.QtGui import QAction
+        from PyQt6.QtWidgets import QMenu
         menu = QMenu(self)
         menu.setStyleSheet(_menu_style())
         existing = self._get_existing_sections()
@@ -1414,7 +1681,7 @@ class PromptEditorDialog(QDialog):
 
     def _on_add_section(self, key: str):
         """在"添加字段"按钮上方插入新的字段区域。"""
-        self._insert_section(key, self._template_layout)
+        self._insert_section(key)
 
     # ─── 自由编辑 Tab ──────────────────────────────────
     def _build_free_tab(self):
@@ -1445,48 +1712,83 @@ class PromptEditorDialog(QDialog):
         for r in rows:
             table.removeRow(r)
 
+    @staticmethod
+    def _move_table_row(table: Optional[QTableWidget], direction: int) -> bool:
+        if table is None or table.rowCount() <= 1:
+            return False
+
+        current_row = table.currentRow()
+        if current_row < 0:
+            selected_rows = sorted({index.row() for index in table.selectedIndexes()})
+            if not selected_rows:
+                return False
+            current_row = selected_rows[0]
+
+        target_row = current_row + direction
+        if target_row < 0 or target_row >= table.rowCount():
+            return False
+
+        column_count = table.columnCount()
+        current_items = [table.takeItem(current_row, col) for col in range(column_count)]
+        target_items = [table.takeItem(target_row, col) for col in range(column_count)]
+
+        for col, item in enumerate(target_items):
+            if item is not None:
+                table.setItem(current_row, col, item)
+        for col, item in enumerate(current_items):
+            if item is not None:
+                table.setItem(target_row, col, item)
+
+        table.clearSelection()
+        table.selectRow(target_row)
+        table.setCurrentCell(target_row, 0)
+        return True
+
     # ─── 从模板收集数据 ────────────────────────────────
     def _collect_template_data(self) -> dict:
-        """从模板编辑控件收集数据，合并回 self._data。"""
-        data = dict(self._data) if self._data else {}
-        data.pop("output_format", None)
-        data.pop("persona", None)
+        """从模板编辑控件收集数据，并按当前 section 顺序重建结构。"""
+        base_data = self._data if isinstance(self._data, dict) else {}
+        managed_keys = {"project_data", "style_guide", "translation_rules", "glossary", "output_format", "persona"}
+        passthrough_items = [(key, value) for key, value in base_data.items() if key not in managed_keys]
+        section_order = [key for key, _ in self._section_containers]
+        data: Dict[str, Any] = {}
 
-        if self._title_edit is not None:
-            if "project_data" not in data:
-                data["project_data"] = {}
-            data["project_data"]["title"] = self._title_edit.text()
+        base_project = base_data.get("project_data", {})
+        if not isinstance(base_project, dict):
+            base_project = {}
+        passthrough_project_items = [
+            (key, value)
+            for key, value in base_project.items()
+            if key not in {"title", "terminology", "character_list"}
+        ]
 
-        if self._term_table is not None:
-            terms = {}
-            for r in range(self._term_table.rowCount()):
-                orig = (self._term_table.item(r, 0) or QTableWidgetItem("")).text()
-                trans = (self._term_table.item(r, 1) or QTableWidgetItem("")).text()
-                if orig:
-                    terms[orig] = trans
-            if "project_data" not in data:
-                data["project_data"] = {}
-            data["project_data"]["terminology"] = terms
+        project_section_order = [key for key in section_order if key in {"project_title", "terminology"}]
+        project_data: Optional[Dict[str, Any]] = None
+        if project_section_order or passthrough_project_items:
+            project_data = {}
+            for key in project_section_order:
+                if key == "project_title" and self._title_edit is not None:
+                    project_data["title"] = self._title_edit.text()
+                elif key == "terminology" and self._term_table is not None:
+                    terms = {}
+                    for row in range(self._term_table.rowCount()):
+                        entry = _get_basic_glossary_row(self._term_table, row)
+                        if entry["original"]:
+                            terms[entry["original"]] = entry["translation"]
+                    project_data["terminology"] = terms
+            for key, value in passthrough_project_items:
+                project_data[key] = value
 
-        if self._style_guide_edit is not None:
-            lines = [l for l in self._style_guide_edit.toPlainText().split("\n") if l.strip()]
-            data["style_guide"] = lines
-
-        if self._rules_edit is not None:
-            lines = [l for l in self._rules_edit.toPlainText().split("\n") if l.strip()]
-            data["translation_rules"] = lines
-
-        if self._glossary_tables:
-            glossary = data.get("glossary", {})
-            if not isinstance(glossary, dict):
-                glossary = {}
+        glossary_data: Optional[Dict[str, List[Dict[str, Any]]]] = None
+        if "glossary" in section_order:
+            glossary_data = {}
             for cat_key, tbl in self._glossary_tables.items():
-                entries = []
+                entries: List[Dict[str, Any]] = []
                 if cat_key == "Person":
-                    for r in range(tbl.rowCount()):
-                        person_entry = _get_person_glossary_row(tbl, r)
+                    for row in range(tbl.rowCount()):
+                        person_entry = _get_person_glossary_row(tbl, row)
                         if person_entry["original"]:
-                            item = {
+                            item: Dict[str, Any] = {
                                 "original": person_entry["original"],
                                 "translation": person_entry["translation"],
                             }
@@ -1496,19 +1798,36 @@ class PromptEditorDialog(QDialog):
                                 item["description"] = person_entry["description"]
                             entries.append(item)
                 else:
-                    for r in range(tbl.rowCount()):
-                        orig = (tbl.item(r, 0) or QTableWidgetItem("")).text()
-                        trans = (tbl.item(r, 1) or QTableWidgetItem("")).text()
-                        if orig:
-                            entries.append({"original": orig, "translation": trans})
-                glossary[cat_key] = entries
-            data["glossary"] = glossary
+                    for row in range(tbl.rowCount()):
+                        entry = _get_basic_glossary_row(tbl, row)
+                        if entry["original"]:
+                            entries.append(entry)
+                if entries:
+                    glossary_data[cat_key] = entries
 
-        project_data = data.get("project_data")
-        if isinstance(project_data, dict):
-            project_data.pop("character_list", None)
-            if not project_data:
-                data.pop("project_data", None)
+        project_inserted = False
+        for key in section_order:
+            if key in {"project_title", "terminology"}:
+                if not project_inserted and project_data is not None:
+                    data["project_data"] = project_data
+                    project_inserted = True
+                continue
+            if key == "style_guide" and self._style_guide_edit is not None:
+                data["style_guide"] = [
+                    line for line in self._style_guide_edit.toPlainText().split("\n") if line.strip()
+                ]
+            elif key == "translation_rules" and self._rules_edit is not None:
+                data["translation_rules"] = [
+                    line for line in self._rules_edit.toPlainText().split("\n") if line.strip()
+                ]
+            elif key == "glossary" and glossary_data is not None:
+                data["glossary"] = glossary_data
+
+        if not project_inserted and project_data is not None:
+            data["project_data"] = project_data
+
+        for key, value in passthrough_items:
+            data[key] = value
 
         return data
 

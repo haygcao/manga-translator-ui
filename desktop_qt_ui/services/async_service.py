@@ -1,10 +1,4 @@
-"""
-Async Service
-Provides a way to run asyncio tasks from a synchronous (Tkinter) context.
-
-现在使用新的 AsyncJobManager 作为底层实现。
-"""
-import asyncio
+"""Qt 同步上下文下的后台协程提交服务。"""
 import logging
 from typing import Coroutine, Optional
 
@@ -13,10 +7,7 @@ from desktop_qt_ui.editor.core import AsyncJobManager
 
 
 class AsyncService:
-    """AsyncService - AsyncJobManager的兼容层
-    
-    保持与旧代码的接口兼容，内部使用新的AsyncJobManager实现。
-    """
+    """AsyncJobManager 的兼容层。"""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -25,31 +16,26 @@ class AsyncService:
         self.logger.info("AsyncService initialized with new AsyncJobManager")
 
     def submit_task(self, coro: Coroutine):
-        """Submits a coroutine to be run on the asyncio event loop.
-        
-        Args:
-            coro: 要执行的协程
-        
-        Returns:
-            Future: 任务的future对象（兼容旧代码）
-        """
+        """提交协程到后台事件循环。"""
         if not self._running:
             self.logger.warning("AsyncService is not running, task ignored")
+            coro.close()
             return None
-        
+
         try:
-            # 获取事件循环
-            loop = self._job_manager._loop
-            if loop is None:
+            future = self._job_manager.submit_coroutine(coro)
+            if future is None:
                 self.logger.error("Event loop is not available")
+                coro.close()
                 return None
-            
-            # 直接提交协程到事件循环
-            future = asyncio.run_coroutine_threadsafe(coro, loop)
+
             self.logger.debug("Task submitted to event loop")
             return future
-            
         except Exception as e:
+            try:
+                coro.close()
+            except Exception:
+                pass
             self.logger.error(f"Failed to submit task: {e}", exc_info=True)
             return None
     

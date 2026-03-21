@@ -1,24 +1,24 @@
 
-from .log import *
-from .generic import *
-from .textblock import *
-from .inference import *
-from .threading import *
 from .bubble import is_ignore
-from .replace_translation import (
-    ReplaceTranslationResult,
-    find_translated_image,
-    scale_regions_to_target,
-    match_regions,
-    create_matched_regions,
-    filter_raw_regions_for_inpainting,
-)
+from .generic import *
+from .inference import *
+from .log import *
 from .mangalens_detector import (
     BubbleDetection,
     BubbleDetectionResult,
     MangaLensBubbleDetector,
-    get_mangalens_detector,
+    build_bubble_mask_from_mangalens_result,
     detect_bubbles_with_mangalens,
     get_cached_bubbles_with_mangalens,
-    build_bubble_mask_from_mangalens_result,
+    get_mangalens_detector,
 )
+from .replace_translation import (
+    ReplaceTranslationResult,
+    create_matched_regions,
+    filter_raw_regions_for_inpainting,
+    find_translated_image,
+    match_regions,
+    scale_regions_to_target,
+)
+from .textblock import *
+from .threading import *

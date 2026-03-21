@@ -1,42 +1,42 @@
 """
-PaddleOCR-VL for Manga OCR Model
+PaddleOCR-VL-1.5 OCR Model
 
-基于 PaddleOCR-VL 的漫画文字识别模型
-模型来源: https://huggingface.co/jzhang533/PaddleOCR-VL-For-Manga
+基于 PaddleOCR-VL-1.5 的 OCR 模型
+模型来源: https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5
 """
 
 import os
 import sys
-import numpy as np
 from typing import List
-from PIL import Image
 
 import cv2
 import einops
+import numpy as np
 import torch
+from PIL import Image
 
-from .common import OfflineOCR
 from ..config import OcrConfig
 from ..utils import Quadrilateral
 from ..utils.generic import AvgMeter
+from .common import OfflineOCR
 
 
 class ModelPaddleOCRVL(OfflineOCR):
     """
-    PaddleOCR-VL for Manga OCR 模型
+    PaddleOCR-VL-1.5 OCR 模型
 
-    这是一个基于 VLM 的 OCR 模型，专门针对日本漫画进行了微调。
+    这是一个基于 VLM 的 OCR 模型。
     模型使用 transformers 库加载，支持 GPU 加速。
     """
 
     _MODEL_MAPPING = {
         'model': {
             'url': [
-                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/paddleocr_vl.7z',
+                'https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/master/PaddleOCR-VL-1.5.7z',
             ],
-            'hash': 'a84de910b06126af371c8092396f2943b99cbd6cf9a20fa88dd432ef74ded674',
+            'hash': '6427e6fbe68f28cdb99594ea39d98d6169f38f04d386b0f4eb62cc176510c2eb',
             'archive': {
-                'paddleocr_vl/': '.',
+                'PaddleOCR-VL-1.5/': '.',
             },
         },
         # 48px 颜色预测模型
@@ -57,7 +57,7 @@ class ModelPaddleOCRVL(OfflineOCR):
     }
 
     # 模型子目录名（在 models/ocr/ 下）
-    MODEL_DIR_NAME = "paddleocr_vl"
+    MODEL_DIR_NAME = "PaddleOCR-VL-1.5"
     _OCR_VL_LANGUAGE_HINTS = {
         "auto": "OCR: Extract all text.",
         "multilingual": "OCR: Extract all multilingual text.",
@@ -121,18 +121,18 @@ class ModelPaddleOCRVL(OfflineOCR):
 
     async def _load(self, device: str):
         """加载模型"""
-        # 动态导入，避免未使用时加载
-        from transformers import AutoProcessor
-        
-        # 在导入后立即过滤警告
+        # 在加载前过滤相关警告
         import warnings
         warnings.filterwarnings('ignore', message='.*slow image processor.*')
 
-        # 确定模型路径 - 使用 models/ocr/paddleocr_vl
+        # 确定模型路径 - 使用 models/ocr/PaddleOCR-VL-1.5
         model_path = os.path.join(self.model_dir, self.MODEL_DIR_NAME)
         
         # 自动修补模型文件
-        from .paddleocr_vl_patcher import patch_paddleocr_vl_files, register_ernie_modules
+        from .paddleocr_vl_patcher import (
+            patch_paddleocr_vl_files,
+            register_ernie_modules,
+        )
         if os.path.exists(model_path):
             patch_paddleocr_vl_files(model_path)
             register_ernie_modules(model_path)
@@ -142,7 +142,7 @@ class ModelPaddleOCRVL(OfflineOCR):
 
         if not os.path.exists(model_path) or not os.path.exists(os.path.join(model_path, "config.json")):
             # 如果本地没有，尝试从 HuggingFace 加载
-            model_path = "jzhang533/PaddleOCR-VL-For-Manga"
+            model_path = "PaddlePaddle/PaddleOCR-VL-1.5"
         else:
             # Windows 中文路径兼容：使用 tokenizers 后端（use_fast=True）避免 sentencepiece 路径问题
             # 通过切换工作目录使用相对路径来规避
@@ -178,8 +178,9 @@ class ModelPaddleOCRVL(OfflineOCR):
                 load_path = model_path
 
             # 直接从 tokenizer.json 加载纯快速 tokenizer，完全避免 sentencepiece
-            from transformers import PreTrainedTokenizerFast
             import json
+
+            from transformers import PreTrainedTokenizerFast
             
             tokenizer_json_path = os.path.join(load_path if not use_relative_path else ".", "tokenizer.json")
             tokenizer_config_path = os.path.join(load_path if not use_relative_path else ".", "tokenizer_config.json")
@@ -211,10 +212,10 @@ class ModelPaddleOCRVL(OfflineOCR):
                 tokenizer.chat_template = chat_template
             
             # 加载 image processor（使用慢速模式）
-            from transformers import AutoImageProcessor
-            
             # 过滤 slow image processor 警告
             import warnings
+
+            from transformers import AutoImageProcessor
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore', message='.*slow image processor.*')
                 image_processor = AutoImageProcessor.from_pretrained(

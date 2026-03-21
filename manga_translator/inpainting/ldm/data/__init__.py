@@ -4,17 +4,18 @@ YOLO OBB (Oriented Bounding Box) 检测器
 """
 
 import os
-import numpy as np
-import cv2
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
-from .common import OfflineDetector
-from ..utils import Quadrilateral, build_det_rearrange_plan, det_rearrange_patch_array
+import cv2
+import numpy as np
+
 from ....utils.onnx_runtime import (
     create_inference_session,
     create_session_options,
     import_onnxruntime,
 )
+from ..utils import Quadrilateral, build_det_rearrange_plan, det_rearrange_patch_array
+from .common import OfflineDetector
 
 
 class YOLOOBBDetector(OfflineDetector):
@@ -259,10 +260,6 @@ class YOLOOBBDetector(OfflineDetector):
             
             if len(indices) == 1:
                 break
-            
-            # 简化的 IoU 计算（使用外接矩形）
-            _current_box = boxes[current]
-            _other_boxes = boxes[indices[1:]]
             
             # 计算边界框重叠（简化版）
             indices = indices[1:]
@@ -542,7 +539,7 @@ class YOLOOBBDetector(OfflineDetector):
                         import torch
                         if torch.cuda.is_available():
                             pass
-                    except:
+                    except Exception:
                         pass
                 continue
             
@@ -568,8 +565,9 @@ class YOLOOBBDetector(OfflineDetector):
                 # 保存调试图
                 try:
 #                     import cv2
-                    from ..utils import imwrite_unicode
                     import logging
+
+                    from ..utils import imwrite_unicode
                     logger = logging.getLogger('manga_translator')
                     # 使用result_path_fn生成路径
                     if result_path_fn:

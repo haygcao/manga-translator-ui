@@ -1,19 +1,20 @@
-import os
 import math
+import os
 import shutil
-import cv2
-from typing import List, Tuple, Optional
-import numpy as np
-import einops
+from typing import List, Optional, Tuple
 
+import cv2
+import einops
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from manga_translator.config import OcrConfig
+
+from ..utils import AvgMeter, Quadrilateral, TextBlock, chunks, imwrite_unicode
 from .common import OfflineOCR
-from ..utils import TextBlock, Quadrilateral, AvgMeter, chunks, imwrite_unicode
-from ..utils.bubble import is_ignore
+
 
 class Model48pxCTCOCR(OfflineOCR):
     _MODEL_MAPPING = {
@@ -562,8 +563,6 @@ def test2():
     with open('alphabet-all-v5.txt', 'r') as fp:
         dictionary = [s[:-1] for s in fp.readlines()]
     img = torch.randn(4, 3, 48, 1536)
-    _idx = torch.zeros(4, 32).long()
-    _mask = torch.zeros(4, 32).bool()
     model = OCR(dictionary, 1024)
     pred_char_logits, pred_color_values = model(img)
     print(pred_char_logits.shape, pred_color_values.shape)

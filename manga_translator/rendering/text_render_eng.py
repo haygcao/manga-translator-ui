@@ -1,11 +1,12 @@
+from typing import List, Tuple
+
 import cv2
 import numpy as np
 from PIL import Image
-from typing import List, Tuple
 
-from .text_render import get_char_glyph, put_char_horizontal, add_color
+from ..utils import TextBlock, get_logger, rect_distance
 from .ballon_extractor import extract_ballon_region
-from ..utils import TextBlock, rect_distance, get_logger
+from .text_render import add_color, get_char_glyph, put_char_horizontal
 
 logger = get_logger('text_render_eng')
 

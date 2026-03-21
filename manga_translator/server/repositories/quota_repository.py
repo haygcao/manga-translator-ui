@@ -2,9 +2,10 @@
 Repository for quota management.
 """
 
-from typing import Optional, Dict
-from manga_translator.server.repositories.base_repository import BaseJSONRepository
+from typing import Dict, Optional
+
 from manga_translator.server.models import QuotaLimit
+from manga_translator.server.repositories.base_repository import BaseJSONRepository
 
 
 class QuotaRepository(BaseJSONRepository):
@@ -55,7 +56,7 @@ class QuotaRepository(BaseJSONRepository):
     
     def reset_daily_usage(self, user_id: str) -> bool:
         """Reset daily usage for a specific user."""
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
         return self.update_user_quota(user_id, {
             "current_usage": 0,
             "last_reset": datetime.now(UTC).isoformat()

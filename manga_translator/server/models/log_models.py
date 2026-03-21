@@ -2,10 +2,10 @@
 Log data models.
 """
 
-from dataclasses import dataclass, asdict, field
+import uuid
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
-import uuid
 
 
 @dataclass

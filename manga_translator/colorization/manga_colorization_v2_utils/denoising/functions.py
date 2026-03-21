@@ -13,6 +13,7 @@ this program. If not, see <http://www.gnu.org/licenses/>.
 import torch
 from torch.autograd import Function, Variable
 
+
 def concatenate_input_noise_map(input, noise_sigma):
     r"""Implements the first layer of FFDNet. This function returns a
     torch.autograd.Variable composed of the concatenation of the downsampled

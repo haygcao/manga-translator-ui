@@ -1,17 +1,17 @@
-from typing import Optional, List
+from typing import List, Optional
 
 import py3langid as langid
 
+from ..config import Config, Translator, TranslatorChain, TranslatorConfig
+from ..utils import Context
 from .common import *
-from .openai import OpenAITranslator
-from .openai_hq import OpenAIHighQualityTranslator
 from .gemini import GeminiTranslator
 from .gemini_hq import GeminiHighQualityTranslator
-from .sakura import SakuraTranslator
 from .none import NoneTranslator
+from .openai import OpenAITranslator
+from .openai_hq import OpenAIHighQualityTranslator
 from .original import OriginalTranslator
-from ..config import Config, Translator, TranslatorConfig, TranslatorChain
-from ..utils import Context
+from .sakura import SakuraTranslator
 
 GPT_TRANSLATORS = {
     Translator.openai: OpenAITranslator,

@@ -1,8 +1,8 @@
 import os
 from typing import Optional
 
-from ..utils import BASE_PATH
 from ..translators.prompt_loader import load_prompt_file
+from ..utils import BASE_PATH
 
 DEFAULT_AI_RENDERER_PROMPT = (
     "You are a manga typesetting renderer. You will receive a cleaned manga page image with "

@@ -1,7 +1,7 @@
 import numpy as np
 
-from .common import CommonInpainter
 from ..config import InpainterConfig
+from .common import CommonInpainter
 
 
 class OriginalInpainter(CommonInpainter):

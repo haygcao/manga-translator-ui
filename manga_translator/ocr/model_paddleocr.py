@@ -12,15 +12,15 @@ Supports:
 - Korean/English (korean_PP-OCRv5_rec_mobile_infer)
 """
 
-import os
-import numpy as np
-from typing import List
-import cv2
 import math
-import torch
-import einops
+import os
+from typing import List
 
-from .common import OfflineOCR
+import cv2
+import einops
+import numpy as np
+import torch
+
 from ..config import OcrConfig
 from ..utils import Quadrilateral
 from ..utils.onnx_runtime import (
@@ -28,6 +28,7 @@ from ..utils.onnx_runtime import (
     create_session_options,
     import_onnxruntime,
 )
+from .common import OfflineOCR
 
 
 class ModelPaddleOCR(OfflineOCR):
@@ -260,8 +261,6 @@ class ModelPaddleOCR(OfflineOCR):
             self.logger.error("Model not loaded")
             return textlines
 
-        from ..utils.bubble import is_ignore
-        
         ignore_bubble = config.ignore_bubble
         use_model_bubble_filter = bool(getattr(config, 'use_model_bubble_filter', False))
         threshold = 0.2 if config.prob is None else config.prob
@@ -470,8 +469,8 @@ class ModelPaddleOCR(OfflineOCR):
 
     def _estimate_colors_batch(self, regions: List[np.ndarray]) -> List[tuple]:
         """批量预测前景色和背景色（复用 mocr 的批量处理逻辑）"""
-        from ..utils.generic import AvgMeter
         from ..utils import chunks
+        from ..utils.generic import AvgMeter
         
         try:
             if not regions:

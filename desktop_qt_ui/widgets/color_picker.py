@@ -1,19 +1,20 @@
 
-from PyQt6.QtCore import pyqtSignal, QTimer, Qt, QRect, QEvent
-from PyQt6.QtGui import QColor, QPixmap, QPainter, QIcon, QAction, QPen, QFont, QCursor
+import logging
+
+from main_view_parts.theme import _to_qcolor, get_current_theme_colors
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QCursor, QFont, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QColorDialog,
     QFrame,
     QHBoxLayout,
+    QMenu,
     QPushButton,
     QToolButton,
-    QMenu,
     QWidget,
 )
-
-import logging
-from main_view_parts.theme import _to_qcolor, get_current_theme_colors
+from widgets.hover_hint import set_hover_hint
 
 logger = logging.getLogger('manga_translator')
 
@@ -287,14 +288,14 @@ class ColorPickerWidget(QWidget):
         self.color_button.setObjectName("color_picker_swatch")
         self.color_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.color_button.setFixedWidth(42)
-        self.color_button.setToolTip(self._t("Click to select color"))
+        set_hover_hint(self.color_button, self._t("Click to select color"))
         layout.addWidget(self.color_button, 0)
 
         # ★ 常用颜色按钮
         self.saved_colors_button = QToolButton()
         self.saved_colors_button.setObjectName("color_picker_saved_button")
         self.saved_colors_button.setText("★")
-        self.saved_colors_button.setToolTip(self._t("Saved colors menu"))
+        set_hover_hint(self.saved_colors_button, self._t("Saved colors menu"))
         self.saved_colors_button.setFixedWidth(28)
         self.saved_colors_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         layout.addWidget(self.saved_colors_button, 0)
@@ -480,11 +481,11 @@ class ColorPickerWidget(QWidget):
             c = QColor(hex_color)
             rgb_text = f"{c.red()},{c.green()},{c.blue()}"
             tooltip = f"{c.name().upper()} | RGB: {rgb_text}"
-            self.color_button.setToolTip(tooltip)
-            self.saved_colors_button.setToolTip(tooltip)
+            set_hover_hint(self.color_button, tooltip)
+            set_hover_hint(self.saved_colors_button, tooltip)
         except Exception:
-            self.color_button.setToolTip(self._t("Click to select color"))
-            self.saved_colors_button.setToolTip(self._t("Saved colors menu"))
+            set_hover_hint(self.color_button, self._t("Click to select color"))
+            set_hover_hint(self.saved_colors_button, self._t("Saved colors menu"))
 
     # ── 常用颜色菜单 ─────────────────────────────────────────────
 

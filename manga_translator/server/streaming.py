@@ -1,6 +1,7 @@
 import asyncio
 import pickle
 
+
 async def stream(messages):
     while True:
         message = await messages.get()

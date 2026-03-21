@@ -1,4 +1,6 @@
 
+import logging
+
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIntValidator, QWheelEvent
 from PyQt6.QtWidgets import (
@@ -12,21 +14,20 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QSlider,
     QSizePolicy,
+    QSlider,
     QStyle,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
-
 from services import get_config_service, get_i18n_manager
 
 from .color_picker import ColorPickerWidget
-from .themed_text_input_dialog import themed_get_text
+from .hover_hint import set_hover_hint
+
 # from .collapsible_frame import CollapsibleFrame  # 不再使用折叠框
-from .syntax_highlighter import HorizontalTagHighlighter
-import logging
+from .themed_text_input_dialog import themed_get_text
 
 logger = logging.getLogger('manga_translator')
 
@@ -215,19 +216,19 @@ class PropertyPanel(QWidget):
         self.brush_button.setProperty("editorToolButton", True)
         self.brush_button.setProperty("softAction", True)
         self.brush_button.setCheckable(True)
-        self.brush_button.setToolTip(self._t("Brush Tool") + " (W)")
+        set_hover_hint(self.brush_button, self._t("Brush Tool") + " (W)")
         self.eraser_button = QPushButton(self._t("Eraser"))
         self.eraser_button.setObjectName("editor_mask_eraser_button")
         self.eraser_button.setProperty("editorToolButton", True)
         self.eraser_button.setProperty("softAction", True)
         self.eraser_button.setCheckable(True)
-        self.eraser_button.setToolTip(self._t("Eraser Tool") + " (E)")
+        set_hover_hint(self.eraser_button, self._t("Eraser Tool") + " (E)")
         self.select_button = QPushButton(self._t("No Selection"))
         self.select_button.setObjectName("editor_mask_select_button")
         self.select_button.setProperty("editorToolButton", True)
         self.select_button.setProperty("softAction", True)
         self.select_button.setCheckable(True)
-        self.select_button.setToolTip(self._t("Selection Tool") + " (Q)")
+        set_hover_hint(self.select_button, self._t("Selection Tool") + " (Q)")
 
         self.mask_tool_group.addButton(self.select_button, 0)
         self.mask_tool_group.addButton(self.brush_button, 1)
@@ -342,13 +343,13 @@ class PropertyPanel(QWidget):
         insert_buttons_layout.setSpacing(6)
         self.insert_placeholder_button = QPushButton(self._t("Placeholder"))
         self.insert_placeholder_button.setProperty("chipButton", True)
-        self.insert_placeholder_button.setToolTip(self._t("Insert placeholder ＿"))
+        set_hover_hint(self.insert_placeholder_button, self._t("Insert placeholder ＿"))
         self.insert_newline_button = QPushButton(self._t("Newline↵"))
         self.insert_newline_button.setProperty("chipButton", True)
-        self.insert_newline_button.setToolTip(self._t("Insert newline"))
+        set_hover_hint(self.insert_newline_button, self._t("Insert newline"))
         self.mark_horizontal_button = QPushButton(self._t("Horizontal⇄"))
         self.mark_horizontal_button.setProperty("chipButton", True)
-        self.mark_horizontal_button.setToolTip(self._t("Mark selected text as horizontal display"))
+        set_hover_hint(self.mark_horizontal_button, self._t("Mark selected text as horizontal display"))
         for button in (self.insert_placeholder_button, self.insert_newline_button, self.mark_horizontal_button):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         insert_buttons_layout.addWidget(self.insert_placeholder_button)
@@ -537,6 +538,7 @@ class PropertyPanel(QWidget):
     def _populate_font_list(self):
         """Populate font combo box with available fonts from fonts folder"""
         import os
+
         from manga_translator.utils import BASE_PATH
         
         # 清空现有列表
@@ -568,15 +570,15 @@ class PropertyPanel(QWidget):
         self.copy_button = QPushButton(self._t("Copy"))
         self.copy_button.setObjectName("editor_copy_action_button")
         self.copy_button.setProperty("softAction", True)
-        self.copy_button.setToolTip(self._t("Copy") + " (Ctrl+C)")
+        set_hover_hint(self.copy_button, self._t("Copy") + " (Ctrl+C)")
         self.paste_button = QPushButton(self._t("Paste"))
         self.paste_button.setObjectName("editor_paste_action_button")
         self.paste_button.setProperty("softAction", True)
-        self.paste_button.setToolTip(self._t("Paste") + " (Ctrl+V)")
+        set_hover_hint(self.paste_button, self._t("Paste") + " (Ctrl+V)")
         self.delete_button = QPushButton(self._t("Delete"))
         self.delete_button.setObjectName("editor_delete_action_button")
         self.delete_button.setProperty("variant", "danger")
-        self.delete_button.setToolTip(self._t("Delete") + " (Del)")
+        set_hover_hint(self.delete_button, self._t("Delete") + " (Del)")
         action_layout.addWidget(self.copy_button)
         action_layout.addWidget(self.paste_button)
         action_layout.addWidget(self.delete_button)
@@ -626,17 +628,10 @@ class PropertyPanel(QWidget):
         self.copy_button.clicked.connect(self.copy_region_requested.emit)
         self.paste_button.clicked.connect(self.paste_region_requested.emit)
         self.delete_button.clicked.connect(self.delete_region_requested.emit)
-
-
-    def reload_config_settings(self):
-        """公共方法：重新加载主页配置设置"""
-        self.repopulate_options()  # 重新加载选项
-
     def _connect_model_signals(self):
         self.model.display_mask_type_changed.connect(self._on_display_mask_type_changed)
         self.model.refined_mask_changed.connect(self._on_refined_mask_changed)
         self.model.regions_changed.connect(self.on_regions_updated)
-        self.model.region_text_updated.connect(self.on_single_region_updated)
         self.model.region_style_updated.connect(self.on_single_region_updated)
 
     def _on_display_mask_type_changed(self, mask_type: str):
@@ -780,31 +775,31 @@ class PropertyPanel(QWidget):
             self.translate_button.setText(self._t("Translate"))
         if hasattr(self, 'brush_button'):
             self.brush_button.setText(self._t("Brush"))
-            self.brush_button.setToolTip(self._t("Brush Tool") + " (W)")
+            set_hover_hint(self.brush_button, self._t("Brush Tool") + " (W)")
         if hasattr(self, 'eraser_button'):
             self.eraser_button.setText(self._t("Eraser"))
-            self.eraser_button.setToolTip(self._t("Eraser Tool") + " (E)")
+            set_hover_hint(self.eraser_button, self._t("Eraser Tool") + " (E)")
         if hasattr(self, 'select_button'):
             self.select_button.setText(self._t("No Selection"))
-            self.select_button.setToolTip(self._t("Selection Tool") + " (Q)")
+            set_hover_hint(self.select_button, self._t("Selection Tool") + " (Q)")
         if hasattr(self, 'insert_placeholder_button'):
             self.insert_placeholder_button.setText(self._t("Placeholder"))
-            self.insert_placeholder_button.setToolTip(self._t("Insert placeholder ＿"))
+            set_hover_hint(self.insert_placeholder_button, self._t("Insert placeholder ＿"))
         if hasattr(self, 'insert_newline_button'):
             self.insert_newline_button.setText(self._t("Newline↵"))
-            self.insert_newline_button.setToolTip(self._t("Insert newline"))
+            set_hover_hint(self.insert_newline_button, self._t("Insert newline"))
         if hasattr(self, 'mark_horizontal_button'):
             self.mark_horizontal_button.setText(self._t("Horizontal⇄"))
-            self.mark_horizontal_button.setToolTip(self._t("Mark selected text as horizontal display"))
+            set_hover_hint(self.mark_horizontal_button, self._t("Mark selected text as horizontal display"))
         if hasattr(self, 'copy_button'):
             self.copy_button.setText(self._t("Copy"))
-            self.copy_button.setToolTip(self._t("Copy") + " (Ctrl+C)")
+            set_hover_hint(self.copy_button, self._t("Copy") + " (Ctrl+C)")
         if hasattr(self, 'paste_button'):
             self.paste_button.setText(self._t("Paste"))
-            self.paste_button.setToolTip(self._t("Paste") + " (Ctrl+V)")
+            set_hover_hint(self.paste_button, self._t("Paste") + " (Ctrl+V)")
         if hasattr(self, 'delete_button'):
             self.delete_button.setText(self._t("Delete"))
-            self.delete_button.setToolTip(self._t("Delete") + " (Del)")
+            set_hover_hint(self.delete_button, self._t("Delete") + " (Del)")
         if hasattr(self, 'save_style_preset_button') or hasattr(self, 'delete_style_preset_button'):
             self._refresh_style_preset_action_buttons()
         
@@ -962,7 +957,7 @@ class PropertyPanel(QWidget):
             self.save_style_preset_button.setIcon(
                 self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
             )
-            self.save_style_preset_button.setToolTip(self._t("Save current style combination"))
+            set_hover_hint(self.save_style_preset_button, self._t("Save current style combination"))
             self.save_style_preset_button.setAccessibleName(self._t("Save Style"))
 
         if hasattr(self, "delete_style_preset_button"):
@@ -970,7 +965,7 @@ class PropertyPanel(QWidget):
             self.delete_style_preset_button.setIcon(
                 self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
             )
-            self.delete_style_preset_button.setToolTip(self._t("Delete selected saved style"))
+            set_hover_hint(self.delete_style_preset_button, self._t("Delete selected saved style"))
             self.delete_style_preset_button.setAccessibleName(self._t("Delete Style"))
 
     def _alignment_value_from_text(self, text: str) -> str:
@@ -1144,6 +1139,7 @@ class PropertyPanel(QWidget):
 
     def _on_save_style_preset_clicked(self):
         import copy
+
         from PyQt6.QtWidgets import QMessageBox
 
         default_name = self.style_preset_combo.currentData() or ""
@@ -1189,6 +1185,7 @@ class PropertyPanel(QWidget):
 
     def _on_delete_style_preset_clicked(self):
         import copy
+
         from PyQt6.QtWidgets import QMessageBox
 
         preset_name = self.style_preset_combo.currentData()

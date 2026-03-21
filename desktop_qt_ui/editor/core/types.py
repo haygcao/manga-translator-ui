@@ -18,15 +18,6 @@ class EditorState(str, Enum):
     ERROR = "error"            # 错误状态
 
 
-class JobState(str, Enum):
-    """异步任务状态"""
-    PENDING = "pending"      # 等待执行
-    RUNNING = "running"      # 执行中
-    COMPLETED = "completed"  # 已完成
-    CANCELLED = "cancelled"  # 已取消
-    FAILED = "failed"        # 失败
-
-
 class MaskType(str, Enum):
     """蒙版类型"""
     RAW = "raw"              # 原始蒙版
@@ -59,13 +50,4 @@ ALLOWED_TRANSITIONS: Dict[EditorState, List[EditorState]] = {
     EditorState.EXPORTING: [EditorState.READY, EditorState.ERROR],
     EditorState.ERROR: [EditorState.IDLE, EditorState.LOADING],
 }
-
-
-# 任务优先级常量
-class JobPriority:
-    """任务优先级"""
-    LOW = 0
-    NORMAL = 5
-    HIGH = 10
-    CRITICAL = 15
 

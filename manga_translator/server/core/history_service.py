@@ -8,16 +8,18 @@ This service handles:
 - Session token generation (UUID v4)
 """
 
-import os
-import uuid
-import shutil
 import logging
-from typing import List, Optional, Dict, Any
+import os
+import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from manga_translator.server.models import TranslationResult
-from manga_translator.server.repositories.translation_repository import TranslationRepository
+from manga_translator.server.repositories.translation_repository import (
+    TranslationRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -340,8 +342,8 @@ class HistoryManagementService:
             
         Validates: Requirement 3.4
         """
-        import zipfile
         import tempfile
+        import zipfile
         
         # Get session files
         files = self.get_session_files(session_token, user_id)
@@ -351,7 +353,7 @@ class HistoryManagementService:
         
         # Create temporary ZIP file
         temp_dir = tempfile.gettempdir()
-        zip_path = os.path.join(temp_dir, f"{session_token}.zip")
+        zip_path = os.path.join(temp_dir, f"{session_token}_{uuid.uuid4().hex[:8]}.zip")
         
         try:
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -384,16 +386,19 @@ class HistoryManagementService:
             
         Validates: Requirements 4.2, 4.3
         """
-        import zipfile
-        import tempfile
         import logging
+        import tempfile
+        import zipfile
         logger = logging.getLogger(__name__)
         
         logger.info(f"Creating batch download for {len(session_tokens)} sessions, user_id={user_id}")
         
         # Create temporary ZIP file
         temp_dir = tempfile.gettempdir()
-        zip_filename = f"batch_download_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.zip"
+        zip_filename = (
+            f"batch_download_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_"
+            f"{uuid.uuid4().hex[:8]}.zip"
+        )
         zip_path = os.path.join(temp_dir, zip_filename)
         
         try:

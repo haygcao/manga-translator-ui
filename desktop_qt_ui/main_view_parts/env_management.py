@@ -4,44 +4,7 @@ from functools import partial
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QLabel, QLineEdit
-
-from widgets.themed_message_box import show_error_dialog
-
 from utils.wheel_filter import NoWheelComboBox as QComboBox
-
-
-def on_translator_changed(self, display_name: str):
-    """当翻译器下拉菜单变化时，动态更新所需的.env输入字段。"""
-    if not hasattr(self, "env_layout") or not hasattr(self, "env_group_box") or self.env_group_box is None:
-        return
-
-    reverse_map = {v: k for k, v in self.controller.get_display_mapping("translator").items()}
-    translator_key = reverse_map.get(display_name, display_name.lower())
-
-    from PyQt6.QtWidgets import QGridLayout
-
-    if isinstance(self.env_layout, QGridLayout):
-        while self.env_layout.count():
-            item = self.env_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-    else:
-        while self.env_layout.rowCount() > 0:
-            self.env_layout.removeRow(0)
-    self.env_widgets.clear()
-
-    if not translator_key:
-        self.env_group_box.setVisible(False)
-        return
-
-    all_vars = self.config_service.get_all_env_vars(translator_key)
-    if not all_vars:
-        self.env_group_box.setVisible(False)
-        return
-
-    self.env_group_box.setVisible(True)
-    current_env_values = self.config_service.load_env_vars()
-    self._create_env_widgets(all_vars, current_env_values)
 
 
 def create_env_widgets(self, keys: list, current_values: dict):
@@ -70,11 +33,13 @@ def create_env_widgets(self, keys: list, current_values: dict):
 
             if "API_KEY" in key or "AUTH_KEY" in key or "TOKEN" in key:
                 test_button = QPushButton(self._t("Test"))
+                test_button.setProperty("chipButton", True)
                 test_button.setFixedWidth(60)
                 test_button.clicked.connect(partial(self._on_test_api_clicked, key))
                 self.env_layout.addWidget(test_button, row, 2)
             elif "MODEL" in key:
                 get_models_button = QPushButton(self._t("Get Models"))
+                get_models_button.setProperty("chipButton", True)
                 get_models_button.setFixedWidth(100)
                 get_models_button.clicked.connect(partial(self._on_get_models_clicked, key))
                 self.env_layout.addWidget(get_models_button, row, 2)
@@ -127,22 +92,47 @@ def debounced_save_env_var(self, key: str, text: str):
     self._env_debounce_timer.start()
 
 
-def _detect_current_api_type(env_key: str, translator_key: str) -> str:
-    _, provider, _ = _split_env_key(env_key)
-    if provider == "GEMINI":
-        return "gemini"
-    if provider:
-        return "openai"
+def _detect_test_target(env_key: str, translator_key: str) -> str:
+    scope, provider, _ = _split_env_key(env_key)
 
-    normalized_translator_key = (translator_key or "").lower()
-    if "gemini" in normalized_translator_key:
-        return "gemini"
-    return "openai"
+    scoped_targets = {
+        ("OCR_", "OPENAI"): "openai_ocr",
+        ("OCR_", "GEMINI"): "gemini_ocr",
+        ("COLOR_", "OPENAI"): "openai_colorizer",
+        ("COLOR_", "GEMINI"): "gemini_colorizer",
+        ("RENDER_", "OPENAI"): "openai_renderer",
+        ("RENDER_", "GEMINI"): "gemini_renderer",
+    }
+    target = scoped_targets.get((scope, provider))
+    if target:
+        return target
+
+    provider_targets = {
+        "OPENAI": "openai",
+        "CUSTOM_OPENAI": "custom_openai",
+        "DEEPSEEK": "deepseek",
+        "GROQ": "groq",
+        "GEMINI": "gemini",
+        "SAKURA": "sakura",
+    }
+    target = provider_targets.get(provider)
+    if target:
+        return target
+
+    normalized_translator_key = (translator_key or "").strip().lower()
+    return normalized_translator_key or "openai"
 
 
 def _get_api_address_example(api_type: str) -> str:
-    if api_type == "gemini":
+    normalized = (api_type or "").lower()
+    if "gemini" in normalized:
         return "https://generativelanguage.googleapis.com"
+    if "deepseek" in normalized:
+        return "https://api.deepseek.com"
+    if "groq" in normalized:
+        return "https://api.groq.com/openai/v1"
+    if "sakura" in normalized:
+        return "http://127.0.0.1:8080/v1"
     return "https://api.openai.com/v1"
 
 
@@ -166,16 +156,28 @@ def _wrap_error_text(message: str, width: int = 60) -> str:
 
 def _format_test_connection_error(api_type: str, message: str) -> str:
     raw_message = str(message or "").strip()
-    error_lower = raw_message.lower()
+    analysis_message = raw_message
+    for prefix in ("连接失败:", "连接失败：", "api connection failed:", "connection failed:"):
+        if analysis_message.lower().startswith(prefix):
+            analysis_message = analysis_message[len(prefix):].strip()
+            break
+    error_lower = analysis_message.lower()
 
     network_keywords = (
         "connection",
+        "connect",
+        "failed to connect",
+        "could not connect to server",
         "cannot connect to host",
         "connection refused",
         "connection reset",
+        "connection timed out",
         "network",
         "timeout",
         "timed out",
+        "timed out after",
+        "curl: (7)",
+        "curl: (28)",
         "dns",
         "host",
         "hostname",
@@ -192,15 +194,43 @@ def _format_test_connection_error(api_type: str, message: str) -> str:
         "主机",
     )
 
+    service_keywords = (
+        "502",
+        "503",
+        "504",
+        "service unavailable",
+        "server error",
+        "bad gateway",
+        "gateway timeout",
+        "upstream",
+        "overloaded",
+        "distributor",
+        "channel",
+        "unavailable",
+        "not available",
+        "无可用渠道",
+        "渠道",
+        "服务不可用",
+        "服务异常",
+        "站点异常",
+        "模型不可用",
+    )
+
     is_network_error = any(keyword in error_lower for keyword in network_keywords)
+    is_service_error = any(keyword in error_lower for keyword in service_keywords)
 
     if is_network_error:
         friendly_message = (
             "检测到连接错误、超时或 Host 解析错误。\n"
-            "请检查网络连接，并尝试开启 TUN（虚拟网卡模式）。"
+            "请先检查模型、API 地址和 API 密钥是否正确；如果配置无误，再检查网络连接，并尝试开启 TUN（虚拟网卡模式）。"
+        )
+    elif is_service_error:
+        friendly_message = (
+            "请先检查模型、API 地址和 API 密钥是否正确。\n"
+            "如果配置无误，这也可能是 API 站点、中转渠道或服务端暂时异常，或当前网络链路不稳定；建议稍后重试，或更换 API 站点 / 渠道。"
         )
     else:
-        friendly_message = "请检查 API 密钥和地址。"
+        friendly_message = "请检查模型、API 地址和 API 密钥是否正确。"
 
     friendly_message += f"\n\nAPI 地址示例：{_get_api_address_example(api_type)}"
     if raw_message:
@@ -212,7 +242,13 @@ def _format_test_connection_error(api_type: str, message: str) -> str:
 def _show_api_error_dialog(parent, title: str, heading: str, details: str) -> None:
     from PyQt6.QtWidgets import QMessageBox
 
-    show_error_dialog(parent, heading or title, "", details, icon=QMessageBox.Icon.Critical)
+    QMessageBox.critical(parent, heading or title, details)
+
+
+def _show_api_success_dialog(parent, title: str, heading: str, details: str) -> None:
+    from PyQt6.QtWidgets import QMessageBox
+
+    QMessageBox.information(parent, heading or title, details)
 
 
 def _split_env_key(env_key: str) -> tuple[str, str, str]:
@@ -248,32 +284,62 @@ def _read_env_widget_value(self, env_key: str | None) -> str | None:
     return pair[1].text().strip() or None
 
 
+def _read_env_candidates(self, *env_keys: str | None) -> str | None:
+    for env_key in env_keys:
+        value = _read_env_widget_value(self, env_key)
+        if value:
+            return value
+    return None
+
+
 def _resolve_api_context(self, env_key: str, translator_key: str) -> tuple[str, str | None, str | None, str | None]:
-    api_type = _detect_current_api_type(env_key, translator_key)
+    test_target = _detect_test_target(env_key, translator_key)
     scope, provider, field = _split_env_key(env_key)
 
     api_key = None
     if field in ("API_KEY", "AUTH_KEY", "TOKEN"):
-        api_key = _read_env_widget_value(self, env_key)
+        api_key = _read_env_candidates(
+            self,
+            env_key,
+            _build_related_env_key("", provider, "API_KEY") if scope else None,
+            _build_related_env_key("", provider, "AUTH_KEY") if scope else None,
+            _build_related_env_key("", provider, "TOKEN") if scope else None,
+        )
     else:
-        for candidate_field in ("API_KEY", "AUTH_KEY", "TOKEN"):
-            api_key = _read_env_widget_value(self, _build_related_env_key(scope, provider, candidate_field))
-            if api_key:
-                break
+        api_key = _read_env_candidates(
+            self,
+            *[_build_related_env_key(scope, provider, candidate_field) for candidate_field in ("API_KEY", "AUTH_KEY", "TOKEN")],
+            *(
+                [_build_related_env_key("", provider, candidate_field) for candidate_field in ("API_KEY", "AUTH_KEY", "TOKEN")]
+                if scope
+                else []
+            ),
+        )
 
-    api_base = None
-    for candidate_field in ("API_BASE", "BASE"):
-        api_base = _read_env_widget_value(self, _build_related_env_key(scope, provider, candidate_field))
-        if api_base:
-            break
+    api_base = _read_env_candidates(
+        self,
+        *[_build_related_env_key(scope, provider, candidate_field) for candidate_field in ("API_BASE", "BASE")],
+        *(
+            [_build_related_env_key("", provider, candidate_field) for candidate_field in ("API_BASE", "BASE")]
+            if scope
+            else []
+        ),
+    )
 
-    model = _read_env_widget_value(self, _build_related_env_key(scope, provider, "MODEL"))
-    return api_type, api_key, api_base, model
+    model = _read_env_candidates(
+        self,
+        _build_related_env_key(scope, provider, "MODEL"),
+        _build_related_env_key("", provider, "MODEL") if scope else None,
+    )
+    return test_target, api_key, api_base, model
 
 
 def on_open_custom_api_params_file(self):
     """打开自定义 API 参数编辑器。"""
-    from manga_translator.custom_api_params import ensure_custom_api_params_file, get_custom_api_params_path
+    from manga_translator.custom_api_params import (
+        ensure_custom_api_params_file,
+        get_custom_api_params_path,
+    )
 
     try:
         config_path = ensure_custom_api_params_file(get_custom_api_params_path())
@@ -299,24 +365,19 @@ def on_test_api_clicked(self, key: str):
     import asyncio
 
     from PyQt6.QtCore import QThread
-    from PyQt6.QtWidgets import QMessageBox
-
     from widgets.themed_progress_dialog import create_progress_dialog
 
     if key not in self.env_widgets:
         return
 
-    _, widget = self.env_widgets[key]
-    api_key = widget.text().strip()
-
+    translator_key = ""
     translator_combo = self.findChild(QComboBox, "translator.translator")
-    if not translator_combo:
-        return
+    if translator_combo:
+        translator_display = translator_combo.currentText()
+        reverse_map = {v: k for k, v in self.controller.get_display_mapping("translator").items()}
+        translator_key = reverse_map.get(translator_display, translator_display.lower())
 
-    translator_display = translator_combo.currentText()
-    reverse_map = {v: k for k, v in self.controller.get_display_mapping("translator").items()}
-    translator_key = reverse_map.get(translator_display, translator_display.lower())
-    api_type, api_key, api_base, model = _resolve_api_context(self, key, translator_key)
+    test_target, api_key, api_base, model = _resolve_api_context(self, key, translator_key)
 
     progress = create_progress_dialog(
         self,
@@ -329,7 +390,7 @@ def on_test_api_clicked(self, key: str):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         result = loop.run_until_complete(
-            self.controller.test_api_connection_async(api_type, api_key, api_base, model)
+            self.controller.test_api_connection_async(test_target, api_key, api_base, model)
         )
         loop.close()
         return result
@@ -347,9 +408,15 @@ def on_test_api_clicked(self, key: str):
     def on_test_finished(success, message):
         progress.close()
         if success:
-            QMessageBox.information(self, self._t("Success"), self._t("API connection test successful!"))
+            success_details = _wrap_error_text(message) if message else self._t("API connection test successful!")
+            _show_api_success_dialog(
+                self,
+                self._t("Success"),
+                self._t("API connection test successful!"),
+                success_details,
+            )
         else:
-            friendly_message = _format_test_connection_error(api_type, message)
+            friendly_message = _format_test_connection_error(test_target, message)
             _show_api_error_dialog(
                 self,
                 self._t("Error"),
@@ -369,17 +436,17 @@ def on_get_models_clicked(self, key: str):
 
     from PyQt6.QtCore import QThread
     from PyQt6.QtWidgets import QMessageBox
-
-    from desktop_qt_ui.widgets.model_selector_dialog import ModelSelectorDialog
     from widgets.themed_progress_dialog import create_progress_dialog
 
-    translator_combo = self.findChild(QComboBox, "translator.translator")
-    if not translator_combo:
-        return
+    from desktop_qt_ui.widgets.model_selector_dialog import ModelSelectorDialog
 
-    translator_display = translator_combo.currentText()
-    reverse_map = {v: k for k, v in self.controller.get_display_mapping("translator").items()}
-    translator_key = reverse_map.get(translator_display, translator_display.lower())
+    translator_key = ""
+    translator_combo = self.findChild(QComboBox, "translator.translator")
+    if translator_combo:
+        translator_display = translator_combo.currentText()
+        reverse_map = {v: k for k, v in self.controller.get_display_mapping("translator").items()}
+        translator_key = reverse_map.get(translator_display, translator_display.lower())
+
     model_api_type, api_key, api_base, _ = _resolve_api_context(self, key, translator_key)
 
     progress = create_progress_dialog(

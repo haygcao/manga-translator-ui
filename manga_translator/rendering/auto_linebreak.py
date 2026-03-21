@@ -1,7 +1,9 @@
 # auto_linebreak v2.1.0
 # 完全自包含的换行引擎：竖排 <H> 块、CJK 标点禁则、英文连字符均内嵌在布局决策阶段
 import math
+import os
 import re
+import tempfile
 from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any, List, Tuple
@@ -9,16 +11,29 @@ from typing import Any, List, Tuple
 from . import text_render
 from .text_render import (
     CJK_Compatibility_Forms_translate,
-    get_char_glyph,
     auto_add_horizontal_tags,
-    should_rotate_horizontal_block_90,
-    get_string_width,
-    get_char_offset_x,
-    get_char_offset_y,
-    select_hyphenator,
     calc_horizontal_block_height,
     compact_special_symbols,
+    get_char_glyph,
+    get_char_offset_x,
+    get_char_offset_y,
+    get_string_width,
+    select_hyphenator,
 )
+
+_PYTHAINLP_DATA_DIR = os.path.join(tempfile.gettempdir(), "manga-translator-ui", "pythainlp-data")
+os.environ.setdefault("PYTHAINLP_DATA", _PYTHAINLP_DATA_DIR)
+try:
+    os.makedirs(_PYTHAINLP_DATA_DIR, exist_ok=True)
+except OSError:
+    pass
+
+try:
+    from pythainlp.tokenize import word_tokenize as thai_word_tokenize
+    HAS_PYTHAINLP = True
+except Exception:
+    thai_word_tokenize = None
+    HAS_PYTHAINLP = False
 
 
 @dataclass
@@ -49,6 +64,10 @@ def _hyphenate_enabled(config: Any) -> bool:
     return not (config and hasattr(config, "render") and getattr(config.render, "no_hyphenation", False))
 
 
+def _auto_rotate_symbols_enabled(config: Any) -> bool:
+    return bool(config and hasattr(config, "render") and getattr(config.render, "auto_rotate_symbols", False))
+
+
 # ---------------------------------------------------------------------------
 # 竖排换行引擎（完全内嵌，不依赖 text_render.calc_vertical）
 # ---------------------------------------------------------------------------
@@ -77,12 +96,12 @@ def _vert_char_bitmap_width(font_size: int, cdpt: str) -> int:
         return font_size
 
 
-def _layout_vertical(font_size: int, text: str, max_height: int, letter_spacing: float = 1.0) -> Tuple[List[str], List[int]]:
+def _layout_vertical(font_size: int, text: str, max_height: int, config: Any = None, letter_spacing: float = 1.0) -> Tuple[List[str], List[int]]:
     """
     竖排换行引擎，完全自包含。
 
     特性：
-    1. auto_add_horizontal_tags 先把英文/数字词包成 <H> 块
+    1. 开启 auto_rotate_symbols 时，先把英文/数字词包成 <H> 块
     2. <H> 块用 _h_block_height 计算高度（和渲染一致）
     3. 普通 CJK 字符用 vertAdvance 逐字累积
     4. CJK_H2V 字形替换（通过 CJK_Compatibility_Forms_translate）
@@ -91,10 +110,11 @@ def _layout_vertical(font_size: int, text: str, max_height: int, letter_spacing:
 
     返回 (line_text_list, line_height_list)
     """
-    # 先统一 BR 标记，再加 <H> 标签。
+    # 先统一 BR 标记，再按开关决定是否自动补 <H> 标签。
     # 若先加标签，"[BR]" 可能被包进 <H> 块导致后续无法识别成换行。
     text = _BR_RE.sub('\n', text)
-    text = auto_add_horizontal_tags(text)
+    if _auto_rotate_symbols_enabled(config):
+        text = auto_add_horizontal_tags(text)
 
     line_text_list: List[str] = []
     line_height_list: List[int] = []
@@ -170,9 +190,11 @@ def _vert_line_width(line_text: str, font_size: int) -> int:
     return max_width
 
 
-def _vert_total_height(text: str, font_size: int, letter_spacing: float = 1.0) -> int:
+def _vert_total_height(text: str, font_size: int, config: Any = None, letter_spacing: float = 1.0) -> int:
     """不换行时竖排文本的总高度，考虑 <H> 块。"""
-    text = auto_add_horizontal_tags(_BR_RE.sub('', text))
+    text = _BR_RE.sub('', text)
+    if _auto_rotate_symbols_enabled(config):
+        text = auto_add_horizontal_tags(text)
     total = 0
     for part in _H_BLOCK_RE.split(text):
         if not part:
@@ -512,6 +534,98 @@ def _is_cjk_lang(lang: str) -> bool:
     lang = (lang or '').lower()
     return any(lang.startswith(p) for p in ('zh', 'ja', 'ko'))
 
+def _is_thai_lang(lang: str) -> bool:
+    lang = (lang or '').lower()
+    return lang in ('th', 'tha', 'th_th')
+
+def _measure_horizontal_line_width(font_size: int, line_text: str, letter_spacing: float = 1.0) -> int:
+    if not line_text:
+        return 0
+    if hasattr(text_render, '_measure_horizontal_line_visual_extents') and text_render.contains_thai_text(line_text):
+        left, right = text_render._measure_horizontal_line_visual_extents(
+            line_text,
+            font_size,
+            border_size=0,
+            config=None,
+            stroke_ratio=0.0,
+            reversed_direction=False,
+            letter_spacing=letter_spacing,
+        )
+        return max(0, int(round(right - left)))
+    return get_string_width(font_size, line_text, letter_spacing=letter_spacing)
+
+def _tokenize_thai_words(text: str) -> List[str]:
+    if not text:
+        return []
+
+    if HAS_PYTHAINLP:
+        try:
+            tokens = thai_word_tokenize(text, engine='nlpo3', keep_whitespace=True)
+            if tokens:
+                return tokens
+        except Exception:
+            try:
+                tokens = thai_word_tokenize(text, engine='newmm', keep_whitespace=True)
+                if tokens:
+                    return tokens
+            except Exception:
+                pass
+
+    return re.findall(r'[\u0E00-\u0E7F]+|\s+|[^\u0E00-\u0E7F\s]+', text)
+
+def _layout_horizontal_thai(font_size: int, text: str, max_width: int, letter_spacing: float = 1.0) -> Tuple[List[str], List[int]]:
+    """Thai word-level line breaking. Never split inside a token."""
+    text = _BR_RE.sub('\n', text)
+    width_limit = max(1, int(max_width))
+    lines: List[str] = []
+    widths: List[int] = []
+
+    for paragraph in text.split('\n'):
+        if not paragraph:
+            lines.append("")
+            widths.append(0)
+            continue
+
+        tokens = _tokenize_thai_words(paragraph)
+        if not tokens:
+            lines.append(paragraph)
+            widths.append(_measure_horizontal_line_width(font_size, paragraph, letter_spacing=letter_spacing))
+            continue
+
+        current_parts: List[str] = []
+        current_width = 0
+
+        for token in tokens:
+            if not token:
+                continue
+
+            token_width = _measure_horizontal_line_width(font_size, token, letter_spacing=letter_spacing)
+            next_width = current_width + token_width
+
+            if current_parts and next_width > width_limit and not token.isspace():
+                line_text = ''.join(current_parts).rstrip()
+                if line_text:
+                    lines.append(line_text)
+                    widths.append(_measure_horizontal_line_width(font_size, line_text, letter_spacing=letter_spacing))
+                current_parts = [token.lstrip()]
+                current_width = _measure_horizontal_line_width(font_size, current_parts[0], letter_spacing=letter_spacing) if current_parts[0] else 0
+                continue
+
+            if not current_parts and token.isspace():
+                continue
+
+            current_parts.append(token)
+            current_width = next_width
+
+        line_text = ''.join(current_parts).rstrip()
+        if line_text or not lines:
+            lines.append(line_text)
+            widths.append(_measure_horizontal_line_width(font_size, line_text, letter_spacing=letter_spacing))
+
+    if not lines:
+        return [""], [0]
+    return lines, widths
+
 
 def _calc_horizontal_layout(
     font_size: int,
@@ -522,6 +636,8 @@ def _calc_horizontal_layout(
     letter_spacing: float = 1.0,
 ) -> Tuple[List[str], List[int]]:
     width = max(1, int(max_width))
+    if _is_thai_lang(target_lang or 'en_US'):
+        return _layout_horizontal_thai(font_size, text, width, letter_spacing=letter_spacing)
     if _is_cjk_lang(target_lang or 'en_US'):
         return _layout_horizontal_cjk(font_size, text, width, letter_spacing=letter_spacing)
     return _layout_horizontal_eng(font_size, text, width, language=target_lang or 'en_US', hyphenate=hyphenate, letter_spacing=letter_spacing)
@@ -535,7 +651,7 @@ def _calc_vertical_layout(
     letter_spacing: float = 1.0,
 ) -> Tuple[List[str], List[int]]:
     height = max(1, int(max_height))
-    return _layout_vertical(font_size, text, height, letter_spacing=letter_spacing)
+    return _layout_vertical(font_size, text, height, config=config, letter_spacing=letter_spacing)
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +748,7 @@ def _find_best_lines_for_target_segments(
         total_budget = max(1, int(max(base_metrics))) if base_metrics else max(1, get_string_width(font_size, clean_text, letter_spacing=letter_spacing_multiplier))
     else:
         base_lines, base_metrics = _calc_vertical_layout(font_size, clean_text, 99999, config, letter_spacing=letter_spacing_multiplier)
-        total_budget = max(1, int(max(base_metrics))) if base_metrics else max(1, _vert_total_height(clean_text, font_size, letter_spacing=letter_spacing_multiplier))
+        total_budget = max(1, int(max(base_metrics))) if base_metrics else max(1, _vert_total_height(clean_text, font_size, config=config, letter_spacing=letter_spacing_multiplier))
 
     _ = base_lines
     min_budget = max(1, int(font_size))
@@ -716,7 +832,7 @@ def _measure_required_size(
     lines, heights = _calc_vertical_layout(font_size, text_with_br, 99999, config, letter_spacing=letter_spacing_multiplier)
     n = max(1, len(lines))
     spacing_x = int(font_size * 0.2 * line_spacing_multiplier)
-    required_height = max(heights) if heights else _vert_total_height(_normalize_no_br_text(text_with_br), font_size, letter_spacing=letter_spacing_multiplier)
+    required_height = max(heights) if heights else _vert_total_height(_normalize_no_br_text(text_with_br), font_size, config=config, letter_spacing=letter_spacing_multiplier)
     # 精确计算各列实际字形宽度之和，与 put_text_vertical 的 line_widths 逻辑一致
     line_widths = [_vert_line_width(line, font_size) for line in lines]
     required_width = sum(line_widths) + spacing_x * max(0, n - 1)
@@ -727,6 +843,7 @@ def _measure_unwrapped_required_size(
     text: str,
     font_size: int,
     horizontal: bool,
+    config: Any = None,
     letter_spacing_multiplier: float = 1.0,
 ) -> Tuple[int, float, float]:
     clean_text = _normalize_no_br_text(text)
@@ -737,7 +854,7 @@ def _measure_unwrapped_required_size(
         required_width = get_string_width(font_size, clean_text, letter_spacing=letter_spacing_multiplier)
         return 1, float(required_width), float(font_size)
 
-    required_height = _vert_total_height(clean_text, font_size, letter_spacing=letter_spacing_multiplier)
+    required_height = _vert_total_height(clean_text, font_size, config=config, letter_spacing=letter_spacing_multiplier)
     required_width = _vert_line_width(clean_text, font_size)
     return 1, float(required_width), float(required_height)
 
@@ -789,6 +906,7 @@ def solve_no_br_layout(
                 clean_text,
                 current_font,
                 horizontal,
+                config=config,
                 letter_spacing_multiplier=letter_spacing_multiplier,
             )
 
@@ -809,6 +927,7 @@ def solve_no_br_layout(
             clean_text,
             current_font,
             horizontal,
+            config=config,
             letter_spacing_multiplier=letter_spacing_multiplier,
         )
         return NoBrLayoutResult(clean_text, current_font, 1, required_width, required_height)

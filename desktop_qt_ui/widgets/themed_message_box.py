@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import textwrap
 
+from main_view_parts.theme import apply_widget_stylesheet, get_current_theme_colors
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import (
     QApplication,
@@ -21,6 +22,123 @@ from PyQt6.QtWidgets import (
 )
 
 _INSTALLED = False
+
+
+def _dialog_tokens() -> dict[str, str]:
+    colors = get_current_theme_colors()
+    return {
+        **colors,
+        "bg_dialog": colors["bg_panel"],
+        "border": colors["border_input"],
+        "fg": colors["text_primary"],
+        "fg_muted": colors["text_muted"],
+        "soft_bg": colors["btn_soft_bg"],
+        "soft_hover": colors["btn_soft_hover"],
+        "soft_pressed": colors["btn_soft_pressed"],
+        "soft_border": colors["btn_soft_border"],
+        "soft_text": colors["btn_soft_text"],
+        "primary_bg": colors["btn_primary_bg"],
+        "primary_hover": colors["btn_primary_hover"],
+        "primary_pressed": colors["btn_primary_pressed"],
+        "primary_border": colors["btn_primary_border"],
+        "primary_text": colors["btn_primary_text"],
+    }
+
+
+def _error_dialog_stylesheet() -> str:
+    t = _dialog_tokens()
+    return f"""
+        QDialog#errorDialog {{
+            background: {t["bg_dialog"]};
+            border: 1px solid {t["border"]};
+            border-radius: 14px;
+        }}
+        QDialog#errorDialog QLabel {{
+            background: transparent;
+            color: {t["fg"]};
+            font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+            font-size: 12px;
+        }}
+        QDialog#errorDialog QLabel#errorDialogTitle {{
+            color: {t["fg"]};
+            font-size: 13px;
+            font-weight: 700;
+        }}
+        QDialog#errorDialog QWidget#dialogHeader {{
+            background: transparent;
+        }}
+        QDialog#errorDialog QLabel#dialogWindowTitle {{
+            color: {t["fg"]};
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        QDialog#errorDialog QLabel#dialogIcon {{
+            background: transparent;
+        }}
+        QDialog#errorDialog QToolButton#dialogCloseButton {{
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            color: {t["fg_muted"]};
+            font-size: 16px;
+            font-weight: 600;
+            min-width: 28px;
+            min-height: 28px;
+            padding: 0;
+        }}
+        QDialog#errorDialog QToolButton#dialogCloseButton:hover {{
+            background: {t["soft_bg"]};
+            color: {t["fg"]};
+        }}
+        QDialog#errorDialog QToolButton#dialogCloseButton:pressed {{
+            background: {t["soft_pressed"]};
+        }}
+        QDialog#errorDialog QScrollArea#errorDialogScroll {{
+            background: transparent;
+            border: none;
+        }}
+        QDialog#errorDialog QWidget#qt_scrollarea_viewport,
+        QDialog#errorDialog QScrollArea#errorDialogScroll > QWidget > QWidget {{
+            background: transparent;
+        }}
+        QDialog#errorDialog QLabel#errorDialogDetails {{
+            background: transparent;
+            color: {t["fg"]};
+            border: none;
+            font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+            font-size: 12px;
+            padding: 0;
+        }}
+        QDialog#errorDialog QDialogButtonBox QPushButton {{
+            min-width: 88px;
+            min-height: 34px;
+            border-radius: 8px;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            background: {t["soft_bg"]};
+            border: 1px solid {t["soft_border"]};
+            color: {t["soft_text"]};
+        }}
+        QDialog#errorDialog QDialogButtonBox QPushButton:hover {{
+            background: {t["soft_hover"]};
+            border-color: {t["border"]};
+        }}
+        QDialog#errorDialog QDialogButtonBox QPushButton:pressed {{
+            background: {t["soft_pressed"]};
+        }}
+        QDialog#errorDialog QDialogButtonBox QPushButton[dialogDefault="true"] {{
+            background: {t["primary_bg"]};
+            border: 1px solid {t["primary_border"]};
+            color: {t["primary_text"]};
+        }}
+        QDialog#errorDialog QDialogButtonBox QPushButton[dialogDefault="true"]:hover {{
+            background: {t["primary_hover"]};
+        }}
+        QDialog#errorDialog QDialogButtonBox QPushButton[dialogDefault="true"]:pressed {{
+            background: {t["primary_pressed"]};
+        }}
+    """
 
 
 def _refresh_button_state(box: QMessageBox) -> None:
@@ -74,6 +192,7 @@ def apply_message_box_style(box: QMessageBox) -> QMessageBox:
 def apply_error_dialog_style(dialog: QDialog) -> QDialog:
     dialog.setObjectName("errorDialog")
     dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    apply_widget_stylesheet(dialog, _error_dialog_stylesheet())
     style = dialog.style()
     style.unpolish(dialog)
     style.polish(dialog)

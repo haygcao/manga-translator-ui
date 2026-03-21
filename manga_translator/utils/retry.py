@@ -2,7 +2,6 @@ import asyncio
 import re
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
-
 T = TypeVar("T")
 
 _HTTP_STATUS_RE = re.compile(r"(?:status|http)\s*(\d{3})", re.IGNORECASE)

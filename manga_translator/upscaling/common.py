@@ -1,8 +1,10 @@
-from PIL import Image
-from typing import List
 from abc import abstractmethod
+from typing import List
+
+from PIL import Image
 
 from ..utils import InfererModule, ModelWrapper
+
 
 class CommonUpscaler(InfererModule):
     _VALID_UPSCALE_RATIOS = []

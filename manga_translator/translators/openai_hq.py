@@ -1,16 +1,24 @@
-import os
-import re
 import asyncio
 import base64
 import logging
+import os
+import re
 from io import BytesIO
-from typing import List, Dict, Any
-from PIL import Image
-import openai
+from typing import Any, Dict, List
 
-from .common import CommonTranslator, VALID_LANGUAGES, draw_text_boxes_on_image, parse_json_or_text_response, merge_glossary_to_file, get_glossary_extraction_prompt, parse_hq_response, validate_openai_response, AsyncOpenAICurlCffi
-from .keys import OPENAI_API_KEY, OPENAI_MODEL
-from ..utils import Context
+import openai
+from PIL import Image
+
+from .common import (
+    VALID_LANGUAGES,
+    AsyncOpenAICurlCffi,
+    CommonTranslator,
+    draw_text_boxes_on_image,
+    merge_glossary_to_file,
+    parse_hq_response,
+    validate_openai_response,
+)
+from .keys import OPENAI_API_KEY
 
 # 禁用openai库的DEBUG日志,避免打印base64图片数据
 logging.getLogger("openai").setLevel(logging.WARNING)
@@ -161,7 +169,6 @@ class OpenAIHighQualityTranslator(CommonTranslator):
         if force_recreate and self.client:
             # 关闭旧客户端，断开连接
             try:
-                import asyncio
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # 如果事件循环正在运行，创建任务异步关闭
@@ -208,7 +215,6 @@ class OpenAIHighQualityTranslator(CommonTranslator):
         """析构函数，确保资源被清理"""
         if self.client:
             try:
-                import asyncio
                 loop = asyncio.get_event_loop()
                 if not loop.is_running() and not loop.is_closed():
                     # 如果事件循环未关闭，同步执行清理

@@ -1,23 +1,25 @@
+import math
 import os
+
 # import re
 # import subprocess
 # import tempfile
 import shutil
-import einops
-# import tqdm
-from sys import platform
-from typing import List
-from PIL import Image
 
 # this file is adapted from https://github.com/victorca25/iNNfer
-
 from collections import OrderedDict
-import math
+
+# import tqdm
+from typing import List
+
+import einops
+import numpy as np
+
 # import functools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+from PIL import Image
 
 from .common import OfflineUpscaler
 

@@ -1,9 +1,11 @@
 """Utils for monoDepth."""
-import sys
 import re
-import numpy as np
+import sys
+
 import cv2
+import numpy as np
 import torch
+
 from manga_translator.utils.generic import imwrite_unicode
 
 

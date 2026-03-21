@@ -1,11 +1,10 @@
 import os
 import re
-from typing import Dict, List, Optional
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Optional
 
-from PIL import Image
-from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, pyqtSlot
+from PyQt6.QtCore import QObject, QSize, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -17,8 +16,8 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QWidget,
 )
-from manga_translator.utils import open_pil_image
 
+from manga_translator.utils import open_pil_image
 
 # 全局线程池，用于异步加载缩略图
 _thumbnail_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="thumbnail_loader")
@@ -303,8 +302,8 @@ class FileListView(QTreeWidget):
         
         # 只在列表为空时显示提示
         if self.topLevelItemCount() == 0:
-            from PyQt6.QtGui import QPainter, QFont
-            from PyQt6.QtCore import Qt, QRect
+            from PyQt6.QtCore import Qt
+            from PyQt6.QtGui import QFont, QPainter
             
             painter = QPainter(self.viewport())
             painter.setPen(self.palette().color(QPalette.ColorRole.PlaceholderText))
@@ -771,7 +770,7 @@ class FileListView(QTreeWidget):
                     if os.path.splitext(filename)[1].lower() in all_extensions:
                         count += 1
             return count
-        except:
+        except Exception:
             return 0
     
     def _populate_folder_tree(self, parent_item: QTreeWidgetItem, folder_path: str):
@@ -949,7 +948,7 @@ class FileListView(QTreeWidget):
         # 临时断开选择信号，避免删除时触发选择事件
         try:
             self.itemSelectionChanged.disconnect(self._on_selection_changed)
-        except:
+        except Exception:
             pass
         
         try:
@@ -1011,7 +1010,7 @@ class FileListView(QTreeWidget):
             # 重新连接选择信号
             try:
                 self.itemSelectionChanged.connect(self._on_selection_changed)
-            except:
+            except Exception:
                 pass
     
     def _remove_folder_nodes_recursive(self, item: QTreeWidgetItem):

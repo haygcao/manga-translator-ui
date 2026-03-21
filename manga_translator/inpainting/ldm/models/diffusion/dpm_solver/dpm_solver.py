@@ -1,6 +1,7 @@
-import torch
 # import torch.nn.functional as F
 import math
+
+import torch
 from tqdm import tqdm
 
 
@@ -13,7 +14,7 @@ class NoiseScheduleVP:
             continuous_beta_0=0.1,
             continuous_beta_1=20.,
     ):
-        """Create a wrapper class for the forward SDE (VP type).
+        r"""Create a wrapper class for the forward SDE (VP type).
         ***
         Update: We support discrete-time diffusion models by implementing a picewise linear interpolation for log_alpha_t.
                 We recommend to use schedule='discrete' for the discrete-time diffusion models, especially for high-resolution images.

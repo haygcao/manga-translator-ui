@@ -3,13 +3,12 @@
 """
 子进程管理器 - 支持内存管理和断点续传
 """
-import os
-import sys
 # import json
 import multiprocessing
+import os
+import sys
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import List, Dict, Optional, Tuple
+from typing import List, Optional, Tuple
 
 ROOT_DIR = Path(__file__).parent.parent.parent
 
@@ -73,15 +72,13 @@ def worker_translate_batch(
         sys.path.insert(0, str(ROOT_DIR))
         sys.path.insert(0, str(ROOT_DIR / 'desktop_qt_ui'))
         
-        from manga_translator import MangaTranslator, Config
-        from manga_translator.utils import init_logging, set_log_level, get_logger, open_pil_image
         import logging
-        import gc
+
+        from manga_translator import Config, MangaTranslator
+        from manga_translator.utils import init_logging, open_pil_image, set_log_level
         
         init_logging()
         set_log_level(logging.DEBUG if verbose else logging.INFO)
-        
-        _logger = get_logger('local_worker')
         
         # 应用命令行参数
         cli_config = config_dict.get('cli', {})
@@ -171,7 +168,7 @@ def worker_translate_batch(
                     import torch
                     if torch.cuda.is_available():
                         pass
-                except:
+                except Exception:
                     pass
             
             # 检查内存使用

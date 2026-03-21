@@ -5,12 +5,15 @@
 """
 
 import logging
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from manga_translator.server.core.middleware import require_auth
 from manga_translator.server.core.models import Session
+from manga_translator.server.core.permission_integration import (
+    IntegratedPermissionService,
+)
 from manga_translator.server.core.resource_service import ResourceManagementService
-from manga_translator.server.core.permission_integration import IntegratedPermissionService
 
 logger = logging.getLogger(__name__)
 

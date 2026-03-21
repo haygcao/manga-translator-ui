@@ -7,14 +7,13 @@
 """
 
 import asyncio
-import threading
-from concurrent.futures import ThreadPoolExecutor, Future
-from datetime import datetime, timezone
-from typing import Optional, Callable, Any
 import logging
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional
 
 from manga_translator.server.core.logging_manager import add_log
-
 
 logger = logging.getLogger('manga_translator.server')
 
@@ -205,7 +204,7 @@ def cancel_task(task_id: str, force: bool = False) -> dict:
 
 def update_server_config(config: dict):
     """更新服务器配置"""
-    global server_config, _global_translator, _translator_params_hash
+    global _global_translator, _translator_params_hash
     
     # 检查是否需要重建翻译器
     rebuild_translator = False
@@ -354,12 +353,12 @@ def reset_global_translator():
             
             # 强制垃圾回收
             import gc
-            pass
+            gc.collect()
             # 清理 GPU 显存
             try:
                 import torch
                 if torch.cuda.is_available():
-                    pass
+                    torch.cuda.empty_cache()
                     logger.info("GPU 显存已清理")
             except Exception:
                 pass
@@ -449,12 +448,12 @@ def cleanup_after_request():
                 logger.warning(f"[MEMORY] 清理翻译器状态时出错: {e}")
     
     # 5. 强制垃圾回收
-    pass
+    gc.collect()
     # 6. 清理 GPU 显存
     try:
         import torch
         if torch.cuda.is_available():
-            pass
+            torch.cuda.empty_cache()
     except Exception:
         pass
     
@@ -519,4 +518,4 @@ def cleanup_context(ctx):
     # result 单独处理（通常需要保留给前端）
     # 调用方负责在使用完result后调用此函数清理
     
-    pass
+    gc.collect()

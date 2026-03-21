@@ -1,18 +1,18 @@
+import glob
 import json
+import logging
 import os
 import re
-import glob
-from typing import List, Tuple
-import logging
 import sys
+from typing import List, Tuple
 
 # 添加项目根目录到路径以便导入path_manager
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from manga_translator.utils.path_manager import (
+    find_json_path,
+    find_txt_files,
     get_original_txt_path,
     get_translated_txt_path,
-    find_json_path,
-    find_txt_files
 )
 
 logger = logging.getLogger(__name__)
@@ -645,8 +645,8 @@ def import_with_custom_template(
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
-    import sys
     import os
+    import sys
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
@@ -827,10 +827,9 @@ def safe_update_large_json_from_text(
     安全地更新大型JSON文件，保护原始数据完整性
     """
     logger.debug(f"Starting safe update. TXT: '{os.path.basename(text_file_path)}', JSON: '{os.path.basename(json_file_path)}'")
-    import gc
-    import time
     import shutil
     import tempfile
+    import time
     
     # 检查文件存在
     for file_path, name in [(text_file_path, "TXT"), (json_file_path, "JSON"), (template_path, "模板")]:
@@ -1062,7 +1061,7 @@ def safe_update_large_json_from_text(
             with open(json_file_path, 'r', encoding='utf-8') as f:
                 json.load(f)
             logger.info("文件完整性验证通过")
-        except:
+        except Exception:
             # 如果验证失败，恢复备份
             logger.error("File integrity check failed! Restoring backup.")
             if backup_path and os.path.exists(backup_path):
@@ -1078,9 +1077,9 @@ def safe_update_large_json_from_text(
                 try:
                     os.remove(old_backup)
                     logger.debug(f"删除旧备份: {os.path.basename(old_backup)}")
-                except:
+                except Exception:
                     pass
-        except:
+        except Exception:
             pass
 
         return f"成功更新 {updated_count} 条翻译 (总时间: {load_time + update_time + write_time:.2f}秒)"
@@ -1094,7 +1093,7 @@ def safe_update_large_json_from_text(
             try:
                 logger.debug(f"Cleaning up temporary file: {temp_path}")
                 os.remove(temp_path)
-            except:
+            except Exception:
                 pass
         
         # 尝试恢复备份
@@ -1103,7 +1102,7 @@ def safe_update_large_json_from_text(
                 logger.warning("Exception occurred, attempting to restore backup.")
                 shutil.copy2(backup_path, json_file_path)
                 error_msg += " (已恢复备份文件)"
-            except:
+            except Exception:
                 error_msg += " (备份恢复失败，请手动恢复)"
         
         logger.error(error_msg)

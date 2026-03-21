@@ -1,12 +1,11 @@
 import struct
-from typing import List, Annotated
+from typing import Annotated, List
 
 import numpy as np
 from pydantic import BaseModel, WithJsonSchema
 
 from manga_translator import Context
 from manga_translator.utils import TextBlock
-
 
 #input:PIL,
 #result:PIL
@@ -118,6 +117,7 @@ def to_translation(ctx: Context) -> TranslationResponse:
     if hasattr(ctx, 'mask') and ctx.mask is not None:
         try:
             import base64
+
             import cv2
             _, buffer = cv2.imencode('.png', ctx.mask)
             mask_base64 = base64.b64encode(buffer).decode('utf-8')

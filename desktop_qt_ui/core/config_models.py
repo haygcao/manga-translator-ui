@@ -1,16 +1,18 @@
 from typing import Any, Dict, List, Optional, Union
-import os
 
 from pydantic import BaseModel, Field, model_validator
-
-from manga_translator.custom_api_params import migrate_legacy_custom_api_params_config
 from theme_registry import VALID_THEME_PREFERENCES as REGISTERED_THEME_PREFERENCES
 from theme_registry import VALID_THEMES as REGISTERED_THEMES
+
+from manga_translator.custom_api_params import migrate_legacy_custom_api_params_config
+
+VALID_LAYOUT_MODES = {"smart_scaling", "strict", "balloon_fill"}
 
 
 class TranslatorSettings(BaseModel):
     translator: str = "openai_hq"
     target_lang: str = "CHS"
+    keep_lang: str = "none"
     enable_streaming: bool = True
     no_text_lang_skip: bool = False
     # 相对路径，后端会用BASE_PATH拼接（打包后=_internal，开发时=项目根目录）
@@ -45,6 +47,7 @@ class DetectorSettings(BaseModel):
     text_threshold: float = 0.5
     box_threshold: float = 0.5
     unclip_ratio: float = 2.5
+    import_yolo_labels: bool = False
     use_yolo_obb: bool = False
     yolo_obb_conf: float = 0.4
     yolo_obb_overlap_threshold: float = 0.1
@@ -86,6 +89,15 @@ class RenderSettings(BaseModel):
     paste_mask_dilation_pixels: int = 10  # 粘贴模式蒙版膨胀大小（像素），设为0禁用膨胀
     ai_renderer_concurrency: int = 1
 
+    @model_validator(mode="after")
+    def _validate_layout_mode(self):
+        if self.layout_mode not in VALID_LAYOUT_MODES:
+            raise ValueError(
+                f"Invalid render.layout_mode: {self.layout_mode!r}. "
+                f"Supported values: {', '.join(sorted(VALID_LAYOUT_MODES))}"
+            )
+        return self
+
 class UpscaleSettings(BaseModel):
     upscaler: str = "esrgan"
     upscale_ratio: Optional[Union[int, str]] = None  # 可以是数字或字符串(mangajanai: x2, x4, DAT2 x4)
@@ -111,6 +123,7 @@ class CliSettings(BaseModel):
     skip_no_text: bool = False
     save_text: bool = True
     load_text: bool = False
+    translate_json_only: bool = False
     template: bool = False
     save_quality: int = 100
     batch_size: int = 1

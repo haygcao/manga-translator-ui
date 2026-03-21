@@ -1,16 +1,17 @@
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Tuple
+
 import cv2
 import numpy as np
 
-from .text_mask_utils import complete_mask_fill, complete_mask
 from ..utils import (
-    TextBlock,
     Quadrilateral,
+    TextBlock,
     build_bubble_mask_from_mangalens_result,
     get_cached_bubbles_with_mangalens,
     imwrite_unicode,
 )
 from ..utils.log import get_logger
+from .text_mask_utils import complete_mask, complete_mask_fill
 
 logger = get_logger('mask_refinement')
 

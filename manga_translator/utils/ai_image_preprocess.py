@@ -2,7 +2,6 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-
 _LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
 

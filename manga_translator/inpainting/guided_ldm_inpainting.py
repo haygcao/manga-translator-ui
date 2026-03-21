@@ -1,27 +1,19 @@
 
 
 # import einops
-import torch
 # import torch as th
 # import torch.nn as nn
 import numpy as np
+import torch
 from tqdm import tqdm
-# import cv2
 
-from .ldm.modules.diffusionmodules.util import (
-    conv_nd,
-    linear,
-    zero_module,
-    timestep_embedding,
-)
-from .ldm.modules.diffusionmodules.util import noise_like
-from einops import rearrange, repeat
-from torchvision.utils import make_grid
-from .ldm.modules.attention import SpatialTransformer
-from .ldm.modules.diffusionmodules.openaimodel import UNetModel, TimestepEmbedSequential, ResBlock, Downsample, AttentionBlock
-from .ldm.models.diffusion.ddpm import LatentDiffusion
 from .ldm.models.diffusion.ddim import DDIMSampler
-from .ldm.util import log_txt_as_img, exists, instantiate_from_config
+from .ldm.models.diffusion.ddpm import LatentDiffusion
+
+# import cv2
+from .ldm.modules.diffusionmodules.util import noise_like
+from .ldm.util import instantiate_from_config
+
 
 class GuidedDDIMSample(DDIMSampler) :
     def __init__(self, *args, **kwargs):
@@ -98,7 +90,6 @@ class GuidedDDIMSample(DDIMSampler) :
         iterator = tqdm(time_range, desc='Decoding image', total=total_steps)
         x_dec = x_latent
         for i, step in enumerate(iterator):
-            _p = (i + (total_steps - t_start) + 1) / (total_steps)
             index = total_steps - i - 1
             ts = torch.full((x_latent.shape[0],), step, device=x_latent.device, dtype=torch.long)
             if nmask is not None :
@@ -131,6 +122,7 @@ def get_empty_image_condition(latent) :
     return latent.new_zeros(latent.shape[0], 5, latent.shape[2], latent.shape[3])
 
 from PIL import Image, ImageFilter, ImageOps
+
 
 def fill_mask_input(image, mask):
     """fills masked regions with colors from image using blur. Not extremely effective."""
@@ -227,10 +219,8 @@ class GuidedLDM(LatentDiffusion):
         return torch.clip(x_samples, -1, 1)
     
 import os
-import torch
 
 from omegaconf import OmegaConf
-from ldm.util import instantiate_from_config
 
 
 def get_state_dict(d):

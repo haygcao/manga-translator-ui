@@ -100,11 +100,17 @@
 
 | 模型 | 说明 |
 |------|------|
+| **32px** | 旧版轻量模型，可作兼容性备选 |
 | **48px** | 默认模型，日漫推荐 |
 | **48px_ctc** | CTC 变体模型，可作为备选对比 |
 | **mocr** | Manga OCR 专用模型，日漫推荐 |
-| **paddleocr** | PaddleOCR 引擎，英肉推荐 |
+| **paddleocr** | 通用多语言模型 |
 | **paddleocr_korean** | 韩漫推荐 |
+| **paddleocr_latin** | 拉丁字母文本推荐，英文建议优先使用 |
+| **paddleocr_thai** | 泰文推荐 |
+| **paddleocr_vl** | 通用模型，效果最好但最吃配置 |
+| **openai_ocr** | 调用 OpenAI 兼容多模态接口做 OCR，通常效果最好，但按框消耗请求次数 |
+| **gemini_ocr** | 调用 Gemini 多模态接口做 OCR，通常效果最好，但按框消耗请求次数 |
 
 推荐组合：日漫混合 OCR 建议使用 `48px + mocr`。
 

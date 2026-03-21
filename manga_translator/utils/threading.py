@@ -1,5 +1,6 @@
 import asyncio
 
+
 class PriorityLock:
     """
     Lock object which prioritizes each acquire

@@ -1,13 +1,21 @@
-import numpy as np
 from typing import Any, List, Optional
+
+import numpy as np
+
+from ..config import Ocr, OcrConfig
+from ..utils import Quadrilateral
 from .common import CommonOCR, OfflineOCR
 from .model_32px import Model32pxOCR
 from .model_48px import Model48pxOCR
 from .model_48px_ctc import Model48pxCTCOCR
+
 # ModelMangaOCR 延迟导入，避免未使用时下载模型
-from .model_paddleocr import ModelPaddleOCR, ModelPaddleOCRKorean, ModelPaddleOCRLatin, ModelPaddleOCRThai
-from ..config import Ocr, OcrConfig
-from ..utils import Quadrilateral
+from .model_paddleocr import (
+    ModelPaddleOCR,
+    ModelPaddleOCRKorean,
+    ModelPaddleOCRLatin,
+    ModelPaddleOCRThai,
+)
 
 
 def _get_manga_ocr_class():

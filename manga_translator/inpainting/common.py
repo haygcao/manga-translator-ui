@@ -1,9 +1,11 @@
 import os
-import numpy as np
 from abc import abstractmethod
+
+import numpy as np
 
 from ..config import InpainterConfig
 from ..utils import InfererModule, ModelWrapper
+
 
 class CommonInpainter(InfererModule):
 
@@ -25,8 +27,9 @@ class OfflineInpainter(CommonInpainter, ModelWrapper):
     
     def _cleanup_memory(self):
         """统一的Inpainting内存清理方法，在每次推理后自动调用"""
-        import torch
         import gc
+
+        import torch
 
         gc.collect()
         if torch.cuda.is_available():
