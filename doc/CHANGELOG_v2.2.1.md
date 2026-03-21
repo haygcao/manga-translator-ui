@@ -17,6 +17,8 @@
 - 统一 `skip_font_scaling` 的解析与保留逻辑。
 - 统一 CLI 覆盖检测入口，避免普通模式和子进程模式行为不一致。
 - 优化 OpenAI 兼容接口的 API Key 校验逻辑：非 OpenAI 官方地址（如 Ollama、本地/局域网部署、自定义域名反代）现在支持留空 API Key，不再在 Qt UI 启动前被强制拦截。
+- 安装脚本（步骤1）国内克隆源由 gh-proxy 改为 Gitee 镜像（`https://gitee.com/hgmzhn/manga-translator-ui`），更稳定可靠。
+- 移除 `main.py` 中硬编码的 Hugging Face 镜像站及 SSL 验证禁用，避免影响非国内用户的正常下载。
 
 ## 📝 说明
 

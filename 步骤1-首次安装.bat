@@ -493,12 +493,14 @@ if exist ".git" (
         set CURRENT_CLEAN=!CURRENT_CLEAN:https://mirror.ghproxy.com/https://github.com/=https://github.com/!
         set CURRENT_CLEAN=!CURRENT_CLEAN:https://ghfast.top/https://github.com/=https://github.com/!
         set CURRENT_CLEAN=!CURRENT_CLEAN:https://gitproxy.click/https://github.com/=https://github.com/!
-        
+        set CURRENT_CLEAN=!CURRENT_CLEAN:https://gitee.com/hgmzhn/=https://github.com/hgmzhn/!
+
         set TARGET_CLEAN=!TARGET_CLEAN:https://gh-proxy.com/https://github.com/=https://github.com/!
         set TARGET_CLEAN=!TARGET_CLEAN:https://ghproxy.com/https://github.com/=https://github.com/!
         set TARGET_CLEAN=!TARGET_CLEAN:https://mirror.ghproxy.com/https://github.com/=https://github.com/!
         set TARGET_CLEAN=!TARGET_CLEAN:https://ghfast.top/https://github.com/=https://github.com/!
         set TARGET_CLEAN=!TARGET_CLEAN:https://gitproxy.click/https://github.com/=https://github.com/!
+        set TARGET_CLEAN=!TARGET_CLEAN:https://gitee.com/hgmzhn/=https://github.com/hgmzhn/!
         
         if "!CURRENT_CLEAN!"=="!TARGET_CLEAN!" (
             echo [OK] 仓库地址匹配,正在强制同步到最新版本...
@@ -661,7 +663,7 @@ goto :do_clone
 :get_repo_url
 echo 请选择克隆源:
 echo [1] GitHub 官方 (国外推荐)
-echo [2] gh-proxy.com 镜像 (国内推荐)
+echo [2] Gitee 镜像 (国内推荐)
 echo [3] 手动输入仓库地址
 echo.
 set /p repo_choice="请选择 (1/2/3, 默认2): "
@@ -673,8 +675,8 @@ if "%repo_choice%"=="1" (
     set /p REPO_URL="请输入仓库地址: "
     echo 使用: 自定义地址
 ) else (
-    set REPO_URL=https://gh-proxy.com/https://github.com/hgmzhn/manga-translator-ui.git
-    echo 使用: gh-proxy.com镜像
+    set REPO_URL=https://gitee.com/hgmzhn/manga-translator-ui.git
+    echo 使用: Gitee镜像
 )
 echo.
 goto :eof
@@ -702,7 +704,7 @@ echo.
 echo 可能原因:
 echo 1. 网络连接问题
 echo 2. 仓库地址错误
-echo 3. GitHub访问受限 (请选择GHProxy镜像重试)
+echo 3. GitHub访问受限 (请选择Gitee镜像重试)
 echo.
 if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%"
 set /p retry="是否重试? (y/n): "

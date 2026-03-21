@@ -14,18 +14,6 @@ warnings.filterwarnings('ignore', module='xformers')
 # expandable_segments 可以减少显存碎片，避免 OOM 错误
 os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 
-# 设置 Hugging Face 镜像站（国内用户加速下载）
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-os.environ['HF_HUB_ENDPOINT'] = 'https://hf-mirror.com'
-
-# 禁用 SSL 验证（解决 hf-mirror.com 证书问题）
-import ssl
-
-ssl._create_default_https_context = ssl._create_unverified_context
-os.environ['CURL_CA_BUNDLE'] = ''
-os.environ['REQUESTS_CA_BUNDLE'] = ''
-os.environ['HF_HUB_DISABLE_SSL_VERIFY'] = '1'
-
 # 修复便携版Python的路径问题：将脚本所在目录添加到sys.path开头
 # 便携版Python使用._pth文件会禁用自动添加脚本目录的默认行为
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
