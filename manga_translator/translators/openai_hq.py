@@ -364,7 +364,7 @@ class OpenAIHighQualityTranslator(CommonTranslator):
                 def _on_stream_chunk(delta_text, _full_text):
                     # 避免 INFO 级别下流式增量刷屏；仅在 DEBUG 时显示逐块预览
                     if self.logger.isEnabledFor(logging.DEBUG):
-                        self._emit_stream_json_preview("[OpenAI HQ Stream]", _full_text, source_texts=texts)
+                        self._emit_stream_json_preview("[OpenAI HQ Stream]", delta_text, source_texts=texts)
 
                 streamed_text = None
                 streamed_finish_reason = None
@@ -497,11 +497,7 @@ class OpenAIHighQualityTranslator(CommonTranslator):
                         await self._sleep_with_cancel_polling(2)
                         continue
 
-                    if not self._has_stream_result_pairs():
-                        self.logger.info("--- Translation Results ---")
-                        for original, translated in zip(texts, translations):
-                            self.logger.info(f'{original} -> {translated}')
-                    self.logger.info("---------------------------")
+                    self._emit_final_translation_results(texts, translations)
 
                     # BR检查：检查翻译结果是否包含必要的[BR]标记
                     # BR check: Check if translations contain necessary [BR] markers

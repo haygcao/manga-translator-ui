@@ -304,7 +304,7 @@ class GeminiTranslator(CommonTranslator):
                     return getattr(chunk, "text", "") or ""
                 
                 def _on_stream_chunk(delta_text, _full_text):
-                    self._emit_stream_json_preview("[Gemini Stream]", _full_text, source_texts=texts)
+                    self._emit_stream_json_preview("[Gemini Stream]", delta_text, source_texts=texts)
 
                 response = None
                 streamed_text = None
@@ -484,11 +484,7 @@ class GeminiTranslator(CommonTranslator):
                     continue
 
                 # 打印原文和译文的对应关系
-                if not self._has_stream_result_pairs():
-                    self.logger.info("--- Translation Results ---")
-                    for original, translated in zip(texts, translations):
-                        self.logger.info(f'{original} -> {translated}')
-                self.logger.info("---------------------------")
+                self._emit_final_translation_results(texts, translations)
 
                 # BR检查：检查翻译结果是否包含必要的[BR]标记
                 if not self._validate_br_markers(translations, queries=texts, ctx=ctx):

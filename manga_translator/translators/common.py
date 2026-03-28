@@ -1388,6 +1388,13 @@ class CommonTranslator(InfererModule):
         self._stream_inline_buffer = ""
         self._stream_json_seen: Dict[int, str] = {}
         self._stream_term_seen: Dict[Tuple[str, str], str] = {}
+        self._stream_preview_buffer = ""
+        self._stream_preview_scan_pos = 0
+        self._stream_preview_object_starts: List[int] = []
+        self._stream_preview_in_string = False
+        self._stream_preview_escape = False
+        self._stream_preview_tag_tail = ""
+        self._stream_preview_in_think = False
         self._stream_result_header_printed = False
         self._stream_result_pairs_printed = False
 
@@ -2264,11 +2271,47 @@ class CommonTranslator(InfererModule):
     def _reset_stream_json_preview(self) -> None:
         self._stream_json_seen = {}
         self._stream_term_seen = {}
+        self._stream_preview_buffer = ""
+        self._stream_preview_scan_pos = 0
+        self._stream_preview_object_starts = []
+        self._stream_preview_in_string = False
+        self._stream_preview_escape = False
+        self._stream_preview_tag_tail = ""
+        self._stream_preview_in_think = False
         self._stream_result_header_printed = False
         self._stream_result_pairs_printed = False
 
     def _has_stream_result_pairs(self) -> bool:
         return bool(self._stream_result_pairs_printed)
+
+    def _emit_final_translation_results(self, source_texts: List[str], translations: List[str]) -> None:
+        """
+        输出最终翻译结果。
+        - 若流式预览没有完整覆盖最终结果，则补打一份最终快照
+        - 若预览内容与最终结果一致，则只输出结尾分隔线，避免重复刷屏
+        """
+        should_log_full = not self._has_stream_result_pairs()
+
+        if not should_log_full:
+            if len(source_texts) != len(translations):
+                should_log_full = True
+            else:
+                for tid, translated in enumerate(translations, start=1):
+                    if self._stream_json_seen.get(tid) != translated:
+                        should_log_full = True
+                        break
+
+        if should_log_full:
+            if self._stream_result_header_printed:
+                self.logger.info("--- Final Translation Results ---")
+            else:
+                self.logger.info("--- Translation Results ---")
+                self._stream_result_header_printed = True
+            for original, translated in zip(source_texts, translations):
+                self.logger.info(f"{original} -> {translated}")
+            self._stream_result_pairs_printed = True
+
+        self.logger.info("---------------------------")
 
     def _emit_terms_from_list(self, new_terms: List[Dict[str, str]]) -> None:
         """统一输出术语提取结果；按(原文,译文)去重并优先保留带分类版本。"""
@@ -2301,58 +2344,238 @@ class CommonTranslator(InfererModule):
             else:
                 self.logger.info(f"[TERM] {term_o} -> {term_t}")
 
-    def _emit_stream_json_preview(self, prefix: str, full_text: str, source_texts: Optional[List[str]] = None) -> None:
+    def _filter_stream_preview_delta(self, delta_text: str) -> str:
         """
-        从流式累计文本中提取已闭合的 {"id": n, "translation": "..."}，按 id 去重输出。
-        这样可避免直接打印原始 JSON 分片导致的乱码和重复刷屏。
+        以流式方式剥离 <think>/<answer> 标签，仅返回应参与 JSON 预览解析的新增正文。
         """
-        if not full_text:
-            return
-        pattern = r'"id"\s*:\s*(\d+)\s*,\s*"translation"\s*:\s*"((?:\\.|[^"\\])*)"'
-        for m in re.finditer(pattern, full_text, flags=re.DOTALL):
-            try:
-                tid = int(m.group(1))
-            except Exception:
-                continue
-            raw_text = m.group(2)
-            try:
-                decoded_text = json.loads(f'"{raw_text}"')
-            except Exception:
-                decoded_text = raw_text.replace('\\"', '"').replace("\\n", "\n")
-            if self._stream_json_seen.get(tid) == decoded_text:
-                continue
-            self._stream_json_seen[tid] = decoded_text
-            if not self._stream_result_header_printed:
-                self.logger.info("--- Translation Results ---")
-                self._stream_result_header_printed = True
-            if source_texts and 1 <= tid <= len(source_texts):
-                self.logger.info(f"{source_texts[tid - 1]} -> {decoded_text}")
-            else:
-                self.logger.info(f"{prefix} #{tid}: {decoded_text}")
-            self._stream_result_pairs_printed = True
+        if not delta_text:
+            return ""
 
-        term_pattern = r'"original"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"translation"\s*:\s*"((?:\\.|[^"\\])*)"(?:\s*,\s*"category"\s*:\s*"((?:\\.|[^"\\])*)")?'
-        stream_terms: List[Dict[str, str]] = []
-        for tm in re.finditer(term_pattern, full_text, flags=re.DOTALL):
-            raw_o, raw_t, raw_c = tm.group(1), tm.group(2), tm.group(3) or ""
+        known_tags = ("<think>", "</think>", "<answer>", "</answer>")
+        data = f"{self._stream_preview_tag_tail}{delta_text}"
+        self._stream_preview_tag_tail = ""
+        out_parts: List[str] = []
+        i = 0
+
+        while i < len(data):
+            if self._stream_preview_in_think:
+                close_idx = data.lower().find("</think>", i)
+                if close_idx == -1:
+                    keep = min(len("</think>") - 1, len(data) - i)
+                    self._stream_preview_tag_tail = data[-keep:] if keep > 0 else ""
+                    return "".join(out_parts)
+                i = close_idx + len("</think>")
+                self._stream_preview_in_think = False
+                continue
+
+            lt_idx = data.find("<", i)
+            if lt_idx == -1:
+                out_parts.append(data[i:])
+                break
+
+            if lt_idx > i:
+                out_parts.append(data[i:lt_idx])
+
+            lower_rem = data[lt_idx:].lower()
+            matched = False
+            for tag in known_tags:
+                if lower_rem.startswith(tag):
+                    matched = True
+                    if tag == "<think>":
+                        self._stream_preview_in_think = True
+                    i = lt_idx + len(tag)
+                    break
+                if tag.startswith(lower_rem):
+                    self._stream_preview_tag_tail = data[lt_idx:]
+                    return "".join(out_parts)
+
+            if matched:
+                continue
+
+            out_parts.append("<")
+            i = lt_idx + 1
+
+        return "".join(out_parts)
+
+    def _consume_completed_stream_preview_objects(self) -> List[str]:
+        """
+        从 preview_buffer 的 scan_pos 开始增量扫描，提取新闭合的 JSON 对象。
+        """
+        completed_objects: List[str] = []
+        i = self._stream_preview_scan_pos
+
+        while i < len(self._stream_preview_buffer):
+            ch = self._stream_preview_buffer[i]
+
+            if not self._stream_preview_object_starts:
+                if ch == "{":
+                    self._stream_preview_object_starts.append(i)
+                    self._stream_preview_in_string = False
+                    self._stream_preview_escape = False
+                i += 1
+                continue
+
+            if self._stream_preview_in_string:
+                if self._stream_preview_escape:
+                    self._stream_preview_escape = False
+                elif ch == "\\":
+                    self._stream_preview_escape = True
+                elif ch == '"':
+                    self._stream_preview_in_string = False
+            else:
+                if ch == '"':
+                    self._stream_preview_in_string = True
+                elif ch == "{":
+                    self._stream_preview_object_starts.append(i)
+                elif ch == "}":
+                    start = self._stream_preview_object_starts.pop()
+                    completed_objects.append(self._stream_preview_buffer[start:i + 1])
+                    if not self._stream_preview_object_starts:
+                        self._stream_preview_in_string = False
+                        self._stream_preview_escape = False
+
+            i += 1
+
+        self._stream_preview_scan_pos = i
+        return completed_objects
+
+    def _compact_stream_preview_buffer(self) -> None:
+        """
+        丢弃已经扫描且不再需要的前缀，避免 buffer 无界增长。
+        """
+        if not self._stream_preview_buffer:
+            return
+
+        trim_to = (
+            min(self._stream_preview_object_starts)
+            if self._stream_preview_object_starts
+            else self._stream_preview_scan_pos
+        )
+        if trim_to <= 0:
+            return
+
+        self._stream_preview_buffer = self._stream_preview_buffer[trim_to:]
+        self._stream_preview_scan_pos = max(0, self._stream_preview_scan_pos - trim_to)
+        self._stream_preview_object_starts = [pos - trim_to for pos in self._stream_preview_object_starts]
+
+    def _emit_stream_preview_translation_item(
+        self,
+        prefix: str,
+        tid: int,
+        translated: str,
+        source_texts: Optional[List[str]] = None,
+    ) -> None:
+        translated = str(translated)
+        if self._stream_json_seen.get(tid) == translated:
+            return
+
+        self._stream_json_seen[tid] = translated
+        if not self._stream_result_header_printed:
+            self.logger.info("--- Translation Results ---")
+            self._stream_result_header_printed = True
+
+        if source_texts and 1 <= tid <= len(source_texts):
+            self.logger.info(f"{source_texts[tid - 1]} -> {translated}")
+        else:
+            self.logger.info(f"{prefix} #{tid}: {translated}")
+        self._stream_result_pairs_printed = True
+
+    def _process_stream_preview_object(
+        self,
+        prefix: str,
+        obj_text: str,
+        source_texts: Optional[List[str]] = None,
+    ) -> None:
+        try:
+            parsed = json.loads(obj_text)
+        except Exception:
+            return
+
+        if not isinstance(parsed, dict):
+            return
+
+        translation_items: List[Tuple[int, str]] = []
+        if "id" in parsed and "translation" in parsed:
             try:
-                term_o = json.loads(f'"{raw_o}"')
+                translation_items.append((int(parsed["id"]), str(parsed["translation"])))
             except Exception:
-                term_o = raw_o
-            try:
-                term_t = json.loads(f'"{raw_t}"')
-            except Exception:
-                term_t = raw_t
-            try:
-                term_c = json.loads(f'"{raw_c}"') if raw_c else ""
-            except Exception:
-                term_c = raw_c
-            stream_terms.append({"original": str(term_o), "translation": str(term_t), "category": str(term_c)})
-        if stream_terms:
+                pass
+
+        trans_list = parsed.get("translations")
+        if not trans_list and "t" in parsed:
+            trans_list = parsed.get("t")
+
+        if isinstance(trans_list, list):
+            if trans_list and isinstance(trans_list[0], dict):
+                for item in trans_list:
+                    if not isinstance(item, dict):
+                        continue
+                    if "id" not in item:
+                        continue
+                    text = item.get("translation")
+                    if text is None:
+                        text = item.get("text")
+                    if text is None:
+                        continue
+                    try:
+                        translation_items.append((int(item["id"]), str(text)))
+                    except Exception:
+                        continue
+            else:
+                for idx, text in enumerate(trans_list, start=1):
+                    translation_items.append((idx, str(text)))
+
+        for tid, translated in translation_items:
+            self._emit_stream_preview_translation_item(prefix, tid, translated, source_texts=source_texts)
+
+        term_items: List[Dict[str, str]] = []
+        if "original" in parsed and "translation" in parsed:
+            term_items.append(
+                {
+                    "original": str(parsed.get("original") or ""),
+                    "translation": str(parsed.get("translation") or ""),
+                    "category": str(parsed.get("category") or ""),
+                }
+            )
+
+        nested_terms = parsed.get("new_terms") or parsed.get("glossary")
+        if isinstance(nested_terms, list):
+            for item in nested_terms:
+                if not isinstance(item, dict):
+                    continue
+                term_items.append(
+                    {
+                        "original": str(item.get("original") or item.get("src") or ""),
+                        "translation": str(item.get("translation") or item.get("dst") or ""),
+                        "category": str(item.get("category") or ""),
+                    }
+                )
+
+        if term_items:
             if not self._stream_result_header_printed:
                 self.logger.info("--- Translation Results ---")
                 self._stream_result_header_printed = True
-            self._emit_terms_from_list(stream_terms)
+            self._emit_terms_from_list(term_items)
+
+    def _emit_stream_json_preview(self, prefix: str, delta_text: str, source_texts: Optional[List[str]] = None) -> None:
+        """
+        仅消费新增 delta_text，通过 preview_buffer + scan_pos 增量提取新闭合的 JSON 对象。
+        """
+        if not delta_text:
+            return
+
+        filtered_delta = self._filter_stream_preview_delta(str(delta_text))
+        if filtered_delta:
+            self._stream_preview_buffer += filtered_delta
+
+        completed_objects = self._consume_completed_stream_preview_objects()
+        for obj_text in completed_objects:
+            self._process_stream_preview_object(prefix, obj_text, source_texts=source_texts)
+
+        self._compact_stream_preview_buffer()
+
+        if not filtered_delta and not completed_objects:
+            return
 
     def _update_stream_inline(self, prefix: str, delta_text: str) -> None:
         """按增量流内容刷新；遇到换行符时真正换行输出。"""
@@ -2688,6 +2911,28 @@ def sanitize_text_encoding(text: str) -> str:
         return str(text)
 
 
+def normalize_model_output_text(text: str, preview: bool = False) -> str:
+    """
+    清理模型在正文外包裹的控制标签，避免思考区和回答区交叉污染解析。
+
+    preview=True 时会额外移除未闭合的 <think> 尾部，避免流式中途把思考区当正文。
+    """
+    if not text:
+        return text
+
+    cleaned = str(text)
+    cleaned = re.sub(r'(?:</think>)?<think>.*?</think>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+    if preview:
+        cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+
+    answer_match = re.search(r'<answer>(.*?)</answer>', cleaned, flags=re.DOTALL | re.IGNORECASE)
+    if answer_match:
+        cleaned = answer_match.group(1).strip()
+
+    cleaned = re.sub(r'</?answer>', '', cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
 
 def extract_json_payload_from_mixed_text(text: str) -> Tuple[str, bool]:
     """
@@ -2821,6 +3066,7 @@ def parse_hq_response(result_text: str) -> Tuple[List[str], List[Dict[str, str]]
     
     # 统一的编码清理
     result_text = sanitize_text_encoding(result_text)
+    result_text = normalize_model_output_text(result_text)
     extracted_payload, extracted = extract_json_payload_from_mixed_text(result_text)
     if extracted:
         result_text = extracted_payload

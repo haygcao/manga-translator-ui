@@ -268,7 +268,7 @@ class OpenAITranslator(CommonTranslator):
                     return getattr(chunk.choices[0], 'finish_reason', None)
                 
                 def _on_stream_chunk(delta_text, _full_text):
-                    self._emit_stream_json_preview("[OpenAI Stream]", _full_text, source_texts=texts)
+                    self._emit_stream_json_preview("[OpenAI Stream]", delta_text, source_texts=texts)
 
                 streamed_text = None
                 streamed_finish_reason = None
@@ -400,11 +400,7 @@ class OpenAITranslator(CommonTranslator):
                         await self._sleep_with_cancel_polling(2)
                         continue
 
-                    if not self._has_stream_result_pairs():
-                        self.logger.info("--- Translation Results ---")
-                        for original, translated in zip(texts, translations):
-                            self.logger.info(f'{original} -> {translated}')
-                    self.logger.info("---------------------------")
+                    self._emit_final_translation_results(texts, translations)
 
                     # BR检查：检查翻译结果是否包含必要的[BR]标记
                     if not self._validate_br_markers(translations, queries=texts, ctx=ctx):
