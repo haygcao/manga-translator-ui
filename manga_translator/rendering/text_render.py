@@ -146,9 +146,6 @@ _VERTICAL_PUNCT_UP = {
     '。', '．', '，', '、', '·', '：', '；', '！', '？',
     '︒', '︐', '︑', '︓', '︔', '︕', '︖', '﹅', '﹆',
 }
-_VERTICAL_PUNCT_TOP_RIGHT = {
-    '。', '，', '、', '︒', '︐', '︑', '﹅',
-}
 _VERTICAL_COMPACT_SLOT = _VERTICAL_OPEN_BRACKETS | _VERTICAL_CLOSE_BRACKETS | _VERTICAL_PUNCT_UP
 
 def CJK_Compatibility_Forms_translate(cdpt: str, direction: int):
@@ -445,15 +442,24 @@ def _new_font_state() -> dict:
         'glyph_cache': {},
         'border_cache': {},
         'measure_cache': {},
+        'vertical_char_base_cache': {},
+        'vertical_border_bitmap_cache': {},
     }
 
 
-def _cache_glyph(state: dict, key: Tuple, glyph: SimpleNamespace) -> SimpleNamespace:
-    cache = state['glyph_cache']
-    if len(cache) >= 4096:
+def _cache_small_dict(cache: dict, key, value, limit: int = 4096):
+    if len(cache) >= limit:
         cache.clear()
-    cache[key] = glyph
-    return glyph
+    cache[key] = value
+    return value
+
+
+def _cache_glyph(state: dict, key: Tuple, glyph: SimpleNamespace) -> SimpleNamespace:
+    return _cache_small_dict(state['glyph_cache'], key, glyph)
+
+
+def _normalize_cache_float(value: float) -> float:
+    return round(float(value), 4)
 
 
 def _clear_glyph_cache(state: Optional[dict] = None):
@@ -462,6 +468,8 @@ def _clear_glyph_cache(state: Optional[dict] = None):
     state['glyph_cache'].clear()
     state['border_cache'].clear()
     state['measure_cache'].clear()
+    state['vertical_char_base_cache'].clear()
+    state['vertical_border_bitmap_cache'].clear()
 
 
 def _get_thread_font_state() -> dict:
@@ -1049,12 +1057,7 @@ def _compute_vertical_cell_offset(bitmap_char: np.ndarray, advance_y: int) -> in
         return 0
 
     rows = bitmap_char.shape[0]
-    ink_y = 0
-    ink_h = rows
-    ink_rect = _get_bitmap_ink_rect(bitmap_char)
-    if ink_rect is not None:
-        _, ink_y, _, ink_h = ink_rect
-    return round((advance_y - ink_h) / 2.0) - ink_y
+    return round((advance_y - rows) / 2.0)
 
 
 def _get_bitmap_ink_rect(bitmap_char: Optional[np.ndarray]) -> Optional[Tuple[int, int, int, int]]:
@@ -1077,59 +1080,85 @@ def _resolve_vertical_slot_height(font_size: int, cdpt: str, advance_y: int) -> 
     return max(1, advance_y)
 
 
-def _resolve_vertical_char_bias(
-    font_size: int,
-    cdpt: str,
-    line_width: int,
-    slot_height: int,
-    ink_rect: Optional[Tuple[int, int, int, int]],
-) -> Tuple[int, int]:
-    bias_x = 0
-    bias_y = 0
-    compact_shift = max(0, int(round((font_size - slot_height) / 2.0)))
-    if cdpt in _VERTICAL_OPEN_BRACKETS or cdpt in _VERTICAL_PUNCT_UP:
-        bias_y -= compact_shift
-    elif cdpt in _VERTICAL_CLOSE_BRACKETS:
-        bias_y += compact_shift
+def _get_vertical_char_render_base(font_size: int, cdpt: str, letter_spacing: float = 1.0) -> dict:
+    state = _get_thread_font_state()
+    cache_key = (int(font_size), cdpt, _normalize_cache_float(_normalize_letter_spacing(letter_spacing)))
+    cached = state['vertical_char_base_cache'].get(cache_key)
+    if cached is not None:
+        return cached
 
-    if cdpt in _VERTICAL_PUNCT_TOP_RIGHT and ink_rect is not None:
-        bias_x += max(1, int(round(max(0.0, line_width - ink_rect[2]) / 4.0)))
-    return bias_x, bias_y
-
-
-def _get_vertical_char_draw_state(font_size: int, cdpt: str, line_width: int, letter_spacing: float = 1.0) -> dict:
     translated, rot_degree = CJK_Compatibility_Forms_translate(cdpt, 1)
     slot = get_char_glyph(translated, font_size, 1)
     bitmap_char = _bitmap_to_array(slot.bitmap)
     advance_y = _resolve_vertical_char_offset(slot, translated, font_size, letter_spacing=letter_spacing)
-    advance_y = _resolve_vertical_slot_height(font_size, translated, advance_y)
+    slot_height = _resolve_vertical_slot_height(font_size, translated, advance_y)
+    metrics = getattr(slot, 'metrics', None)
+    frame_width = font_size
+    if metrics and getattr(metrics, 'horiAdvance', 0):
+        frame_width = max(frame_width, metrics.horiAdvance >> 6)
     if bitmap_char is None:
-        return {
+        return _cache_small_dict(state['vertical_char_base_cache'], cache_key, {
             'translated': translated,
             'rot_degree': rot_degree,
             'bitmap': None,
             'advance_y': advance_y,
-            'x': 0,
             'y': 0,
-        }
+            'ink_x': 0.0,
+            'ink_w': 0.0,
+            'frame_width': max(1, int(frame_width)),
+        })
 
     if rot_degree == 90:
         bitmap_char = cv2.rotate(bitmap_char, cv2.ROTATE_90_CLOCKWISE)
-    char_bitmap_rows, char_bitmap_width = bitmap_char.shape
+    _, char_bitmap_width = bitmap_char.shape
     ink_rect = _get_bitmap_ink_rect(bitmap_char)
     ink_x = 0.0
     ink_w = float(char_bitmap_width)
     if ink_rect is not None:
         ink_x, _, ink_w, _ = ink_rect
-    bias_x, bias_y = _resolve_vertical_char_bias(font_size, translated, line_width, advance_y, ink_rect)
-    return {
+    frame_width = max(frame_width, int(round(ink_w)))
+    slot_origin_y = max(0, int(round((advance_y - slot_height) / 2.0)))
+    base_y = slot_origin_y + _compute_vertical_cell_offset(bitmap_char, slot_height)
+    return _cache_small_dict(state['vertical_char_base_cache'], cache_key, {
         'translated': translated,
         'rot_degree': rot_degree,
         'bitmap': bitmap_char,
         'advance_y': advance_y,
-        'x': round((line_width - ink_w) / 2.0) - ink_x + bias_x,
-        'y': _compute_vertical_cell_offset(bitmap_char, advance_y) + bias_y,
+        'ink_x': ink_x,
+        'ink_w': ink_w,
+        'y': base_y,
+        'frame_width': max(1, int(frame_width)),
+    })
+
+
+def _get_vertical_char_draw_state(font_size: int, cdpt: str, line_width: int, letter_spacing: float = 1.0) -> dict:
+    base = _get_vertical_char_render_base(font_size, cdpt, letter_spacing=letter_spacing)
+    return {
+        'translated': base['translated'],
+        'rot_degree': base['rot_degree'],
+        'bitmap': base['bitmap'],
+        'advance_y': base['advance_y'],
+        'x': round((line_width - base['ink_w']) / 2.0) - base['ink_x'],
+        'y': base['y'],
     }
+
+
+def _get_vertical_border_bitmap(translated: str, font_size: int, stroke_ratio: float, rot_degree: int):
+    state = _get_thread_font_state()
+    cache_key = (
+        translated,
+        int(font_size),
+        _normalize_cache_float(stroke_ratio),
+        int(rot_degree),
+    )
+    cached = state['vertical_border_bitmap_cache'].get(cache_key)
+    if cached is not None:
+        return cached
+
+    bitmap_border = _bitmap_to_array(get_char_border(translated, font_size, 1, stroke_ratio=stroke_ratio).bitmap)
+    if bitmap_border is not None and rot_degree == 90:
+        bitmap_border = cv2.rotate(bitmap_border, cv2.ROTATE_90_CLOCKWISE)
+    return _cache_small_dict(state['vertical_border_bitmap_cache'], cache_key, bitmap_border, limit=2048)
 
 
 def _get_vertical_block_surface(
@@ -1158,7 +1187,7 @@ def _get_vertical_block_surface(
     return cache[cache_key]
 
 
-def _measure_vertical_line_geometry(
+def _build_vertical_line_layout(
     font_size: int,
     line_text: str,
     border_size: int,
@@ -1167,6 +1196,7 @@ def _measure_vertical_line_geometry(
     block_surface_cache: dict,
 ) -> dict:
     line_width = font_size
+    items = []
     parts = re.split(r'(<H>.*?</H>)', line_text, flags=re.IGNORECASE | re.DOTALL)
     for part in parts:
         if not part:
@@ -1175,50 +1205,73 @@ def _measure_vertical_line_geometry(
         if is_horizontal_block:
             surface = _get_vertical_block_surface(font_size, part[3:-4], border_size, stroke_ratio, letter_spacing, block_surface_cache)
             if surface is not None:
-                line_width = max(line_width, int(surface['width']))
+                item_width = int(surface['width'])
+                line_width = max(line_width, item_width)
+                items.append({
+                    'kind': 'block',
+                    'surface': surface,
+                    'width': item_width,
+                    'height': int(surface['height']),
+                })
             continue
-        for c in part:
-            line_width = max(line_width, _get_vertical_column_char_width(font_size, c))
-
-    cursor_y = 0
-    min_y = None
-    max_y = None
-    for part in parts:
-        if not part:
-            continue
-        is_horizontal_block = part.lower().startswith('<h>') and part.lower().endswith('</h>')
-        if is_horizontal_block:
-            surface = _get_vertical_block_surface(font_size, part[3:-4], border_size, stroke_ratio, letter_spacing, block_surface_cache)
-            if surface is None:
-                continue
-            block_top = cursor_y
-            block_bottom = cursor_y + int(surface['height'])
-            min_y = block_top if min_y is None else min(min_y, block_top)
-            max_y = block_bottom if max_y is None else max(max_y, block_bottom)
-            cursor_y += int(surface['height'])
-            continue
-
         for c in part:
             if c == '＿':
-                cursor_y += _scale_advance(font_size, letter_spacing)
+                items.append({
+                    'kind': 'placeholder',
+                    'advance_y': _scale_advance(font_size, letter_spacing),
+                })
                 continue
-            state = _get_vertical_char_draw_state(font_size, c, line_width, letter_spacing=letter_spacing)
-            advance_y = int(state['advance_y'])
-            bitmap_char = state['bitmap']
-            if bitmap_char is not None:
-                char_top = cursor_y + int(state['y'])
-                char_bottom = char_top + bitmap_char.shape[0]
-                min_y = char_top if min_y is None else min(min_y, char_top)
-                max_y = char_bottom if max_y is None else max(max_y, char_bottom)
-            cursor_y += advance_y
-    if min_y is None or max_y is None:
-        min_y = 0
-        max_y = 0
+            base = _get_vertical_char_render_base(font_size, c, letter_spacing=letter_spacing)
+            line_width = max(line_width, int(base['frame_width']))
+            items.append({
+                'kind': 'char',
+                'base': base,
+            })
+
+    cursor_y = 0
+    laid_out_items = []
+    for item in items:
+        kind = item['kind']
+        if kind == 'block':
+            block_top = cursor_y
+            block_bottom = cursor_y + item['height']
+            laid_out_items.append({
+                **item,
+                'cursor_y': cursor_y,
+            })
+            cursor_y = block_bottom
+            continue
+
+        if kind == 'placeholder':
+            laid_out_items.append({
+                **item,
+                'cursor_y': cursor_y,
+            })
+            cursor_y += int(item['advance_y'])
+            continue
+
+        base = item['base']
+        advance_y = int(base['advance_y'])
+        bitmap_char = base['bitmap']
+        x = round((line_width - base['ink_w']) / 2.0) - base['ink_x']
+        y = int(base['y'])
+        laid_out_items.append({
+            'kind': 'char',
+            'translated': base['translated'],
+            'rot_degree': base['rot_degree'],
+            'bitmap': bitmap_char,
+            'advance_y': advance_y,
+            'x': x,
+            'y': y,
+            'cursor_y': cursor_y,
+        })
+        cursor_y += advance_y
     return {
         'width': line_width,
-        'min_y': min_y,
-        'max_y': max_y,
-        'height': max(0, max_y - min_y),
+        'min_y': 0,
+        'max_y': max(0, cursor_y),
+        'height': max(0, cursor_y),
+        'items': laid_out_items,
     }
 
 
@@ -1343,20 +1396,8 @@ def _smart_vertical_ellipsis_advance(slot, font_size: int, char_bitmap_rows: int
 
 def _get_vertical_column_char_width(font_size: int, cdpt: str) -> int:
     """Column frame width for vertical layout (Ballons-style: frame + ink), in pixels."""
-    cdpt_trans, rot_degree = CJK_Compatibility_Forms_translate(cdpt, 1)
-    slot = get_char_glyph(cdpt_trans, font_size, 1)
-    width = font_size
-    if hasattr(slot, 'metrics') and slot.metrics and hasattr(slot.metrics, 'horiAdvance') and slot.metrics.horiAdvance:
-        width = max(width, slot.metrics.horiAdvance >> 6)
-    bitmap_char = _bitmap_to_array(slot.bitmap)
-    if bitmap_char is not None and rot_degree == 90:
-        bitmap_char = cv2.rotate(bitmap_char, cv2.ROTATE_90_CLOCKWISE)
-    ink_rect = _get_bitmap_ink_rect(bitmap_char)
-    if ink_rect is not None:
-        width = max(width, ink_rect[2])
-    elif bitmap_char is not None:
-        width = max(width, bitmap_char.shape[1])
-    return max(1, int(width))
+    base = _get_vertical_char_render_base(font_size, cdpt)
+    return max(1, int(base['frame_width']))
 
 def _measure_horizontal_text_width(text: str, font_size: int, letter_spacing: float = 1.0) -> int:
     if not text:
@@ -1509,10 +1550,7 @@ def put_char_vertical(font_size: int, cdpt: str, pen_l: Tuple[int, int], canvas_
     bitmap_border = None
     if border_size > 0:
         stroke_ratio = _resolve_stroke_ratio(config, stroke_width)
-        translated = state['translated']
-        bitmap_border = _bitmap_to_array(get_char_border(translated, font_size, 1, stroke_ratio=stroke_ratio).bitmap)
-        if bitmap_border is not None and state['rot_degree'] == 90:
-            bitmap_border = cv2.rotate(bitmap_border, cv2.ROTATE_90_CLOCKWISE)
+        bitmap_border = _get_vertical_border_bitmap(state['translated'], font_size, stroke_ratio, state['rot_degree'])
     _paste_glyph_bitmaps(canvas_text, canvas_border, bitmap_char, char_place_x, char_place_y, bitmap_border)
     return char_offset_y  
 
@@ -1539,8 +1577,8 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
         return
 
     block_surface_cache = {}
-    line_geometries = [
-        _measure_vertical_line_geometry(
+    line_layouts = [
+        _build_vertical_line_layout(
             font_size,
             line_text,
             bg_size,
@@ -1550,8 +1588,8 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
         )
         for line_text in line_text_list
     ]
-    line_widths = [geometry['width'] for geometry in line_geometries]
-    max_render_height = max((geometry['height'] for geometry in line_geometries), default=0)
+    line_widths = [layout['width'] for layout in line_layouts]
+    max_render_height = max((layout['height'] for layout in line_layouts), default=0)
 
     content_width = sum(line_widths) + spacing_x * max(0, len(line_widths) - 1)
     canvas_x = content_width + (font_size + bg_size) * 2
@@ -1572,51 +1610,28 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
         current_edge -= line_width + spacing_x
 
     for line_idx, line_text in enumerate(line_text_list):
-        geometry = line_geometries[line_idx]
-        line_width = geometry['width']
+        layout = line_layouts[line_idx]
+        line_width = layout['width']
         column_layout = column_layouts[line_idx]
-        pen_line = [
-            int(round(column_layout['right_edge'])),
-            font_size + bg_size,
-        ]
-        render_height = geometry['height']
-        min_y = geometry['min_y']
+        line_right_edge = int(round(column_layout['right_edge']))
+        line_origin_y = font_size + bg_size
+        render_height = layout['height']
+        min_y = layout['min_y']
         if alignment == 'center':
-            pen_line[1] += round((max_render_height - render_height) / 2.0) - min_y
+            line_origin_y += round((max_render_height - render_height) / 2.0) - min_y
         elif alignment == 'right': # In vertical, right means bottom
-            pen_line[1] += max_render_height - render_height - min_y
+            line_origin_y += max_render_height - render_height - min_y
         else:
-            pen_line[1] += -min_y
+            line_origin_y += -min_y
 
-        parts = re.split(r'(<H>.*?</H>)', line_text, flags=re.IGNORECASE | re.DOTALL)
-
-        for part in parts:
-            if not part:
-                continue
-
-            is_horizontal_block = part.lower().startswith('<h>') and part.lower().endswith('</h>')
-
-            if is_horizontal_block:
-                raw_content = part[3:-4]
-                if not raw_content:
-                    continue
-                surface = _get_vertical_block_surface(
-                    font_size,
-                    raw_content,
-                    bg_size,
-                    stroke_ratio,
-                    letter_spacing,
-                    block_surface_cache,
-                )
-                if surface is None:
-                    logger.warning(f"[RENDER SKIPPED] Horizontal block in vertical text has zero dimensions. Content: {raw_content!r}")
-                    continue
-
-                rh = surface['height']
-                rw = surface['width']
-                line_start_x = int(round(column_layout['center_x'] - line_width / 2.0))
+        line_start_x = int(round(column_layout['center_x'] - line_width / 2.0))
+        for item in layout['items']:
+            if item['kind'] == 'block':
+                surface = item['surface']
+                rh = item['height']
+                rw = item['width']
                 paste_x = line_start_x + round((line_width - rw) / 2.0)
-                paste_y = pen_line[1]
+                paste_y = line_origin_y + item['cursor_y']
                 clamped_pos = _clamp_surface_origin(canvas_text.shape, paste_x, paste_y, rw, rh)
                 if clamped_pos is None:
                     logger.warning(f"Text block too large for canvas, skipping. Size: {rw}x{rh}, Canvas: {canvas_text.shape[1]}x{canvas_text.shape[0]}")
@@ -1628,13 +1643,17 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
 
                 target_border_roi = canvas_border[paste_y:paste_y+rh, paste_x:paste_x+rw]
                 canvas_border[paste_y:paste_y+rh, paste_x:paste_x+rw] = np.maximum(target_border_roi, surface['border'])
+                continue
 
-                pen_line[1] += rh
+            if item['kind'] != 'char' or item['bitmap'] is None:
+                continue
 
-            else: # It's a vertical part
-                for c in part:
-                    offset_y = put_char_vertical(font_size, c, pen_line, canvas_text, canvas_border, border_size=bg_size, config=config, line_width=line_width, stroke_width=stroke_ratio, letter_spacing=letter_spacing)
-                    pen_line[1] += offset_y
+            bitmap_border = None
+            if bg_size > 0:
+                bitmap_border = _get_vertical_border_bitmap(item['translated'], font_size, stroke_ratio, item['rot_degree'])
+            char_place_x = line_start_x + int(item['x'])
+            char_place_y = line_origin_y + item['cursor_y'] + int(item['y'])
+            _paste_glyph_bitmaps(canvas_text, canvas_border, item['bitmap'], char_place_x, char_place_y, bitmap_border)
 
     canvas_border = np.clip(canvas_border, 0, 255)
     line_box = add_color(canvas_text, fg, canvas_border, bg)
@@ -1692,8 +1711,7 @@ def get_char_offset_y(font_size: int, cdpt: str, letter_spacing: float = 1.0):
 
     cdpt_trans, _ = CJK_Compatibility_Forms_translate(cdpt, 1)
     slot = get_char_glyph(cdpt_trans, font_size, 1)
-    advance_y = _resolve_vertical_char_offset(slot, cdpt_trans, font_size, letter_spacing=letter_spacing)
-    return _resolve_vertical_slot_height(font_size, cdpt_trans, advance_y)
+    return _resolve_vertical_char_offset(slot, cdpt_trans, font_size, letter_spacing=letter_spacing)
 
 def get_string_height(font_size: int, text: str, letter_spacing: float = 1.0):
     """获取字符串的竖排总高度（像素），考虑<H>横排块"""
@@ -2113,7 +2131,14 @@ def put_text_horizontal(font_size: int, text: str, width: int, height: int, alig
             reversed_direction=reversed_direction,
             letter_spacing=letter_spacing,
         )
-        metrics = _get_horizontal_line_frame_metrics(line_text, font_size, letter_spacing=letter_spacing)
+        if surface is not None:
+            metrics = {
+                'ascent': surface['line_ascent'],
+                'height': surface['line_height'],
+                'descent': surface['line_descent'],
+            }
+        else:
+            metrics = _get_horizontal_line_frame_metrics(line_text, font_size, letter_spacing=letter_spacing)
         line_surfaces.append(surface)
         line_frame_metrics.append(metrics)
         logical_line_tops.append(logical_cursor_y)
