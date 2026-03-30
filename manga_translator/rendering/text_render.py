@@ -1295,17 +1295,53 @@ def calc_horizontal_line_spacing_px(font_size: int, line_spacing: float) -> int:
     return int(font_size * 0.01 * resolve_horizontal_line_spacing_multiplier(line_spacing))
 
 
+def _font_supports_character(raw_font: QRawFont, cdpt: str) -> bool:
+    try:
+        return bool(raw_font.supportsCharacter(cdpt))
+    except Exception:
+        return True
+
+
+def _glyph_is_renderable(raw_font: QRawFont, glyph_id: int) -> bool:
+    if not glyph_id:
+        return False
+    try:
+        if not raw_font.pathForGlyph(glyph_id).isEmpty():
+            return True
+    except Exception:
+        pass
+    try:
+        alpha = raw_font.alphaMapForGlyph(glyph_id)
+        if not alpha.isNull() and alpha.width() > 0 and alpha.height() > 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _resolve_glyph_spec(cdpt: str, font_size: int) -> Tuple[str, int]:
     state = _get_thread_font_state()
     font_selection = state['font_selection']
     for i, font_path in enumerate(font_selection):
         raw_font = _get_raw_font_for_state(state, font_path, font_size)
+        if not _font_supports_character(raw_font, cdpt):
+            if i == 0:
+                try:
+                    logger.debug(f"Character '{cdpt}' not supported by primary font '{font_path}'. Trying fallbacks.")
+                except Exception:
+                    pass
+            continue
         glyph_indexes = raw_font.glyphIndexesForString(cdpt)
         glyph_id = glyph_indexes[0] if glyph_indexes else 0
-        if glyph_id != 0:
+        if _glyph_is_renderable(raw_font, glyph_id):
             return font_path, int(glyph_id)
 
-        if i == 0:
+        if i == 0 and glyph_id != 0:
+            try:
+                logger.debug(f"Character '{cdpt}' resolved in primary font '{font_path}' but glyph is empty. Trying fallbacks.")
+            except Exception:
+                pass
+        elif i == 0:
             try:
                 logger.debug(f"Character '{cdpt}' not found in primary font '{font_path}'. Trying fallbacks.")
             except Exception:
