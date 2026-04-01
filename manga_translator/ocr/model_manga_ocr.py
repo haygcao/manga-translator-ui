@@ -41,9 +41,7 @@ class InternalMangaOcr:
     """
     def __init__(self, pretrained_model_name_or_path="kha-white/manga-ocr-base", device="cpu", logger=None):
         self.logger = logger
-        if self.logger:
-            self.logger.info(f"加载 MangaOCR 模型: {pretrained_model_name_or_path}")
-        
+
         # 加载模型组件
         self.processor = ViTImageProcessor.from_pretrained(pretrained_model_name_or_path)
         self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
@@ -53,9 +51,6 @@ class InternalMangaOcr:
         self.device = device
         self.model.to(device)
         self.model.eval()
-        
-        if self.logger:
-            self.logger.info(f"MangaOCR 模型已加载到 {device}")
     
     def __call__(self, img_or_path):
         """
@@ -170,7 +165,6 @@ class ModelMangaOCR(OfflineOCR):
         # 1. 优先使用本地下载的模型
         if os.path.exists(local_manga_ocr_path) and os.path.exists(os.path.join(local_manga_ocr_path, 'config.json')):
             model_path = local_manga_ocr_path
-            self.logger.info(f"使用本地 MangaOCR 模型: {model_path}")
         else:
             # 2. 兼容旧版本：查找 HuggingFace 缓存
             hf_cache_dir = os.path.expanduser('~/.cache/huggingface/hub')
@@ -184,13 +178,11 @@ class ModelMangaOCR(OfflineOCR):
                                 hf_model_path = os.path.join(snapshot_dir, snapshots[0])
                                 if os.path.exists(os.path.join(hf_model_path, 'config.json')):
                                     model_path = hf_model_path
-                                    self.logger.info(f"使用 HuggingFace 缓存的 MangaOCR 模型: {model_path}")
                                     break
         
         # 3. 如果都没找到，使用在线模型
         if model_path is None:
             model_path = "kha-white/manga-ocr-base"
-            self.logger.info("本地模型不存在，使用在线 HuggingFace 模型（首次使用会自动下载）")
         
         # 使用内置实现
         manga_ocr_device = device if device in ['cuda', 'mps'] else 'cpu'

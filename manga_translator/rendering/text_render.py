@@ -3,6 +3,7 @@ import math
 import os
 import re
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -129,6 +130,12 @@ _qt_runtime_lock = threading.Lock()
 _qt_runtime_app = None
 _font_family_cache = {}
 _hyphenator_cache = {}
+_RAW_FONT_CACHE_MAX = 128
+_QFONT_CACHE_MAX = 192
+_GLYPH_SPEC_CACHE_MAX = 4096
+_GLYPH_RASTER_CACHE_MAX = 2048
+_STROKE_CACHE_MAX = 1024
+_VERTICAL_CACHE_MAX = 2048
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -155,13 +162,13 @@ class GlyphRaster:
 class FontState:
     font: str = ''
     font_selection: list = field(default_factory=list)
-    raw_fonts: dict = field(default_factory=dict)
-    qfonts: dict = field(default_factory=dict)
-    glyph_specs: dict = field(default_factory=dict)
-    glyphs: dict = field(default_factory=dict)
-    strokes: dict = field(default_factory=dict)
+    raw_fonts: dict = field(default_factory=OrderedDict)
+    qfonts: dict = field(default_factory=OrderedDict)
+    glyph_specs: dict = field(default_factory=OrderedDict)
+    glyphs: dict = field(default_factory=OrderedDict)
+    strokes: dict = field(default_factory=OrderedDict)
     measures: dict = field(default_factory=dict)
-    vertical: dict = field(default_factory=dict)
+    vertical: dict = field(default_factory=OrderedDict)
 
 
 def CJK_Compatibility_Forms_translate(cdpt: str, direction: int):
@@ -301,6 +308,23 @@ def _normalize_font_path(path: str) -> str:
     return path.replace('\\', '/')
 
 
+def _cache_get(cache: dict, key):
+    if key not in cache:
+        return None
+    value = cache.pop(key)
+    cache[key] = value
+    return value
+
+
+def _cache_put(cache: dict, key, value, max_entries: int):
+    if key in cache:
+        cache.pop(key)
+    cache[key] = value
+    while len(cache) > max_entries:
+        cache.popitem(last=False)
+    return value
+
+
 def _clear_shape_caches(state: FontState):
     state.glyph_specs.clear()
     state.glyphs.clear()
@@ -335,12 +359,12 @@ def _raw_font(path: str, pixel_size: float) -> QRawFont:
     state = _state()
     _ensure_qt_runtime()
     key = (_normalize_font_path(path), float(max(pixel_size, 1.0)))
-    font = state.raw_fonts.get(key)
+    font = _cache_get(state.raw_fonts, key)
     if font is None:
         font = QRawFont(key[0], key[1])
         if not font.isValid():
             raise RuntimeError(f'Could not load Qt font: {key[0]}')
-        state.raw_fonts[key] = font
+        _cache_put(state.raw_fonts, key, font, _RAW_FONT_CACHE_MAX)
     return font
 
 
@@ -418,7 +442,7 @@ def _layout_font(font_size: int, letter_spacing: float) -> QFont:
     state = _state()
     families = _layout_families(state)
     key = (families, int(max(font_size, 1)), round(float(letter_spacing), 4))
-    qfont = state.qfonts.get(key)
+    qfont = _cache_get(state.qfonts, key)
     if qfont is None:
         qfont = QFont()
         qfont.setFamilies(list(families))
@@ -427,7 +451,7 @@ def _layout_font(font_size: int, letter_spacing: float) -> QFont:
         qfont.setStyleStrategy(QFont.StyleStrategy.PreferOutline)
         qfont.setKerning(True)
         qfont.setLetterSpacing(QFont.SpacingType.PercentageSpacing, float(letter_spacing) * 100.0)
-        state.qfonts[key] = qfont
+        _cache_put(state.qfonts, key, qfont, _QFONT_CACHE_MAX)
     return QFont(qfont)
 
 
@@ -530,7 +554,7 @@ def _glyph_spec_from_selection(cdpt: str, font_size: int) -> Optional[GlyphSpec]
 def _glyph_spec(cdpt: str, font_size: int) -> GlyphSpec:
     state = _state()
     key = (cdpt, int(font_size))
-    cached = state.glyph_specs.get(key)
+    cached = _cache_get(state.glyph_specs, key)
     if cached is not None:
         return cached
     spec = _glyph_spec_via_layout(cdpt, font_size) or _glyph_spec_from_selection(cdpt, font_size)
@@ -546,8 +570,7 @@ def _glyph_spec(cdpt: str, font_size: int) -> GlyphSpec:
                     continue
     if spec is None:
         raise RuntimeError('No placeholder character found in any font.')
-    state.glyph_specs[key] = spec
-    return spec
+    return _cache_put(state.glyph_specs, key, spec, _GLYPH_SPEC_CACHE_MAX)
 
 
 def _qimage_alpha_to_array(image: QImage) -> np.ndarray:
@@ -592,7 +615,7 @@ def _glyph_raster(cdpt: str, font_size: int) -> GlyphRaster:
     spec = _glyph_spec(cdpt, font_size)
     state = _state()
     key = (spec.cache_key, spec.glyph_id, int(font_size))
-    cached = state.glyphs.get(key)
+    cached = _cache_get(state.glyphs, key)
     if cached is not None:
         return cached
     path = spec.raw_font.pathForGlyph(spec.glyph_id)
@@ -603,20 +626,18 @@ def _glyph_raster(cdpt: str, font_size: int) -> GlyphRaster:
     advance_x = int(round(advance.x())) if advance.x() else max(int(round(metrics.width())), font_size)
     advance_y = int(round(advance.y())) if advance.y() else max(int(round(metrics.height())), font_size)
     raster = GlyphRaster(alpha, int(left), int(-top), int(advance_x), int(advance_y), int(top), max(int(round(metrics.width())), int(advance_x), 1))
-    state.glyphs[key] = raster
-    return raster
+    return _cache_put(state.glyphs, key, raster, _GLYPH_RASTER_CACHE_MAX)
 
 
 def _glyph_stroke_alpha(cdpt: str, font_size: int, stroke_ratio: float) -> np.ndarray:
     spec = _glyph_spec(cdpt, font_size)
     state = _state()
     key = (spec.cache_key, spec.glyph_id, int(font_size), round(float(stroke_ratio), 4))
-    cached = state.strokes.get(key)
+    cached = _cache_get(state.strokes, key)
     if cached is not None:
         return cached
     alpha = _rasterize_path(_stroke_path(spec.raw_font.pathForGlyph(spec.glyph_id), max(int(stroke_ratio * font_size), 1)))[0]
-    state.strokes[key] = alpha
-    return alpha
+    return _cache_put(state.strokes, key, alpha, _STROKE_CACHE_MAX)
 
 
 def _paste_bitmap(canvas: np.ndarray, bitmap_arr: np.ndarray, x: int, y: int, mode: str = 'max'):
@@ -813,7 +834,7 @@ def _vertical_ellipsis_advance(glyph: GlyphRaster, font_size: int, bitmap_char: 
 def _vertical_base(font_size: int, cdpt: str, letter_spacing: float = 1.0) -> dict:
     state = _state()
     key = (int(font_size), cdpt, round(_normalize_letter_spacing(letter_spacing), 4))
-    cached = state.vertical.get(key)
+    cached = _cache_get(state.vertical, key)
     if cached is not None:
         return cached
     translated, rot = CJK_Compatibility_Forms_translate(cdpt, 1)
@@ -838,8 +859,7 @@ def _vertical_base(font_size: int, cdpt: str, letter_spacing: float = 1.0) -> di
         'ink_x': float(ink_x), 'ink_w': float(ink_w), 'y': slot_origin_y + max(0, int(round((slot_height - bitmap_h) / 2.0))),
         'frame_width': int(frame_width),
     }
-    state.vertical[key] = base
-    return base
+    return _cache_put(state.vertical, key, base, _VERTICAL_CACHE_MAX)
 
 
 def get_vertical_char_bitmap_width(font_size: int, cdpt: str, letter_spacing: float = 1.0) -> int:
