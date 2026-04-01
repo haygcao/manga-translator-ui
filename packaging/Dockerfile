@@ -16,10 +16,18 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     g++ \
     libeigen3-dev \
+    libdbus-1-3 \
+    libegl1 \
+    libfontconfig1 \
     libgl1 \
     libglib2.0-0 \
+    libopengl0 \
     libsm6 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
     libxext6 \
+    libxkbcommon0 \
     libxrender-dev \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
@@ -45,10 +53,18 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     g++ \
     libeigen3-dev \
+    libdbus-1-3 \
+    libegl1 \
+    libfontconfig1 \
     libgl1 \
     libglib2.0-0 \
+    libopengl0 \
     libsm6 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
     libxext6 \
+    libxkbcommon0 \
     libxrender-dev \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
@@ -95,6 +111,7 @@ RUN mkdir -p /app/result /app/models /app/logs
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
 ENV MANGA_TRANSLATOR_WEB_SERVER=true
+ENV QT_QPA_PLATFORM=offscreen
 
 # 暴露端口
 EXPOSE 8000
