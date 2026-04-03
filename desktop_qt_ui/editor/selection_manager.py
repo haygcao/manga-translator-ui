@@ -2,6 +2,7 @@ from main_view_parts.theme import get_current_theme_colors
 from PyQt6.QtCore import QObject, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QPen
 from PyQt6.QtWidgets import QGraphicsRectItem
+from services import get_logger
 
 
 class SelectionManager(QObject):
@@ -24,6 +25,7 @@ class SelectionManager(QObject):
         self._model = model
         self._scene = scene
         self._get_region_items = get_region_items_fn
+        self._logger = get_logger(__name__)
 
         # 同步守卫
         self._syncing = False
@@ -36,6 +38,42 @@ class SelectionManager(QObject):
         # 连接信号
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
         self._model.selection_changed.connect(self._sync_qt_from_model)
+
+    def _region_items(self):
+        return list(self._get_region_items() or [])
+
+    @staticmethod
+    def _is_live_item(item) -> bool:
+        try:
+            return bool(item and hasattr(item, "scene") and item.scene())
+        except (RuntimeError, AttributeError):
+            return False
+
+    def _set_item_selected(self, item, selected: bool, *, update: bool = False) -> None:
+        if not self._is_live_item(item):
+            return
+        try:
+            if item.isSelected() != selected:
+                item.setSelected(selected)
+            if update:
+                item.update()
+        except (RuntimeError, AttributeError):
+            pass
+
+    def _clear_box_select_rect(self) -> None:
+        if self._box_select_rect_item is None:
+            return
+        self._box_select_rect_item.setVisible(False)
+        self._box_select_rect_item.setRect(0, 0, 0, 0)
+
+    def _selected_region_indices_from_scene(self) -> list[int]:
+        from editor.graphics_items import RegionTextItem
+
+        return sorted(
+            item.region_index
+            for item in self._region_items()
+            if isinstance(item, RegionTextItem) and self._is_live_item(item) and item.isSelected()
+        )
 
     # ------------------------------------------------------------------ #
     #  公开 API
@@ -104,38 +142,31 @@ class SelectionManager(QObject):
 
         try:
             select_rect = self._box_select_rect_item.rect()
-            self._box_select_rect_item.setVisible(False)
-            self._box_select_rect_item.setRect(0, 0, 0, 0)
+            self._clear_box_select_rect()
 
-            # 查找框内的所有 RegionTextItem
+            # 使用 item shape 做精确命中，避免仅按 boundingRect 误选旋转/细长区域
             from editor.graphics_items import RegionTextItem
-            region_items = self._get_region_items()
-            selected_indices = []
-            for i, item in enumerate(region_items):
-                if isinstance(item, RegionTextItem):
-                    item_rect = item.sceneBoundingRect()
-                    if select_rect.intersects(item_rect):
-                        selected_indices.append(i)
+            region_items = self._region_items()
+            hit_items = self._scene.items(select_rect, Qt.ItemSelectionMode.IntersectsItemShape)
+            selected_indices = sorted(
+                {
+                    int(item.region_index)
+                    for item in hit_items
+                    if isinstance(item, RegionTextItem)
+                    and self._is_live_item(item)
+                }
+            )
 
             # 批量设置 Qt item 选择状态
             self._syncing = True
             try:
                 if not ctrl_pressed:
                     for item in region_items:
-                        try:
-                            if item and hasattr(item, 'scene') and item.scene() and item.isSelected():
-                                item.setSelected(False)
-                        except (RuntimeError, AttributeError):
-                            pass
+                        self._set_item_selected(item, False)
 
                 for idx in selected_indices:
                     if 0 <= idx < len(region_items):
-                        item = region_items[idx]
-                        try:
-                            if item and hasattr(item, 'scene') and item.scene():
-                                item.setSelected(True)
-                        except (RuntimeError, AttributeError):
-                            pass
+                        self._set_item_selected(region_items[idx], True)
             finally:
                 self._syncing = False
 
@@ -158,11 +189,7 @@ class SelectionManager(QObject):
         if self._syncing:
             return
 
-        from editor.graphics_items import RegionTextItem
-        region_items = self._get_region_items()
-        selected_items = [item for item in region_items
-                          if isinstance(item, RegionTextItem) and item.isSelected()]
-        selected_indices = sorted([item.region_index for item in selected_items])
+        selected_indices = self._selected_region_indices_from_scene()
 
         if selected_indices != self._model.get_selection():
             self._model.set_selection(selected_indices)
@@ -171,33 +198,22 @@ class SelectionManager(QObject):
         """反向同步：model → Qt items"""
         self._syncing = True
         try:
-            region_items = self._get_region_items()
+            region_items = self._region_items()
 
             # 清除所有 item 的选择
             for item in region_items:
-                try:
-                    if item and hasattr(item, 'scene') and item.scene() and item.isSelected():
-                        item.setSelected(False)
-                        item.update()
-                except (RuntimeError, AttributeError):
-                    pass
+                self._set_item_selected(item, False, update=True)
 
             # 设置新选中的 items
             for idx in selected_indices:
                 if 0 <= idx < len(region_items):
-                    item = region_items[idx]
-                    try:
-                        if item and hasattr(item, 'scene') and item.scene():
-                            item.setSelected(True)
-                            item.update()
-                    except (RuntimeError, AttributeError):
-                        pass
+                    self._set_item_selected(region_items[idx], True, update=True)
 
             # 强制场景更新
             if self._scene:
                 self._scene.update()
         except Exception as e:
-            print(f"[SelectionManager] Warning: Selection sync failed: {e}")
+            self._logger.warning("Selection sync failed: %s", e, exc_info=True)
         finally:
             self._syncing = False
 

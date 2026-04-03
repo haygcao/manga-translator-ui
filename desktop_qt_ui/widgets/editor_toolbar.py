@@ -200,9 +200,6 @@ class EditorToolbar(QWidget):
         self.original_image_alpha_slider.blockSignals(True)
         self.original_image_alpha_slider.setValue(slider_value)
         self.original_image_alpha_slider.blockSignals(False)
-        # 强制更新UI
-        self.undo_button.update()
-        self.redo_button.update()
 
     def update_zoom_level(self, zoom_level: float):
         self.zoom_label.setText(f"{zoom_level:.0%}")

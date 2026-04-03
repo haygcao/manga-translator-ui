@@ -188,7 +188,6 @@ class EditorLogic(QObject):
                 norm_current = os.path.normpath(current_image_path)
                 try:
                     if norm_current.startswith(norm_path + os.sep) or norm_current == norm_path:
-                        self.controller.model.set_image(None)
                         self.controller._clear_editor_state(release_image_cache=True)
                 except Exception:
                     pass
@@ -206,7 +205,6 @@ class EditorLogic(QObject):
                 
                 # 检查当前图片是否匹配要删除的文件或其关联文件
                 if norm_current in paths_to_check:
-                    self.controller.model.set_image(None)
                     self.controller._clear_editor_state(release_image_cache=True)
             
             # 从资源管理器的缓存中释放被移除的图片及其关联文件
@@ -216,7 +214,6 @@ class EditorLogic(QObject):
         
         # 检查是否还有文件，如果没有了就清空画布
         if len(self.file_model.files) == 0:
-            self.controller.model.set_image(None)
             self.controller._clear_editor_state(release_image_cache=True)
             
             # 清空所有图片缓存
@@ -241,7 +238,6 @@ class EditorLogic(QObject):
         self.file_list_changed.emit([])
         
         # 先清空画布图片，这样后台任务会检测到图片为None而提前返回
-        self.controller.model.set_image(None)
         # 然后清空编辑器状态（包括取消后台任务）
         self.controller._clear_editor_state(release_image_cache=True)
         

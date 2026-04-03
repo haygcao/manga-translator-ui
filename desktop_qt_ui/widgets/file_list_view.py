@@ -290,9 +290,8 @@ class FileListView(QTreeWidget):
             return self.i18n.translate(key, **kwargs)
         return key
     
-    def refresh_ui_texts(self):
-        """刷新UI文本（用于语言切换）"""
-        # 强制重绘以更新拖拽提示文本
+    def refresh_empty_state_text(self):
+        """重绘空列表占位提示文本（用于语言切换）。"""
         self.viewport().update()
         self.update()
 

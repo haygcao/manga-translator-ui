@@ -295,8 +295,8 @@ class MainView(QWidget):
             self.env_tab_widget.setTabText(2, self._t("Colorization"))
             self.env_tab_widget.setTabText(3, self._t("Render"))
 
-        if hasattr(self, "file_list") and hasattr(self.file_list, "refresh_ui_texts"):
-            self.file_list.refresh_ui_texts()
+        if hasattr(self, "file_list") and hasattr(self.file_list, "refresh_empty_state_text"):
+            self.file_list.refresh_empty_state_text()
 
         if hasattr(self, "prompt_page_title_label"):
             self.prompt_page_title_label.setText(self._t("Prompt Management"))

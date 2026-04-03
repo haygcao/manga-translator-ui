@@ -966,51 +966,13 @@ class FolderDialog(QDialog):
         self.ok_button.setMinimumWidth(100)
         self.ok_button.setMinimumHeight(32)
         self.ok_button.setEnabled(False)
-        self.ok_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self._primary_bg_color};
-                color: {self._primary_text_color};
-                border: 1px solid {self._primary_border_color};
-                border-radius: {self._radius_md}px;
-                padding: 7px 22px;
-                font-size: 13px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {self._primary_hover_color};
-            }}
-            QPushButton:pressed {{
-                background-color: {self._primary_pressed_color};
-            }}
-            QPushButton:disabled {{
-                background-color: {self._disabled_bg_color};
-                color: {self._disabled_text_color};
-                border: 1px solid {self._disabled_border_color};
-            }}
-        """)
+        self.ok_button.setProperty("variant", "accent")
         button_layout.addWidget(self.ok_button)
 
         self.cancel_button = QPushButton(self._t("Cancel"))
         self.cancel_button.setMinimumWidth(100)
         self.cancel_button.setMinimumHeight(32)
-        self.cancel_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self._soft_bg_color};
-                color: {self._soft_text_color};
-                border: 1px solid {self._soft_border_color};
-                border-radius: {self._radius_md}px;
-                padding: 7px 22px;
-                font-size: 13px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {self._soft_hover_color};
-                border-color: {self._border_hover_color};
-            }}
-            QPushButton:pressed {{
-                background-color: {self._soft_pressed_color};
-            }}
-        """)
+        # Use standard button style from theme
         button_layout.addWidget(self.cancel_button)
 
         layout.addLayout(button_layout)

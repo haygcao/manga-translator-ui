@@ -1,5 +1,5 @@
 from main_view_parts.theme import get_current_theme, get_theme_colors
-from PIL.ImageQt import ImageQt
+from editor.image_utils import build_display_image_frame
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPixmap, QTransform
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
@@ -7,11 +7,13 @@ from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
 
 class OriginalCompareView(QGraphicsView):
     """只读原图预览视图，用于和当前编辑画布做左右对比。"""
+    COMPARE_PREVIEW_MAX_PIXELS = 3_000_000
 
-    def __init__(self, parent=None):
+    def __init__(self, source_view=None, parent=None):
         super().__init__(parent)
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
+        self._source_view = source_view
 
         self._image_item: QGraphicsPixmapItem | None = None
         self._q_image_ref = None
@@ -40,6 +42,17 @@ class OriginalCompareView(QGraphicsView):
         self.scene.update()
         self.viewport().update()
 
+    def set_source_view(self, source_view) -> None:
+        self._source_view = source_view
+        if self._last_center_scene is None:
+            return
+
+        scene_rect = self._resolve_source_scene_rect()
+        if scene_rect is not None:
+            self._last_scene_rect = scene_rect
+            self.scene.setSceneRect(scene_rect)
+            self.viewport().update()
+
     def set_image(self, image):
         self.scene.clear()
         self._image_item = None
@@ -48,15 +61,20 @@ class OriginalCompareView(QGraphicsView):
         if image is None:
             return
 
-        if image.mode not in ("1", "L", "P", "RGB", "RGBA"):
-            if image.mode == "LA" or "A" in image.mode:
-                image = image.convert("RGBA")
-            else:
-                image = image.convert("RGB")
-
-        self._q_image_ref = ImageQt(image)
+        try:
+            display_frame = build_display_image_frame(image, max_pixels=self.COMPARE_PREVIEW_MAX_PIXELS)
+            if display_frame is None:
+                raise ValueError("display frame is empty")
+            self._q_image_ref = display_frame.qimage
+        except Exception:
+            self._q_image_ref = None
+            return
         pixmap = QPixmap.fromImage(self._q_image_ref)
         self._image_item = self.scene.addPixmap(pixmap)
+        if display_frame.is_downsampled:
+            transform = QTransform()
+            transform.scale(display_frame.scale_x, display_frame.scale_y)
+            self._image_item.setTransform(transform)
         self.scene.setSceneRect(self._image_item.sceneBoundingRect())
 
         if self._last_center_scene is not None:
@@ -83,23 +101,9 @@ class OriginalCompareView(QGraphicsView):
         self.viewport().update()
 
     def _resolve_source_scene_rect(self) -> QRectF | None:
-        parent = self.parent()
-        graphics_view = getattr(parent, "graphics_view", None)
-        if graphics_view is None:
+        if self._source_view is None:
             return None
-
-        source_scene = getattr(graphics_view, "scene", None)
-        if source_scene is None:
-            return None
-
-        rect = source_scene.itemsBoundingRect()
-        if (not rect.isValid() or rect.isNull()) and getattr(graphics_view, "_image_item", None) is not None:
-            rect = graphics_view._image_item.sceneBoundingRect()
-        if not rect.isValid() or rect.isNull():
-            rect = source_scene.sceneRect()
-        if rect.isValid() and not rect.isNull():
-            return QRectF(rect)
-        return None
+        return self._source_view.get_content_scene_rect()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

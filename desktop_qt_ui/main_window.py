@@ -354,14 +354,12 @@ class MainWindow(QMainWindow):
                 
                 # 如果移除的是当前图片
                 if norm_current == norm_removed:
-                    self.editor_controller.model.set_image(None)
                     self.editor_controller._clear_editor_state()
                 # 如果移除的是文件夹，检查当前图片是否在该文件夹内
                 elif os.path.isdir(file_path):
                     try:
                         # 检查当前图片是否在被移除的文件夹内
                         if os.path.commonpath([norm_current, norm_removed]) == norm_removed:
-                            self.editor_controller.model.set_image(None)
                             self.editor_controller._clear_editor_state()
                     except ValueError:
                         # 不同驱动器，跳过

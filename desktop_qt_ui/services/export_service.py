@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from PIL import Image
+from editor.image_utils import image_like_to_pil
 from utils.asyncio_cleanup import shutdown_event_loop
 from utils.json_encoder import CustomJSONEncoder
 
@@ -53,7 +54,7 @@ class ExportService:
     def _save_temp_inpainted_image(
         self,
         temp_image_path: str,
-        editor_inpainted_image: Optional[Image.Image],
+        editor_inpainted_image: Optional[Any],
         base_size=None,
         source_image: Optional[Image.Image] = None,
     ) -> Optional[str]:
@@ -62,22 +63,33 @@ class ExportService:
             return None
 
         temp_inpainted_path = get_inpainted_path(temp_image_path, create_dir=True)
-        save_image = editor_inpainted_image.copy()
+        save_image = editor_inpainted_image
+        owns_image = False
         try:
+            if not isinstance(save_image, Image.Image):
+                save_image = image_like_to_pil(save_image)
+                owns_image = True
+            if save_image is None:
+                return None
             if base_size and save_image.size != base_size:
                 resized_image = save_image.resize(base_size, Image.Resampling.LANCZOS)
-                save_image.close()
+                if owns_image:
+                    save_image.close()
                 save_image = resized_image
+                owns_image = True
             if save_image.mode == 'CMYK':
                 rgb_image = save_image.convert('RGB')
-                save_image.close()
+                if owns_image:
+                    save_image.close()
                 save_image = rgb_image
+                owns_image = True
 
             save_pil_image(save_image, temp_inpainted_path, source_image=source_image)
             self.logger.info(f"已写入临时修复图供导出复用: {temp_inpainted_path}")
             return temp_inpainted_path
         finally:
-            save_image.close()
+            if owns_image and save_image is not None:
+                save_image.close()
 
     def _persist_backend_inpainted_image(
         self,
@@ -93,12 +105,11 @@ class ExportService:
         source_image = None
         try:
             if isinstance(inpainted_image, Image.Image):
-                save_image = inpainted_image.copy()
+                save_image = inpainted_image
             else:
-                inpainted_array = np.asarray(inpainted_image)
-                if inpainted_array.size == 0:
+                save_image = image_like_to_pil(inpainted_image)
+                if save_image is None:
                     return None
-                save_image = Image.fromarray(inpainted_array.astype(np.uint8, copy=False))
 
             inpainted_path = get_inpainted_path(source_image_path, create_dir=True)
             save_quality = (config or {}).get('cli', {}).get('save_quality', 95)
@@ -124,7 +135,7 @@ class ExportService:
                     source_image.close()
                 except Exception:
                     pass
-            if save_image is not None:
+            if save_image is not None and not isinstance(inpainted_image, Image.Image):
                 try:
                     save_image.close()
                 except Exception:
@@ -211,7 +222,7 @@ class ExportService:
                             error_callback: Optional[callable] = None,
                             source_image_path: Optional[str] = None,
                             save_inpainted_only: bool = False,
-                            editor_inpainted_image: Optional[Image.Image] = None):
+                            editor_inpainted_image: Optional[Any] = None):
         """
         导出后端渲染的图片
         
@@ -240,27 +251,10 @@ class ExportService:
         if progress_callback:
             progress_callback("开始导出渲染图片...")
         
-        # 复制图像数据，避免外部关闭影响
-        try:
-            image_copy = image.copy()
-        except Exception as e:
-            error_msg = f"复制图像失败: {e}"
-            self.logger.error(error_msg)
-            if error_callback:
-                error_callback(error_msg)
-            return
-
-        editor_inpainted_copy = None
-        if editor_inpainted_image is not None:
-            try:
-                editor_inpainted_copy = editor_inpainted_image.copy()
-            except Exception as e:
-                self.logger.warning(f"复制编辑器修复图失败，将回退后端流程: {e}")
-        
         # 在后台线程中执行导出
         export_thread = threading.Thread(
             target=self._perform_backend_render_export,
-            args=(image_copy, regions_data, config, output_path, mask, progress_callback, success_callback, error_callback, source_image_path, save_inpainted_only, editor_inpainted_copy),
+            args=(image, regions_data, config, output_path, mask, progress_callback, success_callback, error_callback, source_image_path, save_inpainted_only, editor_inpainted_image),
             daemon=True
         )
         export_thread.start()
@@ -273,7 +267,7 @@ class ExportService:
                                      error_callback: Optional[callable] = None,
                                      source_image_path: Optional[str] = None,
                                      save_inpainted_only: bool = False,
-                                     editor_inpainted_image: Optional[Image.Image] = None):
+                                     editor_inpainted_image: Optional[Any] = None):
         """在后台线程中执行后端渲染导出"""
         import os
         

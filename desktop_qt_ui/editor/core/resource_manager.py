@@ -3,9 +3,11 @@
 统一管理编辑器的所有资源，包括图片、蒙版、区域等。
 """
 
+import copy
 import logging
 import os
-from typing import Dict, List, Optional
+import weakref
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from PIL import Image
@@ -71,6 +73,29 @@ def _current_process_memory_bytes() -> int:
         return 0
 
 
+def _estimate_image_bytes(image: Image.Image | None) -> int:
+    if image is None:
+        return 0
+    try:
+        channels = max(1, len(image.getbands()))
+        return int(image.width) * int(image.height) * channels
+    except Exception:
+        return 0
+
+
+def _estimate_cache_value_bytes(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, np.ndarray):
+        return int(value.nbytes)
+    if isinstance(value, Image.Image):
+        return _estimate_image_bytes(value)
+    nbytes = getattr(value, "nbytes", None)
+    if isinstance(nbytes, int):
+        return int(nbytes)
+    return 0
+
+
 class ResourceManager:
     """资源管理器
     
@@ -92,8 +117,46 @@ class ResourceManager:
         self._cache_limit = 5  # 最多缓存5张图片
         
         # 通用缓存（用于存储临时数据）
-        self._temp_cache: Dict[str, any] = {}
+        self._temp_cache: Dict[str, Any] = {}
+        self._weak_cache: Dict[str, weakref.ReferenceType[Any]] = {}
         self._export_cleanup_threshold_bytes = 2 * 1024 * 1024 * 1024
+
+    def _release_cached_value(self, value: Any) -> None:
+        """释放缓存中的大对象，避免等待 GC 才回收文件句柄和内存。"""
+        if value is None:
+            return
+
+        protected_images = [
+            resource.image
+            for resource in self._image_cache.values()
+            if resource is not None and getattr(resource, "image", None) is not None
+        ]
+        current_image = self._current_image.image if self._current_image is not None else None
+        if current_image is not None:
+            protected_images.append(current_image)
+
+        if isinstance(value, Image.Image):
+            if not any(value is image for image in protected_images):
+                try:
+                    value.close()
+                except Exception:
+                    pass
+            return
+
+        release = getattr(value, "release", None)
+        if callable(release):
+            try:
+                release()
+            except Exception:
+                pass
+            return
+
+        close = getattr(value, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
     
     # ==================== 图片管理 ====================
 
@@ -191,9 +254,9 @@ class ResourceManager:
         _release_gpu_memory()
         self.logger.info("Cleared all image cache")
 
-    def release_image_cache_except_current(self) -> int:
+    def release_image_cache_except_current(self, force: bool = False) -> int:
         """只保留当前图，释放 image_cache 中的其他图片。"""
-        if _current_process_memory_bytes() < self._export_cleanup_threshold_bytes:
+        if not force and _current_process_memory_bytes() < self._export_cleanup_threshold_bytes:
             return 0
 
         current_path = self._current_image.path if self._current_image is not None else None
@@ -224,11 +287,15 @@ class ResourceManager:
                 self.logger.debug(f"Released image from cache: {current_path}")
             
             self._current_image = None
+
+        if release_from_cache:
+            self.clear_image_cache()
         
         # 清空所有关联资源
         self.clear_masks()
         self.clear_regions()
         self.clear_cache()
+        self.clear_weak_cache()
         
         # 强制垃圾回收
         pass
@@ -243,6 +310,63 @@ class ResourceManager:
             Optional[ImageResource]: 当前图片资源，如果没有加载返回None
         """
         return self._current_image
+
+    def get_managed_images(self) -> List[Image.Image]:
+        """返回当前资源管理器仍在持有的图像对象。"""
+        images: List[Image.Image] = []
+        if self._current_image is not None and getattr(self._current_image, "image", None) is not None:
+            images.append(self._current_image.image)
+        for resource in self._image_cache.values():
+            image = getattr(resource, "image", None)
+            if image is not None and not any(image is existing for existing in images):
+                images.append(image)
+        return images
+
+    def get_memory_snapshot(self) -> Dict[str, Any]:
+        """返回当前资源持有情况，便于切图/导出后观测内存。"""
+        managed_images = self.get_managed_images()
+        managed_image_bytes = sum(_estimate_image_bytes(image) for image in managed_images)
+        mask_bytes = sum(int(mask.data.nbytes) for mask in self._masks.values() if getattr(mask, "data", None) is not None)
+        temp_cache_bytes = sum(_estimate_cache_value_bytes(value) for value in self._temp_cache.values())
+        weak_cache_live_entries = 0
+        for key, value_ref in list(self._weak_cache.items()):
+            if value_ref() is None:
+                self._weak_cache.pop(key, None)
+                continue
+            weak_cache_live_entries += 1
+
+        return {
+            "process_bytes": _current_process_memory_bytes(),
+            "managed_image_count": len(managed_images),
+            "managed_image_bytes": managed_image_bytes,
+            "image_cache_entries": len(self._image_cache),
+            "mask_count": len(self._masks),
+            "mask_bytes": mask_bytes,
+            "region_count": len(self._regions),
+            "temp_cache_entries": len(self._temp_cache),
+            "temp_cache_bytes": temp_cache_bytes,
+            "temp_cache_keys": sorted(self._temp_cache.keys()),
+            "weak_cache_entries": len(self._weak_cache),
+            "weak_cache_live_entries": weak_cache_live_entries,
+            "current_image_path": self._current_image.path if self._current_image is not None else None,
+        }
+
+    def log_memory_snapshot(self, stage: str, logger=None) -> Dict[str, Any]:
+        snapshot = self.get_memory_snapshot()
+        target_logger = logger or self.logger
+        target_logger.info(
+            "Memory snapshot [%s]: process=%.2fMB managed_images=%s managed=%.2fMB masks=%.2fMB temp_cache=%.2fMB weak_cache=%s/%s keys=%s",
+            stage,
+            snapshot["process_bytes"] / (1024 * 1024),
+            snapshot["managed_image_count"],
+            snapshot["managed_image_bytes"] / (1024 * 1024),
+            snapshot["mask_bytes"] / (1024 * 1024),
+            snapshot["temp_cache_bytes"] / (1024 * 1024),
+            snapshot["weak_cache_live_entries"],
+            snapshot["weak_cache_entries"],
+            ",".join(snapshot["temp_cache_keys"]) or "-",
+        )
+        return snapshot
     
     # ==================== 蒙版管理 ====================
     
@@ -292,6 +416,13 @@ class ResourceManager:
             mask.release()
         self._masks.clear()
         self.logger.debug("Cleared all masks")
+
+    def clear_mask(self, mask_type: MaskType) -> None:
+        """清空指定类型的蒙版。"""
+        resource = self._masks.pop(mask_type, None)
+        if resource is not None:
+            resource.release()
+            self.logger.debug(f"Cleared mask: {mask_type}")
     
     # ==================== 区域管理 ====================
     
@@ -309,7 +440,7 @@ class ResourceManager:
         
         resource = RegionResource(
             region_id=region_id,
-            data=region_data.copy(),
+            data=copy.deepcopy(region_data),
         )
         
         self._regions[region_id] = resource
@@ -333,17 +464,20 @@ class ResourceManager:
     
     # ==================== 缓存管理 ====================
     
-    def set_cache(self, key: str, value: any) -> None:
+    def set_cache(self, key: str, value: Any) -> None:
         """设置缓存数据
         
         Args:
             key: 缓存键
             value: 缓存值
         """
+        old_value = self._temp_cache.get(key)
+        if old_value is not value:
+            self._release_cached_value(old_value)
         self._temp_cache[key] = value
         self.logger.debug(f"Set cache: {key}")
     
-    def get_cache(self, key: str, default=None) -> any:
+    def get_cache(self, key: str, default=None) -> Any:
         """获取缓存数据
         
         Args:
@@ -354,6 +488,36 @@ class ResourceManager:
             缓存值，如果不存在返回default
         """
         return self._temp_cache.get(key, default)
+
+    def set_weak_cache(self, key: str, value: Any) -> None:
+        """设置弱引用缓存，不让缓存本身阻止回收。"""
+        if value is None:
+            self._weak_cache.pop(key, None)
+            return
+        try:
+            self._weak_cache[key] = weakref.ref(value)
+            self.logger.debug(f"Set weak cache: {key}")
+        except TypeError:
+            self._weak_cache.pop(key, None)
+            self.logger.debug(f"Skip weak cache for non-weakrefable value: {key}")
+
+    def get_weak_cache(self, key: str, default=None) -> Any:
+        value_ref = self._weak_cache.get(key)
+        if value_ref is None:
+            return default
+        value = value_ref()
+        if value is None:
+            self._weak_cache.pop(key, None)
+            return default
+        return value
+
+    def clear_weak_cache(self, key: Optional[str] = None) -> None:
+        if key:
+            self._weak_cache.pop(key, None)
+            self.logger.debug(f"Cleared weak cache: {key}")
+            return
+        self._weak_cache.clear()
+        self.logger.debug("Cleared all weak cache")
     
     def clear_cache(self, key: Optional[str] = None) -> None:
         """清空缓存
@@ -363,9 +527,12 @@ class ResourceManager:
         """
         if key:
             if key in self._temp_cache:
-                del self._temp_cache[key]
+                value = self._temp_cache.pop(key)
+                self._release_cached_value(value)
                 self.logger.debug(f"Cleared cache: {key}")
         else:
+            for value in self._temp_cache.values():
+                self._release_cached_value(value)
             self._temp_cache.clear()
             self.logger.debug("Cleared all cache")
     
@@ -386,7 +553,8 @@ class ResourceManager:
         self.clear_regions()
         
         # 清空临时缓存
-        self._temp_cache.clear()
+        self.clear_cache()
+        self.clear_weak_cache()
         
         # 清理图片缓存
         for resource in self._image_cache.values():
@@ -408,7 +576,8 @@ class ResourceManager:
             return
 
         # 清空临时缓存（inpainted图片等）
-        self._temp_cache.clear()
+        self.clear_cache()
+        self.clear_weak_cache()
         
         # 强制垃圾回收
         import gc

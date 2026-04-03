@@ -40,6 +40,23 @@ class EditorView(QWidget):
         self.logic = logic
         self.i18n = get_i18n_manager()
         self._compare_mode_enabled = False
+        self.toolbar: EditorToolbar | None = None
+        self.main_splitter: QSplitter | None = None
+        self.left_tab_widget: QTabWidget | None = None
+        self.find_input: QLineEdit | None = None
+        self.replace_input: QLineEdit | None = None
+        self.replace_all_button: QPushButton | None = None
+        self.apply_translations_button: QPushButton | None = None
+        self.region_list_view: RegionListView | None = None
+        self.property_panel: PropertyPanel | None = None
+        self.compare_preview_container: QWidget | None = None
+        self.original_compare_view: OriginalCompareView | None = None
+        self.edit_canvas_container: QWidget | None = None
+        self.graphics_view: GraphicsView | None = None
+        self.add_files_button: QPushButton | None = None
+        self.add_folder_button: QPushButton | None = None
+        self.clear_list_button: QPushButton | None = None
+        self.file_list: FileListView | None = None
 
         # 设置controller的view引用，用于更新UI状态
         self.controller.set_view(self)
@@ -173,9 +190,11 @@ class EditorView(QWidget):
 
     def refresh_tab_titles(self):
         """刷新标签页标题（用于语言切换）"""
-        if hasattr(self, 'left_tab_widget') and self.left_tab_widget:
-            self.left_tab_widget.setTabText(0, self._t("Editable Translation"))
-            self.left_tab_widget.setTabText(1, self._t("Property Editor"))
+        if self.left_tab_widget is None:
+            return
+
+        self.left_tab_widget.setTabText(0, self._t("Editable Translation"))
+        self.left_tab_widget.setTabText(1, self._t("Property Editor"))
     
     def refresh_ui_texts(self):
         """刷新所有UI文本（用于语言切换）"""
@@ -183,38 +202,38 @@ class EditorView(QWidget):
         self.refresh_tab_titles()
         
         # 刷新查找替换按钮
-        if hasattr(self, 'find_input'):
+        if self.find_input is not None:
             self.find_input.setPlaceholderText(self._t("Find"))
-        if hasattr(self, 'replace_input'):
+        if self.replace_input is not None:
             self.replace_input.setPlaceholderText(self._t("Replace with"))
-        if hasattr(self, 'replace_all_button'):
+        if self.replace_all_button is not None:
             self.replace_all_button.setText(self._t("Replace All"))
-        if hasattr(self, 'apply_translations_button'):
+        if self.apply_translations_button is not None:
             self.apply_translations_button.setText(self._t("Apply All Translation Changes"))
         
         # 刷新工具栏
-        if hasattr(self, 'toolbar'):
+        if self.toolbar is not None:
             self.toolbar.refresh_ui_texts()
         
         # 刷新属性面板
-        if hasattr(self, 'property_panel'):
+        if self.property_panel is not None:
             self.property_panel.refresh_ui_texts()
         
         # 刷新右侧文件列表按钮
-        if hasattr(self, 'add_files_button'):
+        if self.add_files_button is not None:
             self.add_files_button.setText(self._t("Add Files"))
-        if hasattr(self, 'add_folder_button'):
+        if self.add_folder_button is not None:
             self.add_folder_button.setText(self._t("Add Folder"))
-        if hasattr(self, 'clear_list_button'):
+        if self.clear_list_button is not None:
             self.clear_list_button.setText(self._t("Clear List"))
         
-        # 刷新文件列表视图（强制重绘以更新拖拽提示文本）
-        if hasattr(self, 'file_list') and hasattr(self.file_list, 'refresh_ui_texts'):
-            self.file_list.refresh_ui_texts()
+        # 文件项文本不需要重建，语言切换时只需重绘空列表占位提示。
+        if self.file_list is not None:
+            self.file_list.refresh_empty_state_text()
 
     def _apply_initial_splitter_sizes(self):
         """用左栏的实际 sizeHint 作为初始宽度，而不是写死常量。"""
-        if not hasattr(self, "main_splitter") or not hasattr(self, "left_tab_widget"):
+        if self.main_splitter is None or self.left_tab_widget is None:
             return
 
         self.left_tab_widget.ensurePolished()
@@ -324,7 +343,7 @@ class EditorView(QWidget):
         compare_layout = QVBoxLayout(self.compare_preview_container)
         compare_layout.setContentsMargins(0, 0, 0, 0)
         compare_layout.setSpacing(0)
-        self.original_compare_view = OriginalCompareView(self)
+        self.original_compare_view = OriginalCompareView(parent=self)
         self.original_compare_view.setObjectName("editor_original_compare_view")
         compare_layout.addWidget(self.original_compare_view)
         self.compare_preview_container.hide()
@@ -336,8 +355,9 @@ class EditorView(QWidget):
         edit_canvas_layout.setSpacing(0)
 
         # 画布（滚动条已在 GraphicsView 中配置）
-        self.graphics_view = GraphicsView(self.model, self)
+        self.graphics_view = GraphicsView(self.model, controller=self.controller, parent=self)
         self.graphics_view.setObjectName("editor_graphics_view")
+        self.original_compare_view.set_source_view(self.graphics_view)
         edit_canvas_layout.addWidget(self.graphics_view)
 
         center_layout.addWidget(self.compare_preview_container, 1)
@@ -407,22 +427,24 @@ class EditorView(QWidget):
 
         theme = theme or get_current_theme()
         apply_widget_stylesheet(self, generate_editor_style(theme))
-        if hasattr(self, "graphics_view") and self.graphics_view:
+        if self.graphics_view is not None:
             self.graphics_view.apply_theme(theme)
-        if hasattr(self, "original_compare_view") and self.original_compare_view:
+        if self.original_compare_view is not None:
             self.original_compare_view.apply_theme(theme)
         for picker in self.findChildren(ColorPickerWidget):
             picker.refresh_theme()
 
     @pyqtSlot(object)
     def _on_compare_image_changed(self, image):
-        if hasattr(self, "original_compare_view") and self.original_compare_view:
-            self.original_compare_view.set_image(image)
-            if self._compare_mode_enabled:
-                self._sync_compare_view_from_main()
+        if self.original_compare_view is None:
+            return
+
+        self.original_compare_view.set_image(image)
+        if self._compare_mode_enabled:
+            self._sync_compare_view_from_main()
 
     def _sync_compare_view_from_main(self):
-        if not hasattr(self, "graphics_view") or not hasattr(self, "original_compare_view"):
+        if self.graphics_view is None or self.original_compare_view is None:
             return
         transform, center_scene = self.graphics_view.get_view_state()
         if transform is None or center_scene is None:
@@ -431,7 +453,7 @@ class EditorView(QWidget):
 
     def set_compare_mode(self, enabled: bool):
         self._compare_mode_enabled = bool(enabled)
-        if hasattr(self, "compare_preview_container") and self.compare_preview_container:
+        if self.compare_preview_container is not None:
             self.compare_preview_container.setVisible(self._compare_mode_enabled)
         if self._compare_mode_enabled:
             self._sync_compare_view_from_main()

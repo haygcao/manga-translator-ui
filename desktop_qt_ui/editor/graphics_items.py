@@ -450,6 +450,51 @@ class RegionTextItem(QGraphicsItemGroup):
                     seen.add(key)
         return path
 
+    def _primary_view(self):
+        scene = self.scene()
+        if scene is None:
+            return None
+        views = scene.views()
+        return views[0] if views else None
+
+    def _active_view_tool(self):
+        view = self._primary_view()
+        if view is None:
+            return None
+        return getattr(view, "_active_tool", None)
+
+    def _rotated_world_point(self, point: tuple[float, float], cx: float, cy: float, angle: float):
+        x, y = point
+        return rotate_point(x, y, angle, cx, cy) if angle != 0 else (x, y)
+
+    def _white_edge_world_points(self, l: float, t: float, r: float, b: float, cx: float, cy: float) -> list[tuple[float, float]]:
+        return [
+            ((l + r) / 2.0 + cx, t + cy),
+            (r + cx, (t + b) / 2.0 + cy),
+            ((l + r) / 2.0 + cx, b + cy),
+            (l + cx, (t + b) / 2.0 + cy),
+        ]
+
+    def _clear_drag_context(self):
+        self._drag_handle_indices = None
+        self._drag_start_white_frame_local = None
+        self._drag_start_white_handle_world = None
+        self._drag_start_text_item_pos = QPointF()
+        self._drag_start_pivot_scene = QPointF()
+
+    def _reset_interaction_state(self):
+        self._interaction_mode = "none"
+        self._is_dragging = False
+        self._clear_drag_context()
+
+    def _capture_white_frame_drag_context(self, *, capture_text_pos: bool = False):
+        self._drag_start_white_frame_local = (
+            list(self.geo.white_frame_local) if self.geo.white_frame_local else None
+        )
+        self._drag_start_white_handle_world = None
+        if capture_text_pos:
+            self._drag_start_text_item_pos = QPointF(self.text_item.pos())
+
     # ------------------------------------------------------------------
     # 手柄命中检测
     # ------------------------------------------------------------------
@@ -518,9 +563,7 @@ class RegionTextItem(QGraphicsItemGroup):
             if not self.scene():
                 super().hoverMoveEvent(event)
                 return
-            views = self.scene().views()
-            view = views[0] if views else None
-            if view and hasattr(view, "_active_tool") and view._active_tool in ("pen", "brush", "eraser"):
+            if self._active_view_tool() in ("pen", "brush", "eraser"):
                 super().hoverMoveEvent(event)
                 return
 
@@ -557,17 +600,15 @@ class RegionTextItem(QGraphicsItemGroup):
 
     def _apply_hover_cursor(self, shape):
         self.setCursor(shape)
-        if self.scene() and self.scene().views():
-            view = self.scene().views()[0]
-            if hasattr(view, "_active_tool") and view._active_tool == "select":
-                view.viewport().setCursor(QCursor(shape))
+        view = self._primary_view()
+        if view is not None and self._active_view_tool() == "select":
+            view.viewport().setCursor(QCursor(shape))
 
     def _clear_hover_cursor(self):
         self.unsetCursor()
-        if self.scene() and self.scene().views():
-            view = self.scene().views()[0]
-            if hasattr(view, "_active_tool") and view._active_tool == "select":
-                view.viewport().unsetCursor()
+        view = self._primary_view()
+        if view is not None and self._active_view_tool() == "select":
+            view.viewport().unsetCursor()
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent):
         try:
@@ -578,8 +619,7 @@ class RegionTextItem(QGraphicsItemGroup):
             local_pos = event.pos()
 
             if event.button() == Qt.MouseButton.LeftButton:
-                views = self.scene().views()
-                view = views[0] if views else None
+                view = self._primary_view()
                 if not view or not hasattr(view, "model"):
                     super().mousePressEvent(event)
                     return
@@ -593,9 +633,7 @@ class RegionTextItem(QGraphicsItemGroup):
                 if was_selected and self.isSelected():
                     self._save_drag_start_state(event, local_pos, handle, indices)
                 else:
-                    self._interaction_mode = "none"
-                    self._is_dragging = False
-                    self._drag_handle_indices = None
+                    self._reset_interaction_state()
                 event.accept()
                 return
             elif event.button() == Qt.MouseButton.RightButton:
@@ -612,6 +650,7 @@ class RegionTextItem(QGraphicsItemGroup):
 
     def _save_drag_start_state(self, event, local_pos, handle, indices):
         """保存拖动开始时的所有状态。"""
+        self._clear_drag_context()
         self._is_dragging = bool(handle)
         self._drag_start_pos = local_pos
         self._drag_start_scene_pos = event.scenePos()
@@ -627,26 +666,19 @@ class RegionTextItem(QGraphicsItemGroup):
             self._drag_handle_indices = indices
 
             if handle in ("white_corner", "white_edge"):
-                self._drag_start_white_frame_local = (
-                    list(self.geo.white_frame_local) if self.geo.white_frame_local else None
-                )
+                self._capture_white_frame_drag_context()
                 self._drag_start_white_handle_world = self._white_handle_world_at_start()
             elif handle == "white_move":
-                self._drag_start_white_frame_local = (
-                    list(self.geo.white_frame_local) if self.geo.white_frame_local else None
-                )
-                self._drag_start_text_item_pos = QPointF(self.text_item.pos())
+                self._capture_white_frame_drag_context(capture_text_pos=True)
             elif handle == "rotate":
                 self.setTransformOriginPoint(QPointF(0, 0))
                 self._drag_start_pivot_scene = self.mapToScene(self._drag_start_center)
                 vec = event.scenePos() - self._drag_start_pivot_scene
                 self._drag_start_angle_rad = np.arctan2(vec.y(), vec.x())
             else:
-                self._interaction_mode = "none"
-                self._is_dragging = False
+                self._reset_interaction_state()
         else:
-            self._interaction_mode = "none"
-            self._is_dragging = False
+            self._reset_interaction_state()
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent):
         try:
@@ -669,12 +701,11 @@ class RegionTextItem(QGraphicsItemGroup):
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent):
         try:
             if self._interaction_mode == "none":
-                self._is_dragging = False
                 super().mouseReleaseEvent(event)
+                self._reset_interaction_state()
                 return
 
             mode = self._interaction_mode
-            self._interaction_mode = "none"
 
             if mode == "rotate":
                 self._commit_rotation(event)
@@ -682,10 +713,9 @@ class RegionTextItem(QGraphicsItemGroup):
                 self._commit_white_frame(event, mode)
             else:
                 super().mouseReleaseEvent(event)
-            self._is_dragging = False
+            self._reset_interaction_state()
         except Exception as e:
-            self._interaction_mode = "none"
-            self._is_dragging = False
+            self._reset_interaction_state()
             logger.error(f"[RegionTextItem] mouseReleaseEvent: {e}\n{traceback.format_exc()}")
 
     # ------------------------------------------------------------------
@@ -866,14 +896,14 @@ class RegionTextItem(QGraphicsItemGroup):
             corners = [(l + cx, t + cy), (r + cx, t + cy), (r + cx, b + cy), (l + cx, b + cy)]
             if not (0 <= idx < 4):
                 return None
-            x, y = corners[idx]
-            return rotate_point(x, y, angle, cx, cy) if angle != 0 else (x, y)
+            return self._rotated_world_point(corners[idx], cx, cy, angle)
 
         if self._interaction_mode == "white_edge":
             idx = self._drag_handle_indices
-            verts = [(l + cx, t + cy), (r + cx, t + cy), (r + cx, b + cy), (l + cx, b + cy)]
-            x, y = verts[idx]
-            return rotate_point(x, y, angle, cx, cy) if angle != 0 else (x, y)
+            edge_points = self._white_edge_world_points(l, t, r, b, cx, cy)
+            if not (0 <= idx < 4):
+                return None
+            return self._rotated_world_point(edge_points[idx], cx, cy, angle)
 
         return None
 
