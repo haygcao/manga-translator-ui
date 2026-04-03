@@ -601,7 +601,7 @@ def _glyph_spec(cdpt: str, font_size: int) -> GlyphSpec:
     cached = _cache_get(state.glyph_specs, key)
     if cached is not None:
         return cached
-    spec = _glyph_spec_from_selection(cdpt, font_size) or _glyph_spec_via_layout(cdpt, font_size)
+    spec = _glyph_spec_via_layout(cdpt, font_size) or _glyph_spec_from_selection(cdpt, font_size)
     if spec is None:
         if cdpt in (' ', '?', '□'):
             raise RuntimeError(f"Character '{cdpt}' not found in any font.")
