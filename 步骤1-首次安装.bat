@@ -25,11 +25,50 @@ cd /d "%~dp0"
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
+REM 仅允许在Git仓库、本地依赖目录或空目录中运行，避免覆盖非项目目录
+set "DIR_SAFE=0"
+set "DIR_SAFE_REASON="
+if exist "%SCRIPT_DIR%\.git" (
+    set "DIR_SAFE=1"
+    set "DIR_SAFE_REASON=检测到同目录 .git"
+) else if exist "%SCRIPT_DIR%\PortableGit\cmd\git.exe" (
+    set "DIR_SAFE=1"
+    set "DIR_SAFE_REASON=检测到同目录 PortableGit"
+) else if exist "%SCRIPT_DIR%\Miniconda3\Scripts\conda.exe" (
+    set "DIR_SAFE=1"
+    set "DIR_SAFE_REASON=检测到同目录 Miniconda3"
+) else (
+    set "DIR_HAS_OTHER_CONTENT=0"
+    for /f "delims=" %%i in ('dir /a /b "%SCRIPT_DIR%" 2^>nul') do (
+        if /i not "%%~nxi"=="%~nx0" (
+            set "DIR_HAS_OTHER_CONTENT=1"
+        )
+    )
+    if "!DIR_HAS_OTHER_CONTENT!"=="0" (
+        set "DIR_SAFE=1"
+        set "DIR_SAFE_REASON=检测到空文件夹（仅包含当前安装脚本）"
+    )
+)
+
+if not "!DIR_SAFE!"=="1" (
+    echo.
+    echo [ERROR] 当前目录不符合步骤1的运行条件
+    echo [INFO] 当前目录不是空的，请把我放到空目录
+    echo.
+    echo 当前目录: %SCRIPT_DIR%
+    echo.
+    echo 为避免覆盖或清理无关文件，脚本已停止。
+    pause
+    exit /b 1
+)
+
 echo.
 echo ========================================
 echo 漫画翻译器 - 一键安装程序
 echo Manga Translator UI - Installer
 echo ========================================
+echo.
+echo [INFO] 当前目录检查通过: !DIR_SAFE_REASON!
 echo.
 echo 本脚本将自动完成以下步骤:
 echo [1] 安装 Miniconda (Python环境管理, 如需要)
