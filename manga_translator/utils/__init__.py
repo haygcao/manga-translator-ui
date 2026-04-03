@@ -8,6 +8,7 @@ from .mangalens_detector import (
     BubbleDetectionResult,
     MangaLensBubbleDetector,
     build_bubble_mask_from_mangalens_result,
+    clear_mangalens_result_cache,
     detect_bubbles_with_mangalens,
     get_cached_bubbles_with_mangalens,
     get_mangalens_detector,

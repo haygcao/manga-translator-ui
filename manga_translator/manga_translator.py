@@ -26,6 +26,7 @@ from .utils import (
     Context,
     ModelWrapper,
     TextBlock,
+    clear_mangalens_result_cache,
     detect_bubbles_with_mangalens,
     dump_image,
     imwrite_unicode,
@@ -2012,6 +2013,10 @@ class MangaTranslator:
         
         # 清理中间处理图像
         if hasattr(ctx, 'img_rgb') and ctx.img_rgb is not None:
+            try:
+                clear_mangalens_result_cache(ctx.img_rgb)
+            except Exception:
+                pass
             del ctx.img_rgb
             ctx.img_rgb = None
         
@@ -2045,6 +2050,13 @@ class MangaTranslator:
 
         if hasattr(ctx, 'textlines') and ctx.textlines is not None:
             ctx.textlines = None
+
+        image_name = getattr(ctx, 'image_name', None)
+        if isinstance(image_name, str) and image_name:
+            try:
+                clear_mangalens_result_cache(image_name)
+            except Exception:
+                pass
 
         # 如果不保留结果，也清理 result
         if not keep_result and hasattr(ctx, 'result') and ctx.result is not None:
@@ -2131,7 +2143,12 @@ class MangaTranslator:
             
             translated_contexts.clear()
         
-        # 4. 强制垃圾回收和GPU显存清理
+        # 4. 清理气泡缓存并强制垃圾回收/GPU显存清理
+        try:
+            clear_mangalens_result_cache()
+        except Exception:
+            pass
+
         # 批次边界执行激进显存回收，避免长批处理中显存持续增长。
         self._cleanup_gpu_memory(aggressive=True)
         

@@ -2,6 +2,7 @@ import copy
 import math
 import os
 import re
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import cv2
@@ -36,6 +37,26 @@ logger = get_logger('render')
 
 # 基准字体大小，用于模拟文本块
 BASE_FONT_SIZE = 100
+
+
+@dataclass(frozen=True)
+class _BubbleMaskView:
+    mask: np.ndarray
+    offset_x: int = 0
+    offset_y: int = 0
+
+
+def _empty_bubble_mask_view() -> "_BubbleMaskView":
+    return _BubbleMaskView(mask=np.zeros((0, 0), dtype=np.uint8))
+
+
+def _mask_view_pixel_count(mask_view: Optional["_BubbleMaskView"]) -> int:
+    if mask_view is None or getattr(mask_view, 'mask', None) is None:
+        return 0
+    mask = mask_view.mask
+    if mask.size == 0:
+        return 0
+    return int(np.count_nonzero(mask))
 
 def _resolve_font_path(font_path: str) -> str:
     """Resolve font path from absolute/relative/project-fonts path.
@@ -707,28 +728,44 @@ def _resolve_region_render_horizontal(region: TextBlock) -> bool:
     return region.horizontal
 
 
-def _polygon_fully_inside_mask(points: np.ndarray, bubble_mask: np.ndarray) -> bool:
-    if points is None or points.size == 0 or bubble_mask is None:
+def _polygon_fully_inside_mask(points: np.ndarray, bubble_mask_view: "_BubbleMaskView") -> bool:
+    if points is None or points.size == 0 or bubble_mask_view is None:
+        return False
+    bubble_mask = bubble_mask_view.mask
+    if bubble_mask is None:
         return False
     h, w = bubble_mask.shape[:2]
     if h <= 0 or w <= 0:
         return False
 
-    pts = np.asarray(points, dtype=np.int32)
+    pts = np.asarray(points, dtype=np.int32).copy()
     if pts.ndim != 2 or pts.shape[0] < 3:
         return False
+    pts[:, 0] -= int(bubble_mask_view.offset_x)
+    pts[:, 1] -= int(bubble_mask_view.offset_y)
     pts[:, 0] = np.clip(pts[:, 0], 0, max(w - 1, 0))
     pts[:, 1] = np.clip(pts[:, 1], 0, max(h - 1, 0))
 
-    poly_mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.fillPoly(poly_mask, [pts], 255)
+    x1 = int(np.min(pts[:, 0]))
+    y1 = int(np.min(pts[:, 1]))
+    x2 = int(np.max(pts[:, 0]))
+    y2 = int(np.max(pts[:, 1]))
+    if x2 < x1 or y2 < y1:
+        return False
+
+    poly_mask = np.zeros((y2 - y1 + 1, x2 - x1 + 1), dtype=np.uint8)
+    roi_pts = pts.copy()
+    roi_pts[:, 0] -= x1
+    roi_pts[:, 1] -= y1
+    cv2.fillPoly(poly_mask, [roi_pts], 255)
     poly_pixels = poly_mask > 0
     if not np.any(poly_pixels):
         return False
-    return bool(np.all(bubble_mask[poly_pixels] > 0))
+    mask_roi = bubble_mask[y1:y2 + 1, x1:x2 + 1]
+    return bool(np.all(mask_roi[poly_pixels] > 0))
 
 
-def _region_lines_fully_inside_mask(region: TextBlock, bubble_mask: np.ndarray) -> bool:
+def _region_lines_fully_inside_mask(region: TextBlock, bubble_mask_view: "_BubbleMaskView") -> bool:
     lines = np.asarray(region.lines)
     if lines.size == 0:
         return False
@@ -741,7 +778,7 @@ def _region_lines_fully_inside_mask(region: TextBlock, bubble_mask: np.ndarray) 
         return False
 
     for poly in polys:
-        if not _polygon_fully_inside_mask(poly, bubble_mask):
+        if not _polygon_fully_inside_mask(poly, bubble_mask_view):
             return False
     return True
 
@@ -770,34 +807,86 @@ def _build_region_reference_mask(
     region: TextBlock,
     bubble_mask: np.ndarray,
     label_map: Optional[np.ndarray],
-) -> np.ndarray:
+    label_stats: Optional[np.ndarray] = None,
+) -> "_BubbleMaskView":
     if bubble_mask is None or np.count_nonzero(bubble_mask) == 0:
-        return np.zeros((0, 0), dtype=np.uint8)
+        return _empty_bubble_mask_view()
 
     h, w = bubble_mask.shape[:2]
-    region_mask = np.zeros((h, w), dtype=np.uint8)
-    for poly in _extract_region_polygons(region):
+    polygons = _extract_region_polygons(region)
+    if not polygons:
+        return _empty_bubble_mask_view()
+
+    all_pts = np.concatenate([np.asarray(poly, dtype=np.float32).reshape(-1, 2) for poly in polygons], axis=0)
+    if all_pts.size == 0:
+        return _empty_bubble_mask_view()
+
+    roi_x1 = max(0, min(w - 1, int(np.floor(np.min(all_pts[:, 0])))))
+    roi_y1 = max(0, min(h - 1, int(np.floor(np.min(all_pts[:, 1])))))
+    roi_x2 = max(0, min(w - 1, int(np.ceil(np.max(all_pts[:, 0])))))
+    roi_y2 = max(0, min(h - 1, int(np.ceil(np.max(all_pts[:, 1])))))
+    if roi_x2 < roi_x1 or roi_y2 < roi_y1:
+        return _empty_bubble_mask_view()
+
+    roi_bubble_mask = bubble_mask[roi_y1:roi_y2 + 1, roi_x1:roi_x2 + 1]
+    if roi_bubble_mask.size == 0 or np.count_nonzero(roi_bubble_mask) == 0:
+        return _empty_bubble_mask_view()
+
+    region_mask = np.zeros_like(roi_bubble_mask, dtype=np.uint8)
+    for poly in polygons:
         pts = np.asarray(poly, dtype=np.int32)
         if pts.ndim != 2 or pts.shape[0] < 3:
             continue
         pts[:, 0] = np.clip(pts[:, 0], 0, max(w - 1, 0))
         pts[:, 1] = np.clip(pts[:, 1], 0, max(h - 1, 0))
+        pts[:, 0] -= roi_x1
+        pts[:, 1] -= roi_y1
         cv2.fillPoly(region_mask, [pts], 255)
 
-    overlap_pixels = (region_mask > 0) & (bubble_mask > 0)
+    overlap_pixels = (region_mask > 0) & (roi_bubble_mask > 0)
     if not np.any(overlap_pixels):
-        return np.zeros((h, w), dtype=np.uint8)
+        return _empty_bubble_mask_view()
 
     if label_map is None or label_map.shape[:2] != bubble_mask.shape[:2]:
-        return np.where(bubble_mask > 0, 255, 0).astype(np.uint8)
+        return _BubbleMaskView(
+            mask=np.where(roi_bubble_mask > 0, 255, 0).astype(np.uint8),
+            offset_x=roi_x1,
+            offset_y=roi_y1,
+        )
 
-    labels = np.unique(label_map[overlap_pixels])
+    label_roi = label_map[roi_y1:roi_y2 + 1, roi_x1:roi_x2 + 1]
+    labels = np.unique(label_roi[overlap_pixels])
     labels = labels[labels > 0]
     if labels.size == 0:
-        return np.zeros((h, w), dtype=np.uint8)
+        return _empty_bubble_mask_view()
 
-    selected = np.isin(label_map, labels)
-    return np.where(selected, 255, 0).astype(np.uint8)
+    selected_labels = labels.astype(np.int32, copy=False)
+    if (
+        label_stats is not None
+        and isinstance(label_stats, np.ndarray)
+        and label_stats.ndim == 2
+        and label_stats.shape[1] >= 5
+    ):
+        selected_labels = selected_labels[selected_labels < label_stats.shape[0]]
+        if selected_labels.size == 0:
+            return _empty_bubble_mask_view()
+
+        left = label_stats[selected_labels, cv2.CC_STAT_LEFT]
+        top = label_stats[selected_labels, cv2.CC_STAT_TOP]
+        width = label_stats[selected_labels, cv2.CC_STAT_WIDTH]
+        height = label_stats[selected_labels, cv2.CC_STAT_HEIGHT]
+        roi_x1 = max(0, int(np.min(left)))
+        roi_y1 = max(0, int(np.min(top)))
+        roi_x2 = min(w - 1, int(np.max(left + width - 1)))
+        roi_y2 = min(h - 1, int(np.max(top + height - 1)))
+        label_roi = label_map[roi_y1:roi_y2 + 1, roi_x1:roi_x2 + 1]
+
+    selected = np.isin(label_roi, selected_labels)
+    return _BubbleMaskView(
+        mask=np.where(selected, 255, 0).astype(np.uint8),
+        offset_x=roi_x1,
+        offset_y=roi_y1,
+    )
 
 
 def _resolve_line_spacing_multiplier(region: TextBlock, config: Config) -> float:
@@ -964,7 +1053,7 @@ def _font_size_fits_bubble_mask(
     line_spacing_multiplier: float,
     letter_spacing_multiplier: float,
     config: Config,
-    bubble_mask: np.ndarray,
+    bubble_mask: "_BubbleMaskView",
     anchor_mode: str = 'top',
 ) -> Tuple[bool, Optional[np.ndarray]]:
     dst_points = _calc_region_dst_points_for_font(
@@ -990,7 +1079,7 @@ def _binary_search_font_for_bubble_mask(
     line_spacing_multiplier: float,
     letter_spacing_multiplier: float,
     config: Config,
-    bubble_mask: np.ndarray,
+    bubble_mask: "_BubbleMaskView",
     anchor_mode: str = 'top',
 ) -> Tuple[Optional[int], Optional[np.ndarray]]:
     lo = max(int(min_font_size), 1)
@@ -1048,6 +1137,7 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
 
     balloon_fill_mask = None
     balloon_fill_label_map = None
+    balloon_fill_label_stats = None
     if mode == 'balloon_fill' and original_img is not None:
         try:
             model_result = get_cached_bubbles_with_mangalens(original_img, return_annotated=False, verbose=False)
@@ -1064,7 +1154,7 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                 if mask_pixels == 0 and debug_img is not None:
                     logger.warning("balloon_fill global bubble mask is empty (mask_pixels=0), blue overlay will not be visible")
                 if mask_pixels > 0:
-                    _, balloon_fill_label_map = cv2.connectedComponents(
+                    _, balloon_fill_label_map, balloon_fill_label_stats, _ = cv2.connectedComponentsWithStats(
                         np.where(balloon_fill_mask > 0, 1, 0).astype(np.uint8),
                         connectivity=8,
                     )
@@ -1084,17 +1174,19 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
             logger.warning(f"balloon_fill bubble cache read failed, skip global bubble mask: {exc}")
             balloon_fill_mask = np.zeros(original_img.shape[:2], dtype=np.uint8)
             balloon_fill_label_map = None
+            balloon_fill_label_stats = None
 
     # Bubble mask for center_text_in_bubble: reuse balloon_fill_mask or try mangalens cache
     center_check_mask = balloon_fill_mask
     center_check_label_map = balloon_fill_label_map
+    center_check_label_stats = balloon_fill_label_stats
     if center_check_mask is None and config.render.center_text_in_bubble and original_img is not None:
         try:
             _cr = get_cached_bubbles_with_mangalens(original_img, return_annotated=False, verbose=False)
             if _cr is not None:
                 center_check_mask = build_bubble_mask_from_mangalens_result(_cr, original_img.shape[:2])
                 if center_check_mask is not None and np.count_nonzero(center_check_mask) > 0:
-                    _, center_check_label_map = cv2.connectedComponents(
+                    _, center_check_label_map, center_check_label_stats, _ = cv2.connectedComponentsWithStats(
                         np.where(center_check_mask > 0, 1, 0).astype(np.uint8), connectivity=8
                     )
                 else:
@@ -1123,8 +1215,13 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
             # 判断是否需要气泡内居中：开启设置 且 区域确实在检测到的气泡内
             apply_bubble_centering = config.render.center_text_in_bubble
             if apply_bubble_centering and center_check_mask is not None and np.count_nonzero(center_check_mask) > 0:
-                _rm = _build_region_reference_mask(region, center_check_mask, center_check_label_map)
-                apply_bubble_centering = np.count_nonzero(_rm) > 0
+                _rm = _build_region_reference_mask(
+                    region,
+                    center_check_mask,
+                    center_check_label_map,
+                    center_check_label_stats,
+                )
+                apply_bubble_centering = _mask_view_pixel_count(_rm) > 0
             normal_anchor_mode = _resolve_layout_anchor_mode(
                 apply_bubble_centering=apply_bubble_centering,
                 skip_font_scaling=False,
@@ -1215,12 +1312,17 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                     letter_spacing_multiplier = _resolve_letter_spacing_multiplier(region, config)
 
                     has_br = bool(re.search(r'(\[BR\]|【BR】|<br>)', region.translation, flags=re.IGNORECASE))
-                    region_bubble_mask = np.zeros(original_img.shape[:2], dtype=np.uint8)
+                    region_bubble_mask = _empty_bubble_mask_view()
                     if balloon_fill_mask is not None and np.count_nonzero(balloon_fill_mask) > 0:
-                        region_bubble_mask = _build_region_reference_mask(region, balloon_fill_mask, balloon_fill_label_map)
+                        region_bubble_mask = _build_region_reference_mask(
+                            region,
+                            balloon_fill_mask,
+                            balloon_fill_label_map,
+                            balloon_fill_label_stats,
+                        )
 
                     lines_fully_enclosed = (
-                        np.count_nonzero(region_bubble_mask) > 0
+                        _mask_view_pixel_count(region_bubble_mask) > 0
                         and _region_lines_fully_inside_mask(region, region_bubble_mask)
                     )
                     used_smart_scaling_fallback = False
@@ -1374,9 +1476,19 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                         ocr_x1, ocr_y1, ocr_w, ocr_h = map(int, region.xywh)
                         cv2.rectangle(debug_img, (ocr_x1, ocr_y1), (ocr_x1 + ocr_w, ocr_y1 + ocr_h), (0, 0, 255), 2)
 
-                        if np.count_nonzero(region_bubble_mask) > 0:
-                            component_contours, _ = cv2.findContours(region_bubble_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        if _mask_view_pixel_count(region_bubble_mask) > 0:
+                            component_contours, _ = cv2.findContours(
+                                region_bubble_mask.mask,
+                                cv2.RETR_EXTERNAL,
+                                cv2.CHAIN_APPROX_SIMPLE,
+                            )
                             if component_contours:
+                                if region_bubble_mask.offset_x or region_bubble_mask.offset_y:
+                                    offset = np.array(
+                                        [[[region_bubble_mask.offset_x, region_bubble_mask.offset_y]]],
+                                        dtype=np.int32,
+                                    )
+                                    component_contours = [contour + offset for contour in component_contours]
                                 cv2.drawContours(debug_img, component_contours, -1, (0, 255, 255), 1)
 
                         render_poly = np.asarray(chosen_dst_points).reshape(-1, 2).astype(np.int32)

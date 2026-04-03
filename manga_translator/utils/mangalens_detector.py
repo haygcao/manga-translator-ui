@@ -49,7 +49,7 @@ class _SimpleBoxes:
 
 @dataclass
 class _SimpleMasks:
-    data: np.ndarray
+    data: Optional[np.ndarray]
     xy: list[np.ndarray]
 
 
@@ -777,6 +777,55 @@ def _put_cache(key: Tuple[Any, ...], value: BubbleDetectionResult):
         _mangalens_result_cache.pop(oldest_key, None)
 
 
+def _compact_result_for_cache(result: BubbleDetectionResult) -> BubbleDetectionResult:
+    """
+    Cached callers only need detections and rasterizable bubble outlines.
+    Dropping orig_img/full mask tensors avoids retaining large image buffers.
+    """
+    if result is None:
+        return result
+
+    raw_result = getattr(result, "raw_result", None)
+    if raw_result is None:
+        result.annotated_image = None
+        return result
+
+    compact_masks = None
+    raw_masks = getattr(raw_result, "masks", None)
+    if raw_masks is not None:
+        polygons = []
+        for polygon in getattr(raw_masks, "xy", None) or []:
+            arr = np.asarray(polygon, dtype=np.float32)
+            if arr.ndim != 2 or arr.shape[1] != 2:
+                arr = arr.reshape(-1, 2) if arr.size else np.empty((0, 2), dtype=np.float32)
+            polygons.append(arr.astype(np.float32, copy=False).copy())
+        compact_masks = _SimpleMasks(data=None, xy=polygons)
+
+    names = getattr(raw_result, "names", {})
+    if not isinstance(names, dict):
+        names = dict(names or {})
+
+    result.annotated_image = None
+    result.raw_result = _SimpleRawResult(
+        boxes=getattr(raw_result, "boxes", None),
+        names=names,
+        orig_img=None,
+        masks=compact_masks,
+    )
+    return result
+
+
+def clear_mangalens_result_cache(image: Optional[ImageInput] = None) -> None:
+    if image is None:
+        _mangalens_result_cache.clear()
+        return
+
+    image_key = _make_cache_image_key(image)
+    stale_keys = [key for key in list(_mangalens_result_cache.keys()) if key and key[0] == image_key]
+    for key in stale_keys:
+        _mangalens_result_cache.pop(key, None)
+
+
 def build_bubble_mask_from_mangalens_result(
     result: Optional[BubbleDetectionResult],
     image_shape: Tuple[int, int],
@@ -847,6 +896,7 @@ def detect_bubbles_with_mangalens(
     detector = get_mangalens_detector(model_path=model_path)
     result = detector.detect(image, **kwargs)
     if use_cache and cache_key is not None:
+        result = _compact_result_for_cache(result)
         _put_cache(cache_key, result)
     return result
 
