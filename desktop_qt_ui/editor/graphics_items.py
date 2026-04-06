@@ -604,11 +604,11 @@ class RegionTextItem(QGraphicsItemGroup):
 
     def _calculate_snap_offset(self, my_points: dict, targets: list) -> tuple:
         """计算当前文本框与场景中其他项的对齐吸附偏移量及辅助线坐标。"""
-        threshold = self._snap_threshold / max(self._lod(), 0.1)
+        threshold = self._snap_threshold  # 保持 1px 的绝对距离阈值，不随缩放变化
         best_dx = None
         best_dy = None
-        best_dx_dist = threshold + 1
-        best_dy_dist = threshold + 1
+        best_dx_dist = threshold + 0.001
+        best_dy_dist = threshold + 0.001
         guide_x_info = None
         guide_y_info = None
 
@@ -640,12 +640,12 @@ class RegionTextItem(QGraphicsItemGroup):
             snap_dx = best_dx
             if guide_x_info:
                 x, y1, y2 = guide_x_info
-                guides.append(((x, 0), (x, 1))) # 垂直线标识
+                guides.append(((x, y1), (x, y2))) # 垂直线标识
         if best_dy is not None and best_dy_dist <= threshold:
             snap_dy = best_dy
             if guide_y_info:
                 y, x1, x2 = guide_y_info
-                guides.append(((0, y), (1, y))) # 水平线标识
+                guides.append(((x1, y), (x2, y))) # 水平线标识
         return snap_dx, snap_dy, guides
 
     def _show_guide_lines(self, guide_specs: list, is_rotation: bool = False):
@@ -654,6 +654,24 @@ class RegionTextItem(QGraphicsItemGroup):
         scene = self.scene()
         if scene is None or not guide_specs:
             return
+            
+        import math
+        
+        # 计算所有视图的可视区域并取并集
+        visible_rect = None
+        views = scene.views()
+        if views:
+            for view in views:
+                view_rect = view.mapToScene(view.viewport().rect()).boundingRect()
+                if visible_rect is None:
+                    visible_rect = view_rect
+                else:
+                    visible_rect = visible_rect.united(view_rect)
+        if visible_rect is None:
+            visible_rect = scene.sceneRect()
+            
+        # 根据可视区域对角线计算一个足够长的延伸距离
+        extent = 2.0 * math.hypot(visible_rect.width(), visible_rect.height())
         
         # 旋转时用橙黄色，平移吸附用青色
         if is_rotation:
@@ -666,12 +684,21 @@ class RegionTextItem(QGraphicsItemGroup):
         for (x1, y1), (x2, y2) in guide_specs:
             dx, dy = x2 - x1, y2 - y1
             length = math.hypot(dx, dy)
-            if length < 0.001:
-                line = scene.addLine(x1 - 4000, y1, x1 + 4000, y1, pen)
+            if abs(dx) < 0.001:
+                # 垂直线：贯穿可视区域上下边界
+                line = scene.addLine(x1, visible_rect.top(), x1, visible_rect.bottom(), pen)
+            elif abs(dy) < 0.001:
+                # 水平线：贯穿可视区域左右边界
+                line = scene.addLine(visible_rect.left(), y1, visible_rect.right(), y1, pen)
             else:
+                # 斜线：向两侧各延伸 extent
                 ux, uy = dx / length, dy / length
                 cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                line = scene.addLine(cx - 4000 * ux, cy - 4000 * uy, cx + 4000 * ux, cy + 4000 * uy, pen)
+                line = scene.addLine(
+                    cx - extent * ux, cy - extent * uy,
+                    cx + extent * ux, cy + extent * uy,
+                    pen
+                )
             line.setZValue(9999) # 确保层级最高
             self._guide_lines.append(line)
 
@@ -1017,7 +1044,7 @@ class RegionTextItem(QGraphicsItemGroup):
         for target in snap_targets:
             normalized_target = target % 360
             diff = min(abs(normalized_rot - normalized_target), 360 - abs(normalized_rot - normalized_target))
-            if diff < best_diff:
+            if diff <= best_diff:
                 best_diff = diff
                 # 需要算出一个实际的旋转度数
                 # 尽量保持接近 new_rot 的那个圈数
