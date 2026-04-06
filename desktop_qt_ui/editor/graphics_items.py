@@ -18,6 +18,7 @@
 import copy
 import logging
 import traceback
+import math
 from typing import List
 
 import numpy as np
@@ -133,7 +134,7 @@ class RegionTextItem(QGraphicsItemGroup):
         # 对齐辅助线（场景级别）
         self._guide_lines = []
         # 吸附阈值（像素）
-        self._snap_threshold = 5.0
+        self._snap_threshold = 1.0
 
         self._setup_pens()
 
@@ -359,25 +360,25 @@ class RegionTextItem(QGraphicsItemGroup):
         wf = self.geo.white_frame_local
         if wf is None:
             return []
-        l, t, r, b = wf
-        return [QPointF(l, t), QPointF(r, t), QPointF(r, b), QPointF(l, b)]
+        left, top, right, bottom = wf
+        return [QPointF(left, top), QPointF(right, top), QPointF(right, bottom), QPointF(left, bottom)]
 
     def _white_edge_points(self) -> list:
         wf = self.geo.white_frame_local
         if wf is None:
             return []
-        l, t, r, b = wf
+        left, top, right, bottom = wf
         return [
-            QPointF((l + r) / 2, t), QPointF(r, (t + b) / 2),
-            QPointF((l + r) / 2, b), QPointF(l, (t + b) / 2),
+            QPointF((left + right) / 2, top), QPointF(right, (top + bottom) / 2),
+            QPointF((left + right) / 2, bottom), QPointF(left, (top + bottom) / 2),
         ]
 
     def _draw_white_box(self, painter, is_selected: bool):
         wf = self.geo.white_frame_local
         if wf is None:
             return
-        l, t, r, b = wf
-        poly = QPolygonF([QPointF(l, t), QPointF(r, t), QPointF(r, b), QPointF(l, b)])
+        left, top, right, bottom = wf
+        poly = QPolygonF([QPointF(left, top), QPointF(right, top), QPointF(right, bottom), QPointF(left, bottom)])
 
         if is_selected:
             painter.setPen(QPen(QColor(0, 255, 255), 4))
@@ -421,11 +422,11 @@ class RegionTextItem(QGraphicsItemGroup):
         lod = self._lod()
         hs = 10.0 / lod
         if self.geo.white_frame_local is not None:
-            l, t, r, b = self.geo.white_frame_local
-            cx = (l + r) / 2
-            cy = (t + b) / 2
+            left, top, right, bottom = self.geo.white_frame_local
+            cx = (left + right) / 2
+            cy = (top + bottom) / 2
             center = QPointF(cx, cy)
-            rot_pos = QPointF(cx, t - 40.0 / lod)
+            rot_pos = QPointF(cx, top - 40.0 / lod)
         else:
             center = QPointF(0, 0)
             rot_pos = QPointF(0, -40.0 / lod)
@@ -447,8 +448,8 @@ class RegionTextItem(QGraphicsItemGroup):
     def _rotation_pivot_local(self) -> QPointF:
         """旋转支点：白框中心（回退到局部原点）。"""
         if self.geo.white_frame_local is not None:
-            l, t, r, b = self.geo.white_frame_local
-            return QPointF((l + r) / 2, (t + b) / 2)
+            left, top, right, bottom = self.geo.white_frame_local
+            return QPointF((left + right) / 2, (top + bottom) / 2)
         return QPointF(0, 0)
 
     def _core_polygon_path(self) -> QPainterPath:
@@ -481,12 +482,12 @@ class RegionTextItem(QGraphicsItemGroup):
         x, y = point
         return rotate_point(x, y, angle, cx, cy) if angle != 0 else (x, y)
 
-    def _white_edge_world_points(self, l: float, t: float, r: float, b: float, cx: float, cy: float) -> list[tuple[float, float]]:
+    def _white_edge_world_points(self, left: float, top: float, right: float, bottom: float, cx: float, cy: float) -> list[tuple[float, float]]:
         return [
-            ((l + r) / 2.0 + cx, t + cy),
-            (r + cx, (t + b) / 2.0 + cy),
-            ((l + r) / 2.0 + cx, b + cy),
-            (l + cx, (t + b) / 2.0 + cy),
+            ((left + right) / 2.0 + cx, top + cy),
+            (right + cx, (top + bottom) / 2.0 + cy),
+            ((left + right) / 2.0 + cx, bottom + cy),
+            (left + cx, (top + bottom) / 2.0 + cy),
         ]
 
     def _clear_drag_context(self):
@@ -573,15 +574,15 @@ class RegionTextItem(QGraphicsItemGroup):
         """根据给定的局部白框坐标，获取世界坐标中的对齐参考点。"""
         if wf_local is None:
             return {}
-        l, t, r, b = wf_local
-        cx = (l + r) / 2.0
-        cy = (t + b) / 2.0
+        left, top, right, bottom = wf_local
+        cx = (left + right) / 2.0
+        cy = (top + bottom) / 2.0
         return {
             "center": self.mapToScene(QPointF(cx, cy)),
-            "left": self.mapToScene(QPointF(l, cy)),
-            "right": self.mapToScene(QPointF(r, cy)),
-            "top": self.mapToScene(QPointF(cx, t)),
-            "bottom": self.mapToScene(QPointF(cx, b)),
+            "left": self.mapToScene(QPointF(left, cy)),
+            "right": self.mapToScene(QPointF(right, cy)),
+            "top": self.mapToScene(QPointF(cx, top)),
+            "bottom": self.mapToScene(QPointF(cx, bottom)),
         }
 
     def _get_white_frame_world_points(self) -> dict:
@@ -653,8 +654,6 @@ class RegionTextItem(QGraphicsItemGroup):
         scene = self.scene()
         if scene is None or not guide_specs:
             return
-            
-        import math
         
         # 旋转时用橙黄色，平移吸附用青色
         if is_rotation:
@@ -995,7 +994,11 @@ class RegionTextItem(QGraphicsItemGroup):
         center_scene = self._drag_start_pivot_scene
         vec = event.scenePos() - center_scene
         new_angle_rad = np.arctan2(vec.y(), vec.x())
-        delta_deg = np.degrees(new_angle_rad - self._drag_start_angle_rad)
+        delta_rad = np.arctan2(
+            np.sin(new_angle_rad - self._drag_start_angle_rad),
+            np.cos(new_angle_rad - self._drag_start_angle_rad)
+        )
+        delta_deg = np.degrees(delta_rad)
         new_rot = self._drag_start_rotation + delta_deg
 
         # --- 角度吸附逻辑 ---
@@ -1041,12 +1044,12 @@ class RegionTextItem(QGraphicsItemGroup):
         # ====== 旋转时的整框延长线（辅助对齐背景斜线） ======
         wf = self.geo.white_frame_local
         if wf is not None:
-            l, t, r, b = wf
+            left, top, right, bottom = wf
             pts = [
-                self.mapToScene(QPointF(l, t)),
-                self.mapToScene(QPointF(r, t)),
-                self.mapToScene(QPointF(r, b)),
-                self.mapToScene(QPointF(l, b)),
+                self.mapToScene(QPointF(left, top)),
+                self.mapToScene(QPointF(right, top)),
+                self.mapToScene(QPointF(right, bottom)),
+                self.mapToScene(QPointF(left, bottom)),
             ]
             rot_guides = [
                 ((pts[0].x(), pts[0].y()), (pts[1].x(), pts[1].y())),
@@ -1103,11 +1106,11 @@ class RegionTextItem(QGraphicsItemGroup):
             if self._drag_handle_indices is None or self._drag_start_white_frame_local is None:
                 return
 
-            l0, t0, r0, b0 = self._drag_start_white_frame_local
+            left0, top0, right0, bottom0 = self._drag_start_white_frame_local
             cx, cy = self.geo.center
             start_verts = [
-                [l0 + cx, t0 + cy], [r0 + cx, t0 + cy],
-                [r0 + cx, b0 + cy], [l0 + cx, b0 + cy],
+                [left0 + cx, top0 + cy], [right0 + cx, top0 + cy],
+                [right0 + cx, bottom0 + cy], [left0 + cx, bottom0 + cy],
             ]
 
             delta = event.scenePos() - self._drag_start_scene_pos
@@ -1172,8 +1175,8 @@ class RegionTextItem(QGraphicsItemGroup):
             dx = scene_delta.x() * cos_a + scene_delta.y() * sin_a
             dy = -scene_delta.x() * sin_a + scene_delta.y() * cos_a
 
-            l, t, r, b = self._drag_start_white_frame_local
-            moved = [l + dx, t + dy, r + dx, b + dy]
+            left, top, right, bottom = self._drag_start_white_frame_local
+            moved = [left + dx, top + dy, right + dx, bottom + dy]
 
             # --- 吸附逻辑 ---
             my_points = self._get_white_frame_world_points_from_local(moved)
@@ -1226,20 +1229,20 @@ class RegionTextItem(QGraphicsItemGroup):
     def _white_handle_world_at_start(self):
         if self._drag_start_white_frame_local is None:
             return None
-        l, t, r, b = self._drag_start_white_frame_local
+        left, top, right, bottom = self._drag_start_white_frame_local
         cx, cy = self.geo.center
         angle = self.rotation_angle
 
         if self._interaction_mode == "white_corner":
             idx = self._drag_handle_indices
-            corners = [(l + cx, t + cy), (r + cx, t + cy), (r + cx, b + cy), (l + cx, b + cy)]
+            corners = [(left + cx, top + cy), (right + cx, top + cy), (right + cx, bottom + cy), (left + cx, bottom + cy)]
             if not (0 <= idx < 4):
                 return None
             return self._rotated_world_point(corners[idx], cx, cy, angle)
 
         if self._interaction_mode == "white_edge":
             idx = self._drag_handle_indices
-            edge_points = self._white_edge_world_points(l, t, r, b, cx, cy)
+            edge_points = self._white_edge_world_points(left, top, right, bottom, cx, cy)
             if not (0 <= idx < 4):
                 return None
             return self._rotated_world_point(edge_points[idx], cx, cy, angle)
