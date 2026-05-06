@@ -73,7 +73,7 @@ def _rgba_image_to_qimage(rgba_image: np.ndarray) -> QImage:
     h, w, _ = rgba_image.shape
     bgra_image = rgba_image.copy()
     bgra_image[:, :, [0, 2]] = bgra_image[:, :, [2, 0]]
-    return QImage(bgra_image.data, w, h, w * 4, QImage.Format.Format_ARGB32).copy()
+    return QImage(bgra_image.data, w, h, w * 4, QImage.Format.Format_ARGB32_Premultiplied).copy()
 
 
 def render_text_image_for_region(text_block: TextBlock, dst_points: np.ndarray, transform, render_params: dict, pure_zoom: float = 1.0, total_regions: int = 1):
@@ -204,6 +204,13 @@ def render_text_image_for_region(text_block: TextBlock, dst_points: np.ndarray, 
             logger.debug(f"[EDITOR RENDER SKIPPED] Rendered surface is None or empty. Text: '{text_block.translation[:50] if hasattr(text_block, 'translation') else 'N/A'}...'")
             return None
         
+        # 预乘 Alpha: 防止 cv2.warpPerspective 插值或填充 0 (透明黑) 时导致黑边灰边
+        rendered_surface = rendered_surface.copy()
+        alpha_f = rendered_surface[:, :, 3] / 255.0
+        rendered_surface[:, :, 0] = (rendered_surface[:, :, 0] * alpha_f).astype(np.uint8)
+        rendered_surface[:, :, 1] = (rendered_surface[:, :, 1] * alpha_f).astype(np.uint8)
+        rendered_surface[:, :, 2] = (rendered_surface[:, :, 2] * alpha_f).astype(np.uint8)
+
         # --- 3. 宽高比校正 (与后端渲染逻辑完全同步) ---
         h_temp, w_temp, _ = rendered_surface.shape
         if h_temp == 0 or w_temp == 0:
