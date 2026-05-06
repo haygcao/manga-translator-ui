@@ -289,6 +289,7 @@ def should_rotate_horizontal_block_90(content: str) -> bool:
 
 
 def add_color(bw_char_map, color, stroke_char_map, stroke_color):
+    logger.debug(f"[add_color] called with color={color}, stroke_color={stroke_color}")
     if bw_char_map.size == 0:
         return np.zeros((bw_char_map.shape[0], bw_char_map.shape[1], 4), dtype=np.uint8)
     x, y, w, h = cv2.boundingRect(bw_char_map if stroke_color is None else stroke_char_map)
@@ -301,8 +302,14 @@ def add_color(bw_char_map, color, stroke_char_map, stroke_color):
     bg = np.zeros((stroke_char_map.shape[0], stroke_char_map.shape[1], 4), dtype=np.uint8)
     bg[:, :, :3] = stroke_color
     bg[:, :, 3] = stroke_char_map
+    
     alpha = fg[:, :, 3:4] / 255.0
-    bg[y:y+h, x:x+w, :] = alpha * fg + (1.0 - alpha) * bg[y:y+h, x:x+w, :]
+    # 正确的 alpha compositing 公式
+    out_rgb = alpha * fg[:, :, :3] + (1.0 - alpha) * bg[y:y+h, x:x+w, :3]
+    out_alpha = fg[:, :, 3:4] + bg[y:y+h, x:x+w, 3:4] * (1.0 - alpha)
+    
+    bg[y:y+h, x:x+w, :3] = np.clip(out_rgb, 0, 255).astype(np.uint8)
+    bg[y:y+h, x:x+w, 3:4] = np.clip(out_alpha, 0, 255).astype(np.uint8)
     return bg
 
 
@@ -674,13 +681,15 @@ def _rasterize_path(path: QPainterPath) -> Tuple[np.ndarray, int, int]:
 
 
 def _stroke_path(path: QPainterPath, stroke_px: int) -> QPainterPath:
+    logger.debug(f"[_stroke_path] stroke_px={stroke_px}, path.isEmpty()={path.isEmpty()}")
     if path.isEmpty() or stroke_px <= 0:
         return QPainterPath()
     stroker = QPainterPathStroker()
     stroker.setWidth(float(stroke_px * 2))
     stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
-    return stroker.createStroke(path).subtracted(path)
+    # 不要使用 subtracted(path)，否则会导致内部中空，在抗锯齿边缘产生脏边
+    return stroker.createStroke(path).united(path)
 
 
 def _glyph_raster(cdpt: str, font_size: int) -> GlyphRaster:
@@ -723,7 +732,11 @@ def _paste_bitmap(canvas: np.ndarray, bitmap_arr: np.ndarray, x: int, y: int, mo
     bx1, by1 = sx1 - x, sy1 - y
     bitmap = bitmap_arr[by1:by1 + (sy2 - sy1), bx1:bx1 + (sx2 - sx1)]
     target = canvas[sy1:sy2, sx1:sx2]
-    canvas[sy1:sy2, sx1:sx2] = target + bitmap if mode == 'add' else np.maximum(target, bitmap)
+    if mode == 'add':
+        # 使用 cv2.add 避免 numpy uint8 加法溢出导致的脏斑点
+        canvas[sy1:sy2, sx1:sx2] = cv2.add(target, bitmap)
+    else:
+        canvas[sy1:sy2, sx1:sx2] = np.maximum(target, bitmap)
 
 
 def _paste_surface(canvas_text: np.ndarray, canvas_border: np.ndarray, surface: dict, x: int, y: int):
