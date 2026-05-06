@@ -126,7 +126,7 @@ _VERTICAL_PUNCT_UP = {'。', '．', '，', '、', '·', '：', '；', '！', '�
 _VERTICAL_COMPACT_SLOT = _VERTICAL_OPEN_BRACKETS | _VERTICAL_CLOSE_BRACKETS | _VERTICAL_PUNCT_UP
 _VERTICAL_HALF_ADVANCE = _VERTICAL_COMPACT_SLOT - {'！', '？', '︕', '︖'}
 
-_VERTICAL_ALIGN_TOP_RIGHT = {'﹁', '﹃'}
+_VERTICAL_ALIGN_TOP_RIGHT = {'﹁', '﹃', '。', '，', '、', '：', '；', '︒', '︐', '︑', '︓', '︔', '﹅', '﹆'}
 _VERTICAL_ALIGN_BOTTOM_LEFT = {'﹂', '﹄'}
 _VERTICAL_ALIGN_TOP_CENTER = {'︵', '︷', '︹', '︻', '︽', '︿', '﹇'}
 _VERTICAL_ALIGN_BOTTOM_CENTER = {'︶', '︸', '︺', '︼', '︾', '﹀', '﹈'}
