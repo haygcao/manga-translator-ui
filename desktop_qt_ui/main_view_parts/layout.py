@@ -40,6 +40,7 @@ _PROMPT_EXTENSIONS = (".yaml", ".yml", ".json")
 _FONT_EXTENSIONS = (".ttf", ".otf", ".ttc")
 _CURRENT_ASSET_PREFIX = "✓ "
 _FONT_PREVIEW_FACE_CACHE = {}
+_FONT_PREVIEW_REGISTRATION_CACHE = {}
 
 
 def _load_reclassify_settings_layout():
@@ -70,15 +71,6 @@ def _get_font_preview_face(font_path: str) -> tuple[str | None, str | None]:
     style_name = None
 
     try:
-        font_id = QFontDatabase.addApplicationFont(font_path)
-        if font_id >= 0:
-            families = QFontDatabase.applicationFontFamilies(font_id)
-            if families:
-                family_name = families[0]
-    except Exception:
-        pass
-
-    try:
         raw_font = QRawFont(font_path, 32)
         if raw_font.isValid():
             family_name = raw_font.familyName() or family_name
@@ -89,6 +81,26 @@ def _get_font_preview_face(font_path: str) -> tuple[str | None, str | None]:
     result = (family_name, style_name)
     _FONT_PREVIEW_FACE_CACHE[font_path] = result
     return result
+
+
+def _register_font_preview_face(font_path: str) -> tuple[str | None, str | None]:
+    family_name, style_name = _get_font_preview_face(font_path)
+    if font_path not in _FONT_PREVIEW_REGISTRATION_CACHE:
+        try:
+            font_id = QFontDatabase.addApplicationFont(font_path)
+        except Exception:
+            font_id = -1
+        _FONT_PREVIEW_REGISTRATION_CACHE[font_path] = font_id
+    font_id = _FONT_PREVIEW_REGISTRATION_CACHE.get(font_path, -1)
+    if font_id >= 0:
+        try:
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                family_name = families[0]
+        except Exception:
+            pass
+    _FONT_PREVIEW_FACE_CACHE[font_path] = (family_name, style_name)
+    return family_name, style_name
 
 
 def refresh_font_preview_styles(self):
@@ -1533,15 +1545,15 @@ def _on_font_selection_changed(self, current, previous):
     # 读取字体 family/style，并按具体样式创建预览字体
     family_name = None
     style_name = None
+    font_path = None
     try:
         fonts_dir = resource_path("fonts")
         font_path = os.path.join(fonts_dir, font_filename)
         if os.path.isfile(font_path):
-            family_name, style_name = _get_font_preview_face(font_path)
+            family_name, style_name = _register_font_preview_face(font_path)
     except Exception:
         pass
 
-    # 同一个 widget 的 stylesheet 这里只保留颜色和字号，family/style 交给 setFont
     for lbl in self.font_preview_labels:
         size = lbl.property("previewSize") or 14
         lbl.setStyleSheet(_font_preview_style(size, family_name))
